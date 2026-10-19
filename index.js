@@ -1313,6 +1313,11 @@ async function quietGenerateRetry(prompt) {
     }
 }
 
+// Модели иногда пишут тег без скобок: «ADD план: …», «INTRIGUE слух — …». Приводим к «ADD [план]: …».
+function bracketTag(line) {
+    return line.replace(/^(ADD|INTRIGUE)\s+([^\s\[\]:：—–-]{1,20})\s*([:：—–-])/i, '$1 [$2]$3');
+}
+
 function parseAndApply(raw) {
     const st = store();
     const s = settings();
@@ -1335,7 +1340,7 @@ function parseAndApply(raw) {
     if (!text || /^NONE[.!]?$/i.test(text)) return res;
 
     for (let line of text.split('\n')) {
-        line = line.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, '');
+        line = bracketTag(line.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, ''));
         if (!line) continue;
         if (applyTimeCommand(st, line, res)) continue;
         if (st.direction.time && applyEventCommand(st, line, res)) continue;
@@ -1660,7 +1665,7 @@ async function rerollNote(id, kind = 'note') {
         const clean = raw.replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '').replace(/\*\*/g, '');
         let m = null;
         for (let line of clean.split('\n')) {
-            line = line.trim().replace(/^[-*•>\s]+/, '');
+            line = bracketTag(line.trim().replace(/^[-*•>\s]+/, ''));
             m = line.match(isIntrigue
                 ? /^INTRIGUE\s*(?:\[([^\]]{1,40})\])?\s*[:：—–-]\s*(.+)$/i
                 : /^ADD\s*(?:\[([^\]]{1,40})\])?\s*[:：—–-]\s*(.+)$/i);
