@@ -1,0 +1,11 @@
+{
+    "display_name": "Блокнот рассказчика (бета)",
+    "loading_order": 102,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Медея",
+    "version": "1.1.0-beta",
+    "homePage": ""
+}
