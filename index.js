@@ -2001,6 +2001,20 @@ async function personaAvatarDataUrl() {
     }
 }
 
+function withTimeout(promise, ms, what) {
+    let t;
+    return Promise.race([
+        promise,
+        new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: нет ответа ${Math.round(ms / 1000)} сек.`)), ms); }),
+    ]).finally(() => clearTimeout(t));
+}
+function imageSourceName() {
+    const id = settings().imageSource;
+    if (!id) return 'генерацию картинок Таверны';
+    const p = connectionProfiles().find(x => x.id === id);
+    return p ? `профиль «${p.name}»` : 'удалённый профиль';
+}
+
 async function drawSheetViaProfile(a, profileId) {
     const svc = ctx().ConnectionManagerRequestService;
     if (!svc?.sendRequest) throw new Error('в этой версии Таверны нет менеджера подключений');
@@ -2010,17 +2024,17 @@ async function drawSheetViaProfile(a, profileId) {
     let raw;
     if (ref) {
         try {
-            raw = await svc.sendRequest(profileId, [{ role: 'user', content: [
+            raw = await withTimeout(svc.sendRequest(profileId, [{ role: 'user', content: [
                 { type: 'text', text: prompt + ' The attached picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.' },
                 { type: 'image_url', image_url: { url: ref } },
-            ] }], 8192, opts);
+            ] }], 8192, opts), 150000, 'рисунок с образцом');
             if (!extractImage(raw)) raw = null;
         } catch (e) {
             console.warn('[npc_notebook] image with reference failed, retrying without', e);
             raw = null;
         }
     }
-    if (!raw) raw = await svc.sendRequest(profileId, [{ role: 'user', content: prompt }], 8192, opts);
+    if (!raw) raw = await withTimeout(svc.sendRequest(profileId, [{ role: 'user', content: prompt }], 8192, opts), 150000, 'рисунок');
     const url = extractImage(raw);
     if (!url) throw new Error('модель ответила без картинки');
     return storeImage(url);
@@ -2036,6 +2050,7 @@ function sheetPrompt(a) {
 }
 
 let drawing = false;
+const drawWaiters = new Set();
 async function drawSheet(a) {
     const src = settings().imageSource;
     if (src) return drawSheetViaProfile(a, src);
@@ -2044,7 +2059,7 @@ async function drawSheet(a) {
     if (!cmd) throw new Error('генерация картинок не подключена');
     const run = c.executeSlashCommandsWithOptions || c.executeSlashCommands;
     if (typeof run !== 'function') throw new Error('эта версия Таверны не умеет запускать команды из расширений');
-    const r = await run(`/${cmd} quiet=true ${sheetPrompt(a)}`);
+    const r = await withTimeout(Promise.resolve(run(`/${cmd} quiet=true ${sheetPrompt(a)}`)), 180000, 'генерация картинок');
     const url = String(typeof r === 'string' ? r : (r?.pipe ?? '')).trim();
     if (!url || /\s/.test(url)) throw new Error('генератор не вернул картинку');
     return url;
@@ -2057,18 +2072,22 @@ async function ensureSheet(force, onDone) {
     if (!a || a.status !== 'choosing' || drawing || !wantImages()) return;
     if (a.image && !force) return;
     drawing = true;
+    if (onDone) drawWaiters.add(onDone);
+    let url = '';
     try {
-        a.image = await drawSheet(a);
+        url = await drawSheet(a);
+        a.image = url;
         a.imageFailed = false;
         await ctx().saveMetadata();
-        onDone?.(a.image);
     } catch (err) {
         a.imageFailed = true;
         console.warn('[npc_notebook] image', err);
-        toastr.warning(`Картинку нарисовать не вышло: ${escapeHtml(err?.message || err)}. Выбирать можно и по описаниям.`, '👗 Гардероб', { escapeHtml: false });
-        onDone?.('');
+        toastr.warning(`Картинку нарисовать не вышло: ${escapeHtml(err?.message || err)}. Выбирать можно и по описаниям.`, '👗 Гардероб', { escapeHtml: false, timeOut: 10000 });
     } finally {
         drawing = false;
+        const waiters = [...drawWaiters];
+        drawWaiters.clear();
+        waiters.forEach(fn => { try { fn(url); } catch (e) { /* окно уже закрыто */ } });
     }
 }
 
@@ -2217,13 +2236,18 @@ async function showWardrobePopup() {
                 pic.append('<div class="nnb-pop-sub">Картинки нет — выбирай по описаниям.</div>');
             }
             const redraw = $('<div class="menu_button nnb-redraw"><i class="fa-solid fa-palette"></i> Перерисовать</div>');
-            redraw.on('click', () => { pic.html('<div class="nnb-pop-sub">🎨 Рисую образы…</div>'); ensureSheet(true, showImg); });
+            redraw.on('click', () => {
+                if (drawing) { waitText(); drawWaiters.add(showImg); return; }
+                waitText();
+                ensureSheet(true, showImg);
+            });
             pic.append(redraw);
         };
+        const waitText = () => pic.html('').append($('<div class="nnb-pop-sub"></div>').text(`🎨 Рисую образы через ${imageSourceName()}… обычно до пары минут`));
         if (a.image) showImg(a.image);
-        else if (drawing) pic.html('<div class="nnb-pop-sub">🎨 Рисую образы…</div>');
+        else if (drawing) { waitText(); drawWaiters.add(showImg); }
         else if (a.imageFailed) showImg('');
-        else { pic.html('<div class="nnb-pop-sub">🎨 Рисую образы…</div>'); ensureSheet(false, showImg); }
+        else { waitText(); ensureSheet(false, showImg); }
         el.append(pic);
     }
     a.options.forEach((o, i) => {
