@@ -950,6 +950,8 @@ const defaults = {
     leadDays: 3,
     ffButton: true,
     wardrobeImages: true,
+    imageSource: '',
+    imageRef: true,
     showToasts: true,
     hideSpoilers: false,
     thinkPrompt: DEFAULT_THINK,
@@ -1940,7 +1942,88 @@ function imageCommand() {
     return cmds.imagine ? 'imagine' : cmds.sd ? 'sd' : '';
 }
 function wantImages() {
-    return !!settings().wardrobeImages && !!imageCommand();
+    const s = settings();
+    if (!s.wardrobeImages) return false;
+    if (s.imageSource) return !!ctx().ConnectionManagerRequestService?.sendRequest;
+    return !!imageCommand();
+}
+function connectionProfiles() {
+    return ctx().extensionSettings?.connectionManager?.profiles || [];
+}
+
+// Ищем картинку в ответе модели: data-URL или ссылка на картинку
+function extractImage(raw) {
+    const text = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
+    let m = text.match(/data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+/i);
+    if (m) return m[0];
+    m = text.match(/https?:\/\/[^\s"'()<>\]\\]+?\.(?:png|jpe?g|webp|gif)(?:\?[^\s"'()<>\]\\]*)?/i);
+    return m ? m[0] : '';
+}
+
+// Сохраняем картинку на сервер Таверны, чтобы не раздувать файл чата
+async function storeImage(url) {
+    if (!url.startsWith('data:')) return url;
+    try {
+        const [, format, data] = url.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i) || [];
+        if (!data) return url;
+        const res = await fetch('/api/images/upload', {
+            method: 'POST',
+            headers: ctx().getRequestHeaders(),
+            body: JSON.stringify({ image: data, format: format.replace('jpeg', 'jpg'), ch_name: 'Гардероб', filename: `wardrobe_${Date.now()}` }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const json = await res.json();
+        return json.path || url;
+    } catch (e) {
+        console.warn('[npc_notebook] upload', e);
+        return url;
+    }
+}
+
+// Аватар персоны как образец лица
+async function personaAvatarDataUrl() {
+    try {
+        const chat = ctx().chat || [];
+        let file = '';
+        for (let i = chat.length - 1; i >= 0 && !file; i--) if (chat[i]?.is_user && chat[i].force_avatar) file = chat[i].force_avatar;
+        if (!file) {
+            const id = $('#user_avatar_block .avatar-container.selected').attr('data-avatar-id') || $('#user_avatar_block .selected').attr('imgfile');
+            if (id) file = `User Avatars/${id}`;
+        }
+        if (!file) return '';
+        const res = await fetch(file.startsWith('/') || file.startsWith('http') ? file : '/' + file.split('/').map(encodeURIComponent).join('/'));
+        if (!res.ok) return '';
+        const blob = await res.blob();
+        if (!blob.type.startsWith('image/') || blob.size > 4 * 1024 * 1024) return '';
+        return await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result || '')); fr.onerror = () => r(''); fr.readAsDataURL(blob); });
+    } catch (e) {
+        return '';
+    }
+}
+
+async function drawSheetViaProfile(a, profileId) {
+    const svc = ctx().ConnectionManagerRequestService;
+    if (!svc?.sendRequest) throw new Error('в этой версии Таверны нет менеджера подключений');
+    const prompt = sheetPrompt(a) + '. Generate this image.';
+    const ref = settings().imageRef ? await personaAvatarDataUrl() : '';
+    const opts = { stream: false, extractData: false, includePreset: false };
+    let raw;
+    if (ref) {
+        try {
+            raw = await svc.sendRequest(profileId, [{ role: 'user', content: [
+                { type: 'text', text: prompt + ' The attached picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.' },
+                { type: 'image_url', image_url: { url: ref } },
+            ] }], 8192, opts);
+            if (!extractImage(raw)) raw = null;
+        } catch (e) {
+            console.warn('[npc_notebook] image with reference failed, retrying without', e);
+            raw = null;
+        }
+    }
+    if (!raw) raw = await svc.sendRequest(profileId, [{ role: 'user', content: prompt }], 8192, opts);
+    const url = extractImage(raw);
+    if (!url) throw new Error('модель ответила без картинки');
+    return storeImage(url);
 }
 function cleanForCommand(t) {
     return String(t || '').replace(/[|{}\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1954,6 +2037,8 @@ function sheetPrompt(a) {
 
 let drawing = false;
 async function drawSheet(a) {
+    const src = settings().imageSource;
+    if (src) return drawSheetViaProfile(a, src);
     const c = ctx();
     const cmd = imageCommand();
     if (!cmd) throw new Error('генерация картинок не подключена');
@@ -2289,7 +2374,11 @@ const PANEL_HTML = `
       <label class="checkbox_label"><input type="checkbox" id="nnb_toasts"> Уведомлять о новых записях</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_spoilers"> Не подглядывать (размыть текст записей)</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_ff_on"> Кнопка ⏩ «Дальше» у поля ввода</label>
-      <label class="checkbox_label"><input type="checkbox" id="nnb_ward_img"> Гардероб: картинка с образами (нужна генерация картинок в Таверне)</label>
+      <label class="checkbox_label"><input type="checkbox" id="nnb_ward_img"> Гардероб: картинка с образами</label>
+      <div class="nnb-row"><label for="nnb_img_src">Чем рисовать</label>
+        <select class="text_pole nnb-wide" id="nnb_img_src"></select>
+      </div>
+      <label class="checkbox_label"><input type="checkbox" id="nnb_img_ref"> Показывать художнику аватар персоны как образец лица</label>
 
       <div class="nnb-row"><label for="nnb_interval">Думать каждые N сообщений</label><input type="number" min="2" max="200" class="text_pole" id="nnb_interval"></div>
       <div class="nnb-row"><label for="nnb_depth">Глубина вставки блокнота</label><input type="number" min="0" max="50" class="text_pole" id="nnb_depth"></div>
@@ -2933,6 +3022,16 @@ function bind(id, key, kind = 'text') {
     }
 }
 
+function fillImageSources() {
+    const sel = $('#nnb_img_src');
+    if (!sel.length) return;
+    const cur = settings().imageSource || '';
+    sel.empty().append($('<option value=""></option>').text('Генерация картинок Таверны (Image Generation)'));
+    for (const p of connectionProfiles()) sel.append($('<option></option>').val(p.id).text(`Профиль: ${p.name}`));
+    if (cur && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
+    sel.val(cur);
+}
+
 // ⏩ у поля ввода и пункты в меню «волшебной палочки»
 function placeFfButton() {
     const on = !!settings().ffButton;
@@ -2972,6 +3071,13 @@ jQuery(async () => {
     bind('nnb_spoilers', 'hideSpoilers', 'checkbox');
     bind('nnb_ff_on', 'ffButton', 'checkbox');
     bind('nnb_ward_img', 'wardrobeImages', 'checkbox');
+    bind('nnb_img_ref', 'imageRef', 'checkbox');
+    fillImageSources();
+    $('.npc-notebook-settings .inline-drawer-toggle').on('click', fillImageSources);
+    $('#nnb_img_src').on('change', function () {
+        settings().imageSource = String($(this).val() || '');
+        saveSettings();
+    });
     $('#nnb_ff_on').on('change', placeFfButton);
     bind('nnb_interval', 'interval', 'number');
     bind('nnb_depth', 'depth', 'number');
