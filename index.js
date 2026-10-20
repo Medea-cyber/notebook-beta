@@ -908,12 +908,14 @@ const GENRE_HINTS = {
     var k = normNameB(who);
     return st.time.custom.some(function (c) { return c.bday && normNameB(c.who) === k; });
   }
-  function bdaySection(st, userName, charNames) {
+  function bdaySection(st, userName, charNames, npcNames) {
     var known = st.time.custom.filter(function (c) { return c.bday; }).map(function (c) { var md = c.md.split('-').map(Number); return c.who + ' — ' + md[1] + ' ' + MONTHS_GEN[md[0] - 1]; });
     var lines = ['Дни рождения' + (known.length ? ' (уже известны: ' + known.join(', ') + ')' : '') + '.'];
     var missing = [userName].concat(charNames || []).filter(function (n) { return n && !hasBday(st, n); });
     if (missing.length) lines.push('Ещё не заданы для: ' + missing.join(', ') + '. Найди дату в карточке персонажа, описании персоны или в чате; если её нигде нет — придумай правдоподобную, подходящую персонажу.');
-    lines.push('BDAY Имя: ДД.ММ — день рождения ' + (missing.length ? 'для них, а также ' : '') + 'для значимого NPC, если о нём есть сведения в истории или он важен для сюжета.');
+    var npcMissing = (npcNames || []).filter(function (n) { return n && !hasBday(st, n); }).slice(0, 8);
+    if (npcMissing.length) lines.push('У значимых NPC тоже бывают дни рождения, и их отмечают — с друзьями, семьёй или прямо на работе. Ещё нет дат у: ' + npcMissing.join(', ') + '. Добавь BDAY для одного-двух самых значимых из них (друг, родственник, начальник, коллега); если даты в истории нет — придумай. Если понятно, где и как этот персонаж будет праздновать, допиши после даты коротко, например «— отмечает в офисе».');
+    lines.push('BDAY Имя: ДД.ММ — день рождения' + (missing.length || npcMissing.length ? ' (для перечисленных выше; не больше двух NPC за раз)' : ' значимого NPC, если о нём есть сведения в истории или он важен для сюжета') + '.');
     return lines.join('\n');
   }
   // Команды TASK и BDAY. Возвращает true, если строка распознана.
@@ -924,8 +926,11 @@ const GENRE_HINTS = {
     if (m) {
       var who = m[1].trim();
       var iso = parseDateText(m[2], '2000-01-01');
-      if (iso && !hasBday(st, who)) {
-        st.time.custom.push({ name: 'День рождения: ' + who, md: iso.slice(5), bday: true, who: who });
+      if (iso && !hasBday(st, who) && (res.bdays || []).length < 4) {
+        var note = (m[2].match(/\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?\s*[—–-]\s*(.+)$/) || [])[1] || '';
+        var entry = { name: 'День рождения: ' + who, md: iso.slice(5), bday: true, who: who };
+        if (note) entry.note = note.trim().replace(/\]$/, '');
+        st.time.custom.push(entry);
         (res.bdays = res.bdays || []).push(who);
       }
       return true;
@@ -950,6 +955,7 @@ const defaults = {
     leadDays: 3,
     ffButton: true,
     wardrobeImages: true,
+    accents: true,
     imageSource: '',
     imageRef: true,
     showToasts: true,
@@ -1028,6 +1034,8 @@ function store() {
     if (st.direction.wardrobe === undefined) st.direction.wardrobe = true;
     if (!st.wardrobe || typeof st.wardrobe !== 'object') st.wardrobe = { active: null, history: [] };
     if (!Array.isArray(st.wardrobe.history)) st.wardrobe.history = [];
+    if (!Array.isArray(st.wardrobe.box)) st.wardrobe.box = [];
+    if (!st.wardrobe.nextItemId) st.wardrobe.nextItemId = 1;
     ensureHolidayState(st);
     return st;
 }
@@ -1248,11 +1256,13 @@ function updateInjection() {
 
 // Совместимость со старой и новой сигнатурой generateQuietPrompt
 let ownRequest = false;
+let ownPrompt = '';
 let ffPending = false;
 
 async function quietGenerateOnce(prompt) {
     const fn = ctx().generateQuietPrompt;
     ownRequest = true;
+    ownPrompt = String(prompt || '');
     try {
         if (fn.length === 0) {
             return await fn({ quietPrompt: prompt });
@@ -1260,6 +1270,7 @@ async function quietGenerateOnce(prompt) {
         return await fn(prompt, false, false);
     } finally {
         ownRequest = false;
+        ownPrompt = '';
     }
 }
 
@@ -1269,7 +1280,8 @@ async function quietGenerateOnce(prompt) {
 const OWN_MARKER = '[OOC: Пауза в ролевой игре';
 function fixOwnPromptRole(data) {
     if (!data || data.dryRun || !Array.isArray(data.chat)) return;
-    const marker = ownRequest ? OWN_MARKER : ffPending ? FF_MARKER : null;
+    // свой запрос узнаём по началу его текста (не все наши промпты начинаются с OOC-пометки)
+    const marker = ownRequest ? (ownPrompt.slice(0, 60) || OWN_MARKER) : ffPending ? FF_MARKER : null;
     if (!marker) return;
     const msgs = data.chat;
     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -1315,7 +1327,7 @@ async function quietGenerateRetry(prompt) {
 
 // Модели иногда пишут тег без скобок: «ADD план: …», «INTRIGUE слух — …». Приводим к «ADD [план]: …».
 function bracketTag(line) {
-    return line.replace(/^(ADD|INTRIGUE)\s+([^\s\[\]:：—–-]{1,20})\s*([:：—–-])/i, '$1 [$2]$3');
+    return line.replace(/^(ADD|INTRIGUE|ITEM)\s+([^\s\[\]:：—–-]{1,20})\s*([:：—–-])/i, '$1 [$2]$3');
 }
 
 function parseAndApply(raw) {
@@ -1345,6 +1357,18 @@ function parseAndApply(raw) {
         if (applyTimeCommand(st, line, res)) continue;
         if (st.direction.time && applyEventCommand(st, line, res)) continue;
 
+        const mi = line.match(/^ITEM\s*(?:\[([^\]]{1,30})\])?\s*[:：—–-]\s*(.+)$/i);
+        if (mi) {
+            if (accentsOn(st)) {
+                const [title, ...rest] = mi[2].split(/\s[—–-]\s/);
+                const t = title.trim().replace(/^[«"]|[»"]$/g, '').replace(/\]$/, '');
+                if (t && !st.wardrobe.box.some(x => x.title.toLowerCase() === t.toLowerCase()) && st.wardrobe.box.length < 30) {
+                    st.wardrobe.box.push({ id: st.wardrobe.nextItemId++, kind: accentKind(mi[1] || t), title: t, desc: '', origin: rest.join(' — ').trim().replace(/\]$/, ''), at: len });
+                    (res.items = res.items || []).push(t);
+                }
+            }
+            continue;
+        }
         if (/^OUTFIT\s*_?\s*DONE\b/i.test(line)) {
             res.outfitDone = true;
             continue;
@@ -1536,6 +1560,7 @@ function report(res, manual, raw) {
     if (res.events) parts.push(`📜 в хронику: ${res.events.length}`);
     if (res.bdays) parts.push(`🎂 дни рождения: ${res.bdays.join(', ')}`);
     if (res.outfit && store().direction.wardrobe) parts.push('👗 пора выбрать наряд');
+    if (res.items) parts.push(`🎁 в шкатулку: ${res.items.join(', ')}`);
     if (res.outfitDone && store().direction.wardrobe) parts.push('🎭 образ отыгран');
     holidaySummary(res).forEach(x => parts.push(escapeHtml(x)));
     if (!parts.length) {
@@ -1630,7 +1655,7 @@ function storyNames() {
 function buildTimeSectionFull(st) {
     if (!st?.direction?.time) return '';
     const names = storyNames();
-    return [buildTimeSection(st), bdaySection(st, names.user, names.chars), settings().events ? holidayCheckSection(st) : ''].filter(Boolean).join('\n\n');
+    return [buildTimeSection(st), bdaySection(st, names.user, names.chars, st.direction.npcs ? st.npcs.map(n => n.name) : []), settings().events ? holidayCheckSection(st) : ''].filter(Boolean).join('\n\n');
 }
 
 // Если в своём промпте нет нужных разделов, вставляем их перед финальной инструкцией
@@ -1887,28 +1912,82 @@ async function rerollHolidayTask(idx) {
 
 // ---------- Гардероб 👗 ----------
 
+const ACCENT_KINDS = {
+    perfume: { icon: '🌸', name: 'духи' },
+    stone: { icon: '💎', name: 'камень' },
+    accessory: { icon: '💍', name: 'аксессуар' },
+};
+function accentKind(word) {
+    const w = String(word || '').toLowerCase();
+    if (/дух|парфюм|аромат|perfume/.test(w)) return 'perfume';
+    if (/камен|камн|талисман|амулет|кристалл|stone/.test(w)) return 'stone';
+    return 'accessory';
+}
+function accentsOn(st) {
+    return !!settings().accents && !!st?.direction?.wardrobe;
+}
+function boxList(st) {
+    return st.wardrobe.box.map(x => `${ACCENT_KINDS[x.kind]?.icon || '🎁'} ${x.title}${x.origin ? ` (${x.origin})` : ''}`).join('; ');
+}
+
 function buildWardrobeSection(st) {
     if (!st?.direction?.wardrobe) return '';
     const w = st.wardrobe;
-    if (w.active?.status === 'choosing') return '';
+    const parts = [];
     if (w.active?.status === 'worn') {
         const look = w.active.look;
-        return `Гардероб. Наряд {{user}}: «${look.title}»${w.active.occasion ? ` (для: ${w.active.occasion})` : ''}.
-OUTFITDONE — если сцена, ради которой выбирался наряд, уже прошла или {{user}} уже переоделся(-ась).`;
+        parts.push(`Гардероб. Наряд {{user}}: «${look.title}»${w.active.accent ? ` + ${w.active.accent.title}` : ''}${w.active.occasion ? ` (для: ${w.active.occasion})` : ''}.
+OUTFITDONE — если сцена, ради которой выбирался наряд, уже прошла или {{user}} уже переоделся(-ась).`);
+    } else if (!w.active) {
+        const recent = w.history.slice(-3).map(h => h.occasion).filter(Boolean).join('; ');
+        parts.push(`Гардероб. Если в ближайшей сцене или скоро по сюжету важен наряд {{user}} (свидание, вечеринка, праздник, ужин с родными, важная встреча, собеседование) и образ для неё ещё не выбирали — OUTFIT: повод (коротко, например «ужин у родителей на День благодарения»). Только когда наряд действительно имеет значение.${recent ? ` Недавно уже выбирали образы для: ${recent}.` : ''}`);
     }
-    const recent = w.history.slice(-3).map(h => h.occasion).filter(Boolean).join('; ');
-    return `Гардероб. Если в ближайшей сцене или скоро по сюжету важен наряд {{user}} (свидание, вечеринка, праздник, ужин с родными, важная встреча) и образ для неё ещё не выбирали — OUTFIT: повод (коротко, например «ужин у родителей на День благодарения»). Только когда наряд действительно имеет значение.${recent ? ` Недавно уже выбирали образы для: ${recent}.` : ''}`;
+    if (accentsOn(st)) {
+        parts.push(`Шкатулка {{user}}: ${w.box.length ? boxList(st) : '(пока пусто)'}.
+ITEM [духи|камень|аксессуар]: что это — откуда (подарок, покупка, находка). Только если в чате у {{user}} действительно появилась такая вещь и её ещё нет в шкатулке.`);
+    }
+    return parts.join('\n');
+}
+
+function auraInjection(st) {
+    const au = st?.direction?.wardrobe && st.wardrobe.aura;
+    if (!au) return '';
+    const len = ctx().chat?.length ?? 0;
+    const alive = st.time.date && au.until ? st.time.date <= au.until : len <= (au.untilMsg || 0);
+    if (!alive) return '';
+    return `[Талисман: ${storyNames().user} носит ${au.title}${au.desc ? ` — ${au.desc}` : ''}. Вокруг держится лёгкий флёр${au.effects ? `: ${au.effects}` : ''}. Едва уловимо, на уровне настроения и совпадений; никто не говорит о магии прямо.]`;
 }
 
 function wardrobeInjection(st) {
-    const a = st?.direction?.wardrobe && st.wardrobe.active;
-    if (!a || a.status !== 'worn') return '';
+    if (!st?.direction?.wardrobe) return '';
+    const out = [];
+    const a = st.wardrobe.active;
     const user = storyNames().user;
-    const look = a.look;
-    const effects = look.effects
-        ? `Скрытые последствия этого выбора (игрок их не знает): ${look.effects}. Покажи их в сцене через взгляды, поведение и реплики персонажей, когда они увидят наряд — естественно, без цифр и объявлений, и не намекай, что реакции были известны заранее.`
-        : 'Персонажи реагируют на него в своём характере — кому-то понравится, кому-то нет.';
-    return `[Наряд ${user}${a.occasion ? ` (${a.occasion})` : ''}: «${look.title}» — ${String(look.desc || '').replace(/[.\s]+$/, '')}. ${effects}]`;
+    if (a?.status === 'choosing') {
+        out.push(`[${user} сейчас выбирает, что надеть${a.occasion ? ` (${a.occasion})` : ''}. Не описывай, во что ${user} одет(а), — это решится выбором.]`);
+    } else if (a?.status === 'worn') {
+        const look = a.look;
+        const effects = look.effects
+            ? `Скрытые последствия этого выбора (игрок их не знает): ${look.effects}. Покажи их в сцене через взгляды, поведение и реплики персонажей, когда они увидят наряд — естественно, без цифр и объявлений, и не намекай, что реакции были известны заранее.`
+            : 'Персонажи реагируют на него в своём характере — кому-то понравится, кому-то нет.';
+        let text = `[Наряд ${user}${a.occasion ? ` (${a.occasion})` : ''}: «${look.title}» — ${String(look.desc || '').replace(/[.\s]+$/, '')}. ${effects}`;
+        const ac = a.accent;
+        if (ac) {
+            const k = ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory;
+            text += `\nШтрих к образу (${k.name}): «${ac.title}»${ac.desc ? ` — ${String(ac.desc).replace(/[.\s]+$/, '')}` : ''}${ac.origin ? ` (${ac.origin})` : ''}.`;
+            if (ac.effects) text += ` Скрытые последствия: ${ac.effects}.`;
+            if (ac.kind === 'perfume') {
+                const before = st.wardrobe.history.filter(h => h.accent?.title && h.accent.title.toLowerCase() === ac.title.toLowerCase()).pop();
+                text += before ? ` Этот аромат уже был на ${user}${before.occasion ? ` (${before.occasion})` : ''} — кто-то может вспомнить тот вечер.` : ' Аромат замечают не сразу — когда подходят ближе.';
+            }
+            if (ac.kind === 'stone') text += ' Камень даёт лёгкий флёр атмосферы — едва уловимо, можно списать на совпадение.';
+            if (/подар/i.test(ac.origin || '')) text += ' Если даритель рядом, он заметит, что его подарок надет.';
+        }
+        out.push(text + ']');
+    }
+    const aura = auraInjection(st);
+    if (aura) out.push(aura);
+    return out.join('\n');
 }
 
 function wardrobePrompt(st, occasion, exclude = []) {
@@ -1917,7 +1996,9 @@ function wardrobePrompt(st, occasion, exclude = []) {
     const when = [t.date ? `${formatDate(t.date)}, ${season(t.date).name}` : '', placeLine(st)].filter(Boolean).join('; ');
     const recent = st.wardrobe.history.slice(-3).map(h => `«${h.title}»`);
     const avoid = [...exclude.map(x => `«${x}»`), ...recent];
-    return [
+    const images = wantImages();
+    const accents = accentsOn(st);
+    const lines = [
         '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и подбираешь наряд, как в визуальной новелле.',
         `${names.user} собирается: ${occasion || 'в ближайшую сцену, где важен наряд (пойми по чату, куда именно)'}.`,
         when ? `Когда и где: ${when}.` : '',
@@ -1925,19 +2006,31 @@ function wardrobePrompt(st, occasion, exclude = []) {
         avoid.length ? `Не повторяй эти образы: ${avoid.join(', ')}.` : '',
         `Предложи 4 разных образа для ${names.user}: от спокойного до смелого. Учитывай внешность и стиль ${names.user}, погоду, повод и то, кто там будет.`,
         'К каждому образу придумай скрытые последствия — как на него отреагируют конкретные персонажи. Игрок их не увидит, пока сцена не пройдёт. Последствия у всех образов разные: не бывает образа, который нравится всем, и образа, который не нравится никому. Реакции — в характере персонажей и в духе жанра.',
-        ...(wantImages() ? [
-            'Сначала одной строкой опиши внешность для художника по-английски:',
-            `APPEARANCE: внешность ${names.user} по-английски — пол, возраст, волосы, глаза, телосложение, заметные черты`,
-            'Затем по три строки на образ, без пояснений:',
-            'LOOK: название образа | что надето, причёска, детали — 1–2 предложения',
-            'EN: этот же наряд коротко по-английски, только одежда, обувь и причёска',
-            'EFFECT: Имя (+): как отреагирует; Имя (−): как отреагирует]',
-        ] : [
-            'Формат — по две строки на образ, без пояснений:',
-            'LOOK: название образа | что надето, причёска, детали — 1–2 предложения',
-            'EFFECT: Имя (+): как отреагирует; Имя (−): как отреагирует]',
-        ]),
-    ].filter(Boolean).join('\n');
+    ];
+    if (accents) {
+        lines.push(`Ещё предложи 3 штриха к образу — духи, камень-талисман и аксессуар (украшение, сумочка, часы, шарф, заколка и т.п.). ${st.wardrobe.box.length ? `Можно взять вещь из шкатулки ${names.user}: ${boxList(st)} — особенно если она к месту.` : ''}
+— Духи действуют в сцене и через память: аромат замечают вблизи, он о чём-то напоминает, может связаться с этим вечером.
+— Камень даёт лёгкий флёр атмосферы вокруг (спокойнее, энергичнее, теплее, острее) — едва уловимо, можно списать на совпадение; держится несколько дней.
+— Аксессуар — деталь, за которую цепляется взгляд и разговор; подарок, надетый при дарителе, тот обязательно заметит.
+У штрихов тоже скрытые последствия, разные по смыслу.`);
+    }
+    if (images) {
+        lines.push('Сначала одной строкой опиши внешность для художника по-английски:');
+        lines.push(`APPEARANCE: внешность ${names.user} по-английски — пол, возраст, волосы, глаза, телосложение, заметные черты`);
+        lines.push('Затем по три строки на образ, без пояснений:');
+        lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
+        lines.push('EN: этот же наряд коротко по-английски, только одежда, обувь и причёска');
+    } else {
+        lines.push('Формат — по две строки на образ, без пояснений:');
+        lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
+    }
+    lines.push('EFFECT: Имя (+): как отреагирует; Имя (−): как отреагирует');
+    if (accents) {
+        lines.push('Затем по две строки на штрих:');
+        lines.push('ACCENT: духи|камень|аксессуар | название | описание в одном предложении');
+        lines.push('EFFECT: последствия — кто как отреагирует; для камня — какой флёр он даёт');
+    }
+    return lines.filter(Boolean).join('\n') + ']';
 }
 
 // ---------- картинка с образами ----------
@@ -2098,22 +2191,37 @@ async function ensureSheet(force, onDone) {
 
 function parseLooks(raw) {
     const looks = [];
+    const accents = [];
+    let appearance = '';
+    let last = null;
     for (const line of answerLines(raw)) {
         let m = line.match(/^APPEARANCE\s*[:：—–-]\s*(.+)$/i);
-        if (m) { looks.appearance = m[1].trim(); continue; }
+        if (m) { appearance = m[1].trim(); continue; }
         m = line.match(/^EN\s*[:：—–-]\s*(.+)$/i);
         if (m) { if (looks.length) looks[looks.length - 1].en = m[1].trim().replace(/\]$/, ''); continue; }
         m = line.match(/^LOOK\s*\d*\s*[:：—–-]\s*(.+)$/i);
         if (m) {
             const [title, ...rest] = m[1].split('|');
-            looks.push({ title: title.trim().replace(/^[«"]|[»"]$/g, ''), desc: rest.join('|').trim(), effects: '' });
+            last = { title: title.trim().replace(/^[«"]|[»"]$/g, ''), desc: rest.join('|').trim(), effects: '' };
+            looks.push(last);
+            continue;
+        }
+        m = line.match(/^ACCENT\s*\d*\s*[:：—–-]\s*(.+)$/i);
+        if (m) {
+            const parts = m[1].split('|').map(x => x.trim());
+            const kind = accentKind(parts[0]);
+            const title = (parts.length >= 3 ? parts[1] : parts[0]).replace(/^[«"]|[»"]$/g, '');
+            const desc = parts.length >= 3 ? parts.slice(2).join(' | ') : (parts[1] || '');
+            last = { kind, title, desc: desc.replace(/\]$/, ''), effects: '' };
+            if (title) accents.push(last);
             continue;
         }
         m = line.match(/^EFFECTS?\s*[:：—–-]\s*(.+)$/i);
-        if (m && looks.length) looks[looks.length - 1].effects = m[1].trim().replace(/\]$/, '');
+        if (m && last) last.effects = m[1].trim().replace(/\]$/, '');
     }
     const out = looks.filter(l => l.title);
-    out.appearance = looks.appearance || '';
+    out.appearance = appearance;
+    out.accents = accents;
     return out;
 }
 
@@ -2125,7 +2233,7 @@ async function generateOutfits(st, occasion, exclude = []) {
         toastr.warning('Модель не предложила образы по формату — загляни в «Последний ответ модели»', 'Блокнот рассказчика');
         return false;
     }
-    st.wardrobe.active = { occasion: occasion || '', options: looks.slice(0, wantImages() ? 4 : 5), appearance: looks.appearance, status: 'choosing', at: ctx().chat.length, date: st.time.date || '' };
+    st.wardrobe.active = { occasion: occasion || '', options: looks.slice(0, wantImages() ? 4 : 5), appearance: looks.appearance, accents: looks.accents || [], status: 'choosing', at: ctx().chat.length, date: st.time.date || '' };
     return true;
 }
 
@@ -2158,7 +2266,45 @@ async function chooseOutfit(i, customText) {
     a.look = customText ? { title: 'Свой образ', desc: customText, effects: '', custom: true } : a.options[i];
     a.status = 'worn';
     await commit();
+    if (accentsOn(st) && ((a.accents || []).length || st.wardrobe.box.length)) {
+        showAccentPopup();
+        return;
+    }
     toastr.success(`Выбран образ «${escapeHtml(a.look.title)}». Последствия узнаешь по ходу сцены.`, '👗 Гардероб', { escapeHtml: false });
+}
+
+async function chooseAccent(accent) {
+    const st = store();
+    const a = st?.wardrobe.active;
+    if (!a || a.status !== 'worn') return;
+    a.accent = accent || null;
+    await commit();
+    toastr.success(`Образ «${escapeHtml(a.look.title)}»${accent ? ` + ${escapeHtml(accent.title)}` : ''}. Последствия узнаешь по ходу сцены.`, '👗 Гардероб', { escapeHtml: false });
+}
+
+async function showAccentPopup() {
+    const st = store();
+    const a = st?.wardrobe.active;
+    if (!a || a.status !== 'worn') return;
+    const el = $('<div class="nnb-pop"><h3>✨ Добавить штрих?</h3></div>');
+    el.append($('<div class="nnb-pop-sub"></div>').text(`К образу «${a.look.title}»`));
+    const card = (icon, title, desc, sub, fn) => {
+        const c = $('<div class="nnb-look" tabindex="0"><div class="nnb-look-title"></div><div class="nnb-look-desc"></div></div>');
+        c.find('.nnb-look-title').text(`${icon} ${title}`);
+        c.find('.nnb-look-desc').text([desc, sub].filter(Boolean).join(' · '));
+        c.on('click', async () => { closePopupOf(el); await fn(); });
+        return c;
+    };
+    (a.accents || []).forEach(ac => el.append(card((ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory).icon, ac.title, ac.desc, '', () => chooseAccent(ac))));
+    const fresh = st.wardrobe.box.filter(x => !(a.accents || []).some(ac => ac.title.toLowerCase() === x.title.toLowerCase()));
+    if (fresh.length) {
+        el.append('<div class="nnb-pop-sub">🎁 Из шкатулки</div>');
+        fresh.forEach(x => el.append(card((ACCENT_KINDS[x.kind] || ACCENT_KINDS.accessory).icon, x.title, x.desc, x.origin, () => chooseAccent({ kind: x.kind, title: x.title, desc: x.desc, origin: x.origin, effects: '', fromBox: true }))));
+    }
+    const none = $('<div class="menu_button"><i class="fa-solid fa-xmark"></i> Без штриха</div>');
+    none.on('click', async () => { closePopupOf(el); await chooseAccent(null); });
+    el.append($('<div class="nnb-pop-row"></div>').append(none));
+    if (!(await openPopup(el))) await chooseAccent(null);
 }
 
 function revealPrompt(st) {
@@ -2169,6 +2315,7 @@ function revealPrompt(st) {
         '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора.',
         `${names.user} выбрал(а) наряд «${a.look.title}» — ${a.look.desc}${a.occasion ? ` (для: ${a.occasion})` : ''}.`,
         a.look.effects ? `Задуманные последствия: ${a.look.effects}.` : '',
+        a.accent ? `Штрих к образу: ${a.accent.title}${a.accent.effects ? ` (задумано: ${a.accent.effects})` : ''}.` : '',
         'Перечитай чат: как этот выбор на самом деле сыграл в сцене?' + arcs,
         'Ответь строками, без пояснений:',
         'RESULT: итог в 1–2 предложениях, с юмором и теплом — кто как отреагировал и чем этот образ запомнится',
@@ -2192,8 +2339,14 @@ async function revealOutfit(st) {
         occasion: a.occasion, title: a.look.title, desc: a.look.desc, effects: a.look.effects,
         result: result || 'Сцена прошла — каждый запомнил этот образ по-своему.',
         others: (a.options || []).filter(o => o !== a.look).map(o => ({ title: o.title, effects: o.effects })),
+        accent: a.accent ? { kind: a.accent.kind, title: a.accent.title, effects: a.accent.effects || '', origin: a.accent.origin || '' } : null,
+        otherAccents: (a.accents || []).filter(x => !a.accent || x.title !== a.accent.title).map(x => ({ kind: x.kind, title: x.title, effects: x.effects })),
+        image: a.image || '',
         date: st.time.date || '', stimuli: res.stimuli || 0,
     };
+    if (a.accent?.kind === 'stone') {
+        st.wardrobe.aura = { title: a.accent.title, desc: a.accent.desc || '', effects: a.accent.effects || '', until: st.time.date ? addDays(st.time.date, 3) : '', untilMsg: (ctx().chat?.length ?? 0) + 40 };
+    }
     st.wardrobe.history.push(entry);
     if (st.wardrobe.history.length > 20) st.wardrobe.history.shift();
     st.wardrobe.active = null;
@@ -2281,9 +2434,11 @@ function revealCard(entry) {
     el.append($('<div class="nnb-look-title"></div>').text(`«${entry.title}»${entry.occasion ? ` — ${entry.occasion}` : ''}`));
     el.append($('<div class="nnb-pop-result"></div>').text(entry.result));
     if (entry.effects) el.append($('<div class="nnb-pop-sub"></div>').text('Задумано было: ' + entry.effects));
-    if (entry.others?.length) {
+    if (entry.accent) el.append($('<div class="nnb-pop-sub"></div>').text(`${(ACCENT_KINDS[entry.accent.kind] || ACCENT_KINDS.accessory).icon} Штрих «${entry.accent.title}»${entry.accent.effects ? `: ${entry.accent.effects}` : ''}`));
+    if (entry.others?.length || entry.otherAccents?.length) {
         const det = $('<details><summary>А что было бы, если…</summary></details>');
-        entry.others.forEach(o => det.append($('<div class="nnb-pop-other"></div>').text(`«${o.title}»: ${o.effects || 'реакции не записаны'}`)));
+        (entry.others || []).forEach(o => det.append($('<div class="nnb-pop-other"></div>').text(`«${o.title}»: ${o.effects || 'реакции не записаны'}`)));
+        (entry.otherAccents || []).forEach(o => det.append($('<div class="nnb-pop-other"></div>').text(`${(ACCENT_KINDS[o.kind] || ACCENT_KINDS.accessory).icon} «${o.title}»: ${o.effects || 'реакции не записаны'}`)));
         el.append(det);
     }
     return el;
@@ -2315,7 +2470,8 @@ function renderWardrobe(st) {
     } else if (a?.status === 'worn') {
         const box = $('<div class="nnb-note nnb-event"><div class="nnb-event-title"></div><div class="nnb-npc-text nnb-text"></div><div class="nnb-meta">Последствия раскроются, когда сцена пройдёт: модель отметит это при размышлении, или нажми кнопку.</div></div>');
         box.find('.nnb-event-title').text(`Сейчас: «${a.look.title}»${a.occasion ? ` — ${a.occasion}` : ''}`);
-        box.find('.nnb-npc-text').text(a.look.desc);
+        box.find('.nnb-npc-text').text(a.look.desc + (a.accent ? `\n${(ACCENT_KINDS[a.accent.kind] || ACCENT_KINDS.accessory).icon} ${a.accent.title}` : ''));
+        if (accentsOn(st) && !a.accent) box.append($('<div class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i> Добавить штрих</div>').on('click', showAccentPopup));
         const rev = $('<div class="menu_button"><i class="fa-solid fa-masks-theater"></i> Сцена прошла — чем это обернулось?</div>').on('click', runReveal);
         box.append(rev);
         det.append(box);
@@ -2325,13 +2481,45 @@ function renderWardrobe(st) {
     if (!a || a.status === 'worn') {
         det.append($('<div class="menu_button"><i class="fa-solid fa-shirt"></i> Подобрать образ</div>').on('click', startWardrobe));
     }
+    const aura = auraInjection(st);
+    if (aura) det.append($('<div class="nnb-npc-status"></div>').text(`💎 Сейчас действует талисман: ${w.aura.title}${w.aura.effects ? ` — ${w.aura.effects}` : ''}`));
+    if (accentsOn(st)) {
+        const boxDet = $('<details><summary></summary></details>');
+        boxDet.find('summary').text(`🎁 Шкатулка (${w.box.length})`);
+        if (!w.box.length) boxDet.append('<div class="nnb-empty">Здесь будут духи, камни и украшения из сюжета: подарки, покупки, находки. Модель замечает их при размышлении, или добавь сама.</div>');
+        w.box.forEach(x => {
+            const row = $('<div class="nnb-note"><div class="nnb-npc-text"></div><div class="nnb-npc-status"></div><div class="nnb-actions"><i class="fa-solid fa-pen" title="Изменить"></i><i class="fa-solid fa-trash" title="Убрать из шкатулки"></i></div></div>');
+            row.find('.nnb-npc-text').text(`${(ACCENT_KINDS[x.kind] || ACCENT_KINDS.accessory).icon} ${x.title}`);
+            if (x.origin || x.desc) row.find('.nnb-npc-status').text([x.desc, x.origin].filter(Boolean).join(' · ')); else row.find('.nnb-npc-status').remove();
+            row.find('.fa-pen').on('click', async () => {
+                const t = await askText('Что это за вещь?', x.title);
+                if (t === null) return;
+                const o = await askText('Откуда она? Например «подарок Кайлара на годовщину»', x.origin);
+                if (o === null) return;
+                if (t.trim()) { x.title = t.trim(); x.kind = accentKind(t); }
+                x.origin = o.trim();
+                await commit();
+            });
+            row.find('.fa-trash').on('click', async () => { w.box = w.box.filter(y => y !== x); await commit(); });
+            boxDet.append(row);
+        });
+        boxDet.append($('<div class="menu_button"><i class="fa-solid fa-gem"></i> Добавить вещь</div>').on('click', async () => {
+            const t = await askText('Что это? Например «духи с бергамотом», «кулон с аметистом», «шёлковый шарф»');
+            if (!t || !t.trim()) return;
+            const o = await askText('Откуда она? Можно оставить пустым');
+            if (o === null) return;
+            w.box.push({ id: w.nextItemId++, kind: accentKind(t), title: t.trim(), desc: '', origin: o.trim(), at: ctx().chat.length });
+            await commit();
+        }));
+        det.append(boxDet);
+    }
     if (w.history.length) {
         const hist = $('<details><summary></summary></details>');
         hist.find('summary').text(`История образов (${w.history.length})`);
         [...w.history].reverse().forEach(h => {
             const row = $('<div class="nnb-note"><div class="nnb-meta"></div><div class="nnb-npc-text"></div><div class="nnb-npc-status"></div></div>');
             row.find('.nnb-meta').text([h.date ? formatDate(h.date) : '', h.occasion].filter(Boolean).join(' · '));
-            row.find('.nnb-npc-text').text(`«${h.title}»`);
+            row.find('.nnb-npc-text').text(`«${h.title}»${h.accent ? ` + ${(ACCENT_KINDS[h.accent.kind] || ACCENT_KINDS.accessory).icon} ${h.accent.title}` : ''}`);
             row.find('.nnb-npc-status').text(h.result);
             row.css('cursor', 'pointer').on('click', () => openPopup(revealCard(h)));
             hist.append(row);
@@ -2364,6 +2552,26 @@ async function processReplyTags() {
     return true;
 }
 
+// Подсказка гардероба: игрок сам пишет, что выбирает одежду
+const OUTFIT_HINT_RE = /(наряд|что (бы )?надеть|во что (бы )?(одеться|нарядиться)|переоде(ться|нусь|ваюсь|лась)|выбира\S* (одежд|платье|образ|костюм|что надеть)|гардероб|собира\S* на (свидание|вечеринк|ужин|собеседовани|бал|праздник|вечер))/i;
+let outfitHintPending = false;
+function onMessageSentHint() {
+    const c = ctx();
+    const st = store();
+    const msg = c.chat?.[c.chat.length - 1];
+    outfitHintPending = !!(settings().enabled && st?.direction?.wardrobe && !st.wardrobe.active && msg?.is_user && OUTFIT_HINT_RE.test(String(msg.mes || '')));
+}
+function showOutfitHint() {
+    if (!outfitHintPending) return;
+    outfitHintPending = false;
+    const st = store();
+    if (!st || st.wardrobe.active) return;
+    const len = ctx().chat?.length ?? 0;
+    if (st.wardrobe.lastHintAt && len - st.wardrobe.lastHintAt < 10) return;
+    st.wardrobe.lastHintAt = len;
+    toastr.info('Похоже, пора выбрать наряд. Нажми, чтобы подобрать образы.', '👗 Гардероб', { timeOut: 15000, extendedTimeOut: 5000, onclick: () => startWardrobe() });
+}
+
 function clearFastForward() {
     if (!ffPending) return;
     ffPending = false;
@@ -2372,6 +2580,7 @@ function clearFastForward() {
 
 async function onMessageReceived() {
     clearFastForward();
+    setTimeout(showOutfitHint, 1500);
     try { await processReplyTags(); } catch (e) { console.error('[npc_notebook] reply tags', e); }
     onMessageReceivedThink();
 }
@@ -2404,6 +2613,7 @@ const PANEL_HTML = `
       <label class="checkbox_label"><input type="checkbox" id="nnb_spoilers"> Не подглядывать (размыть текст записей)</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_ff_on"> Кнопка ⏩ «Дальше» у поля ввода</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_ward_img"> Гардероб: картинка с образами</label>
+      <label class="checkbox_label"><input type="checkbox" id="nnb_accents"> Гардероб: штрихи к образу и шкатулка (духи, камни, аксессуары)</label>
       <div class="nnb-row"><label for="nnb_img_src">Чем рисовать</label>
         <select class="text_pole nnb-wide" id="nnb_img_src"></select>
       </div>
@@ -3101,6 +3311,7 @@ jQuery(async () => {
     bind('nnb_ff_on', 'ffButton', 'checkbox');
     bind('nnb_ward_img', 'wardrobeImages', 'checkbox');
     bind('nnb_img_ref', 'imageRef', 'checkbox');
+    bind('nnb_accents', 'accents', 'checkbox');
     fillImageSources();
     $('.npc-notebook-settings .inline-drawer-toggle').on('click', fillImageSources);
     $('#nnb_img_src').on('change', function () {
@@ -3233,6 +3444,7 @@ jQuery(async () => {
     }
     c.eventSource.on(ev.CHAT_CHANGED, renderDirection);
     c.eventSource.on(ev.CHAT_CHANGED, clearFastForward);
+    if (ev.MESSAGE_SENT) c.eventSource.on(ev.MESSAGE_SENT, onMessageSentHint);
     if (ev.GENERATION_STOPPED) c.eventSource.on(ev.GENERATION_STOPPED, clearFastForward);
     if (ev.CHAT_COMPLETION_PROMPT_READY) c.eventSource.on(ev.CHAT_COMPLETION_PROMPT_READY, fixOwnPromptRole);
 
