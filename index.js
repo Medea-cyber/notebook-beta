@@ -957,6 +957,7 @@ const defaults = {
     ffButton: true,
     wardrobeImages: true,
     accents: true,
+    mesButtons: true,
     imageSource: '',
     imgApiBase: 'https://api.linkapi.ai/v1',
     imgApiKey: '',
@@ -1626,7 +1627,7 @@ async function think(manual = false) {
                 if (await revealOutfit(st)) afterBusy = showRevealPopup;
             } else if (res.outfit && !w.active) {
                 setStatus('👗 Модель подбирает образы…');
-                if (await generateOutfits(st, res.outfit)) afterBusy = showWardrobePopup;
+                if (await generateOutfits(st, res.outfit)) afterBusy = presentLooks;
             }
         }
     } catch (err) {
@@ -2321,13 +2322,16 @@ function canDrawScene() {
     return !!imageCommand();
 }
 
-function scenePromptRequest(st) {
+function scenePromptRequest(st, mesId) {
     const names = storyNames();
+    const msg = Number.isInteger(mesId) ? ctx().chat?.[mesId] : null;
+    const moment = msg?.mes ? `Нарисовать нужно момент из этого сообщения (${msg.is_user ? names.user : (msg.name || names.char)}): «${String(msg.mes).replace(/<[^>]+>/g, '').slice(0, 1500)}»` : '';
     const a = st.wardrobe?.active;
     const outfit = a?.status === 'worn' ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
     const lastAppearance = st.wardrobe?.history?.length ? '' : '';
     return [
         '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник художника: опиши картинку того, что происходит в сцене прямо сейчас (по последним сообщениям чата).',
+        moment,
         st.time?.date ? `Время в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; место: ${placeLine(st)}` : ''}.` : '',
         outfit,
         lastAppearance,
@@ -2338,7 +2342,7 @@ function scenePromptRequest(st) {
 }
 
 let sceneDrawing = false;
-async function drawScene(popupEl) {
+async function drawScene(popupEl, mesId) {
     if (sceneDrawing) return toastr.info('Сцена уже рисуется', '🎬 Сцена');
     if (!canDrawScene()) return toastr.warning('Не выбрано, чем рисовать: настрой «Чем рисовать» в настройках блокнота.', '🎬 Сцена', { timeOut: 8000 });
     const st = store();
@@ -2350,7 +2354,7 @@ async function drawScene(popupEl) {
         // 1) описание сцены текстовой моделью
         let desc = '';
         let cast = [];
-        const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st)));
+        const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st, mesId)));
         for (const line of answerLines(raw || '')) {
             let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
             if (m) { cast = m[1].split(/[,;]/).map(x => x.trim().toLowerCase().replace(/ё/g, 'е')).filter(Boolean); continue; }
@@ -2393,9 +2397,9 @@ async function drawScene(popupEl) {
     }
 }
 
-async function attachToLastMessage(url) {
+async function attachToLastMessage(url, mesId) {
     const c = ctx();
-    for (let i = c.chat.length - 1; i >= 0; i--) {
+    for (let i = Number.isInteger(mesId) ? mesId : c.chat.length - 1; i >= 0; i--) {
         const m = c.chat[i];
         if (!m || m.is_system) continue;
         m.extra = m.extra || {};
@@ -2408,7 +2412,8 @@ async function attachToLastMessage(url) {
     }
 }
 
-async function showScenePopup() {
+async function showScenePopup(mesId) {
+    if (!Number.isInteger(mesId)) mesId = undefined;
     const el = $('<div class="nnb-pop nnb-pop-visual"><h3>🎬 Сцена</h3><div class="nnb-sheet"><div class="nnb-pop-sub nnb-scene-status">✍️ Модель описывает сцену…</div></div></div>');
     const pic = el.find('.nnb-sheet');
     const render = url => {
@@ -2421,18 +2426,36 @@ async function showScenePopup() {
         const tools = $('<div class="nnb-pop-row"></div>');
         tools.append($('<div class="menu_button"><i class="fa-solid fa-palette"></i> Перерисовать</div>').on('click', async () => {
             pic.html('<div class="nnb-pop-sub nnb-scene-status">✍️ Модель описывает сцену…</div>');
-            render(await drawScene(el));
+            render(await drawScene(el, mesId));
         }));
         if (url) {
-            tools.append($('<div class="menu_button"><i class="fa-solid fa-paperclip"></i> Прикрепить к сообщению</div>').on('click', () => attachToLastMessage(url)));
+            tools.append($('<div class="menu_button"><i class="fa-solid fa-paperclip"></i> Прикрепить к сообщению</div>').on('click', () => attachToLastMessage(url, mesId)));
             tools.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Во весь экран</div>').on('click', () => window.open(url, '_blank')));
         }
         pic.append(tools);
     };
     const popup = openPopup(el, true);
-    render(await drawScene(el));
+    render(await drawScene(el, mesId));
     await popup;
 }
+
+// Окно выбора открываем, когда картинка уже готова (или не получилась)
+const presentWaiting = { looks: null, accents: null };
+function openWhenReady(kind, openFn) {
+    const a = store()?.wardrobe.active;
+    const [field, failField] = PIC_FIELDS[kind];
+    const needsPic = wantImages() && a && (kind === 'looks' || (a.accents || []).length);
+    if (!needsPic || a[field] || a[failField]) return openFn();
+    if (presentWaiting[kind]) return; // уже ждём — окно откроется само
+    presentWaiting[kind] = toastr.info(kind === 'looks' ? 'Рисую образы… Окно выбора откроется само, а пока можно читать чат.' : 'Рисую штрихи… Окно откроется само.', '🎨 Гардероб', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
+    ensurePicture(kind, false, () => {
+        try { toastr.clear(presentWaiting[kind]); } catch (e) { /* ignore */ }
+        presentWaiting[kind] = null;
+        openFn();
+    });
+}
+const presentLooks = () => openWhenReady('looks', showWardrobePopup);
+const presentAccents = () => openWhenReady('accents', showAccentPopup);
 
 // Общий визуальный выбор: картинка с зонами, кнопки с названиями, свёрнутые описания
 function visualPicker({ kind, items, title, onPick, field, failField, a }) {
@@ -2448,7 +2471,7 @@ function visualPicker({ kind, items, title, onPick, field, failField, a }) {
         c.on('click', () => onPick(i));
         cards.append(c);
     });
-    const details = $('<details class="nnb-look-details"><summary>Описания</summary></details>').append(cards);
+    const details = $('<div class="nnb-looks-fallback"></div>').append(cards).hide(); // описания — только если картинки нет
     const waitText = () => pic.html('').append($('<div class="nnb-pop-sub nnb-wait"></div>').text(`🎨 Рисую через ${imageSourceName()}… обычно до пары минут`));
     const showImg = url => {
         pic.empty();
@@ -2464,11 +2487,12 @@ function visualPicker({ kind, items, title, onPick, field, failField, a }) {
             frame.append(zones);
             pic.append(frame, '<div class="nnb-pop-sub">Нажми на картинку или на название ниже.</div>');
         } else {
-            pic.append('<div class="nnb-pop-sub">Картинки нет — выбирай по названиям или загляни в описания.</div>');
-            details.attr('open', true);
+            pic.append('<div class="nnb-pop-sub">Картинки нет — выбирай по описаниям.</div>');
+            chips.hide();
+            details.show();
         }
         const tools = $('<div class="nnb-pop-row"></div>');
-        tools.append($('<div class="menu_button nnb-redraw"><i class="fa-solid fa-palette"></i> Перерисовать</div>').on('click', () => { waitText(); ensurePicture(kind, !drawingKind[kind], showImg); }));
+        tools.append($('<div class="menu_button nnb-redraw"><i class="fa-solid fa-palette"></i> Перерисовать</div>').on('click', () => { waitText(); chips.show(); details.hide(); ensurePicture(kind, !drawingKind[kind], showImg); }));
         if (url) tools.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Во весь экран</div>').on('click', () => window.open(url, '_blank')));
         pic.append(tools);
     };
@@ -2530,13 +2554,13 @@ async function generateOutfits(st, occasion, exclude = []) {
 async function startWardrobe() {
     const st = store();
     if (!st) return toastr.warning('Сначала открой чат', 'Блокнот рассказчика');
-    if (st.wardrobe.active?.status === 'choosing') return showWardrobePopup();
+    if (st.wardrobe.active?.status === 'choosing') return presentLooks();
     if (st.wardrobe.active?.status === 'worn' && !confirm(`Сейчас выбран образ «${st.wardrobe.active.look.title}». Подобрать новый? Последствия старого так и останутся нераскрытыми.`)) return;
     const occasion = await askText('Куда собирается твой персонаж? Оставь пустым — модель поймёт по сцене.');
     if (occasion === null) return;
     st.wardrobe.active = null;
     const ok = await withBusy('👗 Модель подбирает образы…', s2 => generateOutfits(s2, occasion.trim()));
-    if (ok) showWardrobePopup();
+    if (ok) presentLooks();
 }
 
 async function rerollOutfits() {
@@ -2546,7 +2570,7 @@ async function rerollOutfits() {
     const exclude = a.options.map(o => o.title);
     const occasion = a.occasion;
     const ok = await withBusy('👗 Модель подбирает другие образы…', s2 => generateOutfits(s2, occasion, exclude));
-    if (ok) showWardrobePopup();
+    if (ok) presentLooks();
 }
 
 async function chooseOutfit(i, customText) {
@@ -2557,7 +2581,7 @@ async function chooseOutfit(i, customText) {
     a.status = 'worn';
     await commit();
     if (accentsOn(st) && ((a.accents || []).length || st.wardrobe.box.length)) {
-        showAccentPopup();
+        presentAccents();
         return;
     }
     toastr.success(`Выбран образ «${escapeHtml(a.look.title)}». Последствия узнаешь по ходу сцены.`, '👗 Гардероб', { escapeHtml: false });
@@ -2751,7 +2775,7 @@ function renderWardrobe(st) {
     if (a?.status === 'choosing') {
         const box = $('<div class="nnb-note nnb-event"><div class="nnb-event-title">Образы ждут выбора</div><div class="nnb-meta"></div></div>');
         box.find('.nnb-meta').text(a.occasion || 'для ближайшей сцены');
-        const open = $('<div class="menu_button"><i class="fa-solid fa-shirt"></i> Выбрать образ</div>').on('click', showWardrobePopup);
+        const open = $('<div class="menu_button"><i class="fa-solid fa-shirt"></i> Выбрать образ</div>').on('click', presentLooks);
         const cancel = $('<div class="menu_button"><i class="fa-solid fa-xmark"></i> Не нужно</div>').on('click', async () => { w.active = null; await commit(); });
         box.append(open, cancel);
         det.append(box);
@@ -2759,7 +2783,7 @@ function renderWardrobe(st) {
         const box = $('<div class="nnb-note nnb-event"><div class="nnb-event-title"></div><div class="nnb-npc-text nnb-text"></div><div class="nnb-meta">Последствия раскроются, когда сцена пройдёт: модель отметит это при размышлении, или нажми кнопку.</div></div>');
         box.find('.nnb-event-title').text(`Сейчас: «${a.look.title}»${a.occasion ? ` — ${a.occasion}` : ''}`);
         box.find('.nnb-npc-text').text(a.look.desc + (a.accent ? `\n${(ACCENT_KINDS[a.accent.kind] || ACCENT_KINDS.accessory).icon} ${a.accent.title}` : ''));
-        if (accentsOn(st) && !a.accent) box.append($('<div class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i> Добавить штрих</div>').on('click', showAccentPopup));
+        if (accentsOn(st) && !a.accent) box.append($('<div class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i> Добавить штрих</div>').on('click', presentAccents));
         const rev = $('<div class="menu_button"><i class="fa-solid fa-masks-theater"></i> Сцена прошла — чем это обернулось?</div>').on('click', runReveal);
         box.append(rev);
         det.append(box);
@@ -2900,6 +2924,7 @@ const PANEL_HTML = `
       <label class="checkbox_label"><input type="checkbox" id="nnb_toasts"> Уведомлять о новых записях</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_spoilers"> Не подглядывать (размыть текст записей)</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_ff_on"> Кнопка ⏩ «Дальше» у поля ввода</label>
+      <label class="checkbox_label"><input type="checkbox" id="nnb_mes_btns"> Кнопки 🎬 сцена и 👗 гардероб у сообщений</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_ward_img"> Гардероб: картинка с образами</label>
       <label class="checkbox_label"><input type="checkbox" id="nnb_accents"> Гардероб: штрихи к образу и шкатулка (духи, камни, аксессуары)</label>
       <div class="nnb-row"><label for="nnb_img_src">Чем рисовать</label>
@@ -3575,6 +3600,30 @@ function fillImageSources() {
     $('#nnb_img_api').toggle(cur === 'openai-images');
 }
 
+// 🎬 и 👗 у сообщений: сцена — на каждом сообщении, гардероб — у последнего
+function placeMesButtons() {
+    const on = !!settings().enabled && !!settings().mesButtons;
+    const st = store();
+    const mes = $('#chat .mes');
+    if (!on || !st) { $('.nnb-mes-btn').remove(); return; }
+    mes.each(function () {
+        const box = $(this).find('.mes_buttons').first();
+        if (box.length && !box.find('.nnb-mes-scene').length) {
+            box.prepend('<div class="mes_button nnb-mes-btn nnb-mes-scene fa-solid fa-image interactable" title="Нарисовать эту сцену" tabindex="0"></div>');
+        }
+    });
+    $('.nnb-mes-ward').remove();
+    if (st.direction.wardrobe) {
+        const lastBox = mes.last().find('.mes_buttons').first();
+        if (lastBox.length) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-ward fa-solid fa-shirt interactable" title="Гардероб: подобрать образ" tabindex="0"></div>');
+    }
+}
+let mesBtnTimer = null;
+function placeMesButtonsSoon() {
+    clearTimeout(mesBtnTimer);
+    mesBtnTimer = setTimeout(placeMesButtons, 150);
+}
+
 // ⏩ у поля ввода и пункты в меню «волшебной палочки»
 function placeFfButton() {
     const on = !!settings().ffButton;
@@ -3593,7 +3642,7 @@ function addMenuItems() {
     const item = (id, icon, text, fn) => $(`<div id="${id}" class="list-group-item flex-container flexGap5 interactable" tabindex="0"><div class="fa-solid ${icon} extensionsMenuExtensionButton"></div><span></span></div>`)
         .find('span').text(text).end().on('click', fn);
     menu.append(item('nnb_menu_ff', 'fa-forward', 'Дальше: следующее событие', fastForward));
-    menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена: нарисовать', showScenePopup));
+    menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена: нарисовать', () => showScenePopup()));
     menu.append(item('nnb_menu_wardrobe', 'fa-shirt', 'Гардероб: подобрать образ', () => {
         const st = store();
         if (st && !st.direction.wardrobe) return toastr.info('Гардероб выключен в этом чате — включи его в панели Блокнота', 'Блокнот рассказчика');
@@ -3614,6 +3663,21 @@ jQuery(async () => {
     bind('nnb_toasts', 'showToasts', 'checkbox');
     bind('nnb_spoilers', 'hideSpoilers', 'checkbox');
     bind('nnb_ff_on', 'ffButton', 'checkbox');
+    bind('nnb_mes_btns', 'mesButtons', 'checkbox');
+    $('#nnb_mes_btns').on('change', placeMesButtons);
+    $(document).on('click', '.nnb-mes-scene', function (e) {
+        e.stopPropagation();
+        const id = Number($(this).closest('.mes').attr('mesid'));
+        showScenePopup(Number.isInteger(id) ? id : undefined);
+    });
+    $(document).on('click', '.nnb-mes-ward', function (e) {
+        e.stopPropagation();
+        startWardrobe();
+    });
+    try {
+        const chatEl = document.getElementById('chat');
+        if (chatEl) new MutationObserver(placeMesButtonsSoon).observe(chatEl, { childList: true });
+    } catch (e) { /* ignore */ }
     bind('nnb_ward_img', 'wardrobeImages', 'checkbox');
     bind('nnb_img_ref', 'imageRef', 'checkbox');
     bind('nnb_accents', 'accents', 'checkbox');
@@ -3701,6 +3765,7 @@ jQuery(async () => {
         const st = store();
         if (!st) return;
         st.direction.wardrobe = $(this).prop('checked');
+        placeMesButtons();
         saveDirectionSoon();
         updateInjection();
         renderPanel();
@@ -3714,7 +3779,7 @@ jQuery(async () => {
 
     $('#nnb_think_now').on('click', () => think(true));
     $('#nnb_ff_panel').on('click', fastForward);
-    $('#nnb_scene_panel').on('click', showScenePopup);
+    $('#nnb_scene_panel').on('click', () => showScenePopup());
     addMenuItems();
     placeFfButton();
     $('#nnb_add').on('click', async () => {
@@ -3754,6 +3819,9 @@ jQuery(async () => {
         if (e) c.eventSource.on(e, () => { updateInjection(); renderPanel(); });
     }
     c.eventSource.on(ev.CHAT_CHANGED, renderDirection);
+    for (const e of ['CHAT_CHANGED', 'MESSAGE_RECEIVED', 'MESSAGE_SENT', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MORE_MESSAGES_LOADED']) {
+        if (ev[e]) c.eventSource.on(ev[e], placeMesButtonsSoon);
+    }
     c.eventSource.on(ev.CHAT_CHANGED, clearFastForward);
     if (ev.MESSAGE_SENT) c.eventSource.on(ev.MESSAGE_SENT, onMessageSentHint);
     if (ev.GENERATION_STOPPED) c.eventSource.on(ev.GENERATION_STOPPED, clearFastForward);
@@ -3762,4 +3830,5 @@ jQuery(async () => {
     updateInjection();
     renderPanel();
     renderDirection();
+    placeMesButtons();
 });

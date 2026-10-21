@@ -59,6 +59,17 @@
 .nnb-pop-other { font-size: 0.9em; opacity: 0.85; margin: 4px 0; }
 .nnb-pop details summary { cursor: pointer; opacity: 0.85; }
 .nnb-sheet { display: flex; flex-direction: column; gap: 6px; align-items: center; }
-.nnb-sheet img { max-width: 100%; max-height: 45vh; object-fit: contain; border-radius: 10px; cursor: zoom-in; }
-.nnb-sheet img.nnb-zoom { max-height: none; cursor: zoom-out; }
 .nnb-sheet .nnb-redraw { padding: 4px 10px; }
+
+.nnb-sheet-frame { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.nnb-sheet-frame img { display: block; max-width: 100%; max-height: 75vh; width: auto; height: auto; border-radius: 10px; }
+.nnb-sheet-zones { position: absolute; inset: 0; display: flex; }
+.nnb-sheet-zone { flex: 1; cursor: pointer; border-radius: 8px; position: relative; transition: background 0.15s, box-shadow 0.15s; }
+.nnb-sheet-zone:hover, .nnb-sheet-zone:focus { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 14%, transparent); box-shadow: inset 0 0 0 2px var(--SmartThemeQuoteColor, #8b78c4); }
+.nnb-sheet-zone span { position: absolute; top: 6px; left: 6px; line-height: 1; font-size: 0.8em; font-weight: bold; padding: 3px 7px; border-radius: 999px; background: rgba(0, 0, 0, 0.45); color: #fff; }
+.nnb-chips-row { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.nnb-chips-row .nnb-look-chip { margin: 0; padding: 6px 12px; display: inline-flex; flex-direction: row; align-items: center; width: auto; height: auto; min-height: 0; flex: 0 1 auto; white-space: normal; text-align: center; line-height: 1.25; }
+.nnb-look-details summary { cursor: pointer; opacity: 0.8; margin: 4px 0; }
+.nnb-pop-visual { gap: 10px; }
+.nnb-mes-btn { opacity: 0.7; }
+.nnb-mes-btn:hover { opacity: 1; }
