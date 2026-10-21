@@ -958,6 +958,10 @@ const defaults = {
     wardrobeImages: true,
     accents: true,
     imageSource: '',
+    imgApiBase: 'https://api.linkapi.ai/v1',
+    imgApiKey: '',
+    imgApiModel: 'gpt-image-2-c',
+    imgApiSize: '1536x1024',
     imageRef: true,
     showToasts: true,
     hideSpoilers: false,
@@ -2052,6 +2056,7 @@ function imageCommand() {
 function wantImages() {
     const s = settings();
     if (!s.wardrobeImages) return false;
+    if (s.imageSource === 'openai-images') return !!(s.imgApiBase && s.imgApiKey && s.imgApiModel);
     if (s.imageSource) return !!ctx().ConnectionManagerRequestService?.sendRequest;
     return !!imageCommand();
 }
@@ -2119,6 +2124,7 @@ function withTimeout(promise, ms, what) {
 function imageSourceName() {
     const id = settings().imageSource;
     if (!id) return 'генерацию картинок Таверны';
+    if (id === 'openai-images') return `картинки OpenAI (${settings().imgApiModel})`;
     const p = connectionProfiles().find(x => x.id === id);
     return p ? `профиль «${p.name}»` : 'удалённый профиль';
 }
@@ -2147,6 +2153,64 @@ async function drawSheetViaProfile(a, profileId) {
     if (!url) throw new Error('модель ответила без картинки');
     return storeImage(url);
 }
+// ---------- картинки через OpenAI-совместимый адрес /images (gpt-image) ----------
+// Браузер может не пустить запрос к чужому сайту (CORS) — тогда пробуем через прокси Таверны.
+async function imagesFetch(url, init) {
+    try {
+        return await fetch(url, init);
+    } catch (e) {
+        const viaProxy = '/proxy/' + url;
+        const res = await fetch(viaProxy, init).catch(() => null);
+        if (!res || res.status === 404) throw new Error('браузер не пустил запрос к сайту картинок. Включи прокси Таверны: в config.yaml поставь enableCorsProxy: true и перезапусти Таверну');
+        return res;
+    }
+}
+function dataUrlToBlob(dataUrl) {
+    const [head, b64] = dataUrl.split(',');
+    const type = (head.match(/data:([^;]+)/) || [])[1] || 'image/png';
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type });
+}
+async function imagesResult(res) {
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch (e) { /* не JSON */ }
+    if (!res.ok) throw new Error(`сайт картинок ответил ${res.status}: ${String(json?.error?.message || text).slice(0, 200)}`);
+    const d = json?.data?.[0];
+    if (d?.b64_json) return `data:image/png;base64,${d.b64_json}`;
+    if (d?.url) return d.url;
+    const any = extractImage(json ?? text);
+    if (any) return any;
+    throw new Error('сайт картинок ответил без картинки');
+}
+async function drawSheetViaImagesApi(a) {
+    const s = settings();
+    const base = String(s.imgApiBase || '').replace(/\/+$/, '');
+    const auth = { Authorization: `Bearer ${s.imgApiKey}` };
+    const prompt = sheetPrompt(a);
+    const ref = s.imageRef ? await personaAvatarDataUrl() : '';
+    if (ref) {
+        try {
+            const fd = new FormData();
+            fd.append('model', s.imgApiModel);
+            fd.append('prompt', prompt + '. The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.');
+            fd.append('image', dataUrlToBlob(ref), 'reference.png');
+            fd.append('n', '1');
+            if (s.imgApiSize) fd.append('size', s.imgApiSize);
+            const res = await withTimeout(imagesFetch(`${base}/images/edits`, { method: 'POST', headers: auth, body: fd }), 180000, 'рисунок с образцом');
+            return storeImage(await imagesResult(res));
+        } catch (e) {
+            console.warn('[npc_notebook] images/edits failed, retrying without reference', e);
+        }
+    }
+    const body = { model: s.imgApiModel, prompt, n: 1 };
+    if (s.imgApiSize) body.size = s.imgApiSize;
+    const res = await withTimeout(imagesFetch(`${base}/images/generations`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), 180000, 'рисунок');
+    return storeImage(await imagesResult(res));
+}
+
 function cleanForCommand(t) {
     return String(t || '').replace(/[|{}\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -2161,6 +2225,7 @@ let drawing = false;
 const drawWaiters = new Set();
 async function drawSheet(a) {
     const src = settings().imageSource;
+    if (src === 'openai-images') return drawSheetViaImagesApi(a);
     if (src) return drawSheetViaProfile(a, src);
     const c = ctx();
     const cmd = imageCommand();
@@ -2626,6 +2691,19 @@ const PANEL_HTML = `
       <label class="checkbox_label"><input type="checkbox" id="nnb_accents"> Гардероб: штрихи к образу и шкатулка (духи, камни, аксессуары)</label>
       <div class="nnb-row"><label for="nnb_img_src">Чем рисовать</label>
         <select class="text_pole nnb-wide" id="nnb_img_src"></select>
+      </div>
+      <div id="nnb_img_api" class="nnb-direction" style="display:none">
+        <small>Адрес и ключ сайта с моделями gpt-image (например, linkapi). Ключ хранится только в настройках этой Таверны.</small>
+        <input type="text" class="text_pole" id="nnb_img_base" placeholder="https://api.linkapi.ai/v1">
+        <input type="password" class="text_pole" id="nnb_img_key" placeholder="Ключ (sk-…)" autocomplete="off">
+        <input type="text" class="text_pole" id="nnb_img_model" placeholder="Модель, например gpt-image-2-c">
+        <div class="nnb-row"><label for="nnb_img_size">Размер</label>
+          <select class="text_pole nnb-wide" id="nnb_img_size">
+            <option value="1536x1024">1536×1024 (широкий лист)</option>
+            <option value="1024x1024">1024×1024</option>
+            <option value="">как решит сайт</option>
+          </select>
+        </div>
       </div>
       <label class="checkbox_label"><input type="checkbox" id="nnb_img_ref"> Показывать художнику аватар персоны как образец лица</label>
 
@@ -3277,8 +3355,10 @@ function fillImageSources() {
     const cur = settings().imageSource || '';
     sel.empty().append($('<option value=""></option>').text('Генерация картинок Таверны (Image Generation)'));
     for (const p of connectionProfiles()) sel.append($('<option></option>').val(p.id).text(`Профиль: ${p.name}`));
-    if (cur && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
+    sel.append($('<option value="openai-images"></option>').text('Картинки OpenAI по ключу (gpt-image)'));
+    if (cur && cur !== 'openai-images' && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
     sel.val(cur);
+    $('#nnb_img_api').toggle(cur === 'openai-images');
 }
 
 // ⏩ у поля ввода и пункты в меню «волшебной палочки»
@@ -3327,7 +3407,12 @@ jQuery(async () => {
     $('#nnb_img_src').on('change', function () {
         settings().imageSource = String($(this).val() || '');
         saveSettings();
+        $('#nnb_img_api').toggle(settings().imageSource === 'openai-images');
     });
+    bind('nnb_img_base', 'imgApiBase');
+    bind('nnb_img_key', 'imgApiKey');
+    bind('nnb_img_model', 'imgApiModel');
+    bind('nnb_img_size', 'imgApiSize');
     $('#nnb_ff_on').on('change', placeFfButton);
     bind('nnb_interval', 'interval', 'number');
     bind('nnb_depth', 'depth', 'number');
