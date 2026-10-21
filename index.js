@@ -2424,8 +2424,19 @@ async function attachToLastMessage(url, mesId) {
         const m = c.chat[i];
         if (!m || m.is_system) continue;
         m.extra = m.extra || {};
-        m.extra.image = url;
-        m.extra.title = 'Сцена';
+        const imgDesc = Object.getOwnPropertyDescriptor(m.extra, 'image');
+        const newApi = Array.isArray(m.extra.media) || (imgDesc && typeof imgDesc.get === 'function') || typeof c.appendMediaToMessage === 'function';
+        if (newApi) {
+            // новые версии таверны: картинки лежат в extra.media, а extra.image только для чтения
+            if (!Array.isArray(m.extra.media)) m.extra.media = [];
+            if (!m.extra.media_display) m.extra.media_display = 'gallery';
+            m.extra.media.push({ url, type: 'image', title: 'Сцена', source: 'generated' });
+            m.extra.media_index = m.extra.media.length - 1;
+        } else {
+            m.extra.image = url;
+            m.extra.title = 'Сцена';
+        }
+        m.extra.inline_image = true; // текст поста остаётся на месте
         try { if (typeof c.updateMessageBlock === 'function') c.updateMessageBlock(i, m); } catch (e) { /* ignore */ }
         await c.saveChat();
         placeMesButtonsSoon();
