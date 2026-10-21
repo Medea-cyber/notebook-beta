@@ -2040,8 +2040,9 @@ function wardrobePrompt(st, occasion, exclude = []) {
     }
     lines.push('EFFECT: Имя (+): как отреагирует; Имя (−): как отреагирует');
     if (accents) {
-        lines.push('Затем по две строки на штрих:');
+        lines.push(images ? 'Затем по три строки на штрих:' : 'Затем по две строки на штрих:');
         lines.push('ACCENT: духи|камень|аксессуар | название | описание в одном предложении');
+        if (images) lines.push('EN: этот же предмет коротко по-английски, как он выглядит (флакон, камень, украшение)');
         lines.push('EFFECT: последствия — кто как отреагирует; для камня — какой флёр он даёт');
     }
     return lines.filter(Boolean).join('\n') + ']';
@@ -2094,6 +2095,32 @@ async function storeImage(url) {
 }
 
 // Аватар персоны как образец лица
+async function fileToDataUrl(file) {
+    try {
+        const res = await fetch(file.startsWith('/') || file.startsWith('http') ? file : '/' + file.split('/').map(encodeURIComponent).join('/'));
+        if (!res.ok) return '';
+        const blob = await res.blob();
+        if (!blob.type.startsWith('image/') || blob.size > 4 * 1024 * 1024) return '';
+        return await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result || '')); fr.onerror = () => r(''); fr.readAsDataURL(blob); });
+    } catch (e) {
+        return '';
+    }
+}
+// Аватары персонажей чата: [{ name, file }]
+function characterAvatars() {
+    const c = ctx();
+    let list = [];
+    try {
+        if (c.groupId && Array.isArray(c.groups)) {
+            const g = c.groups.find(x => x.id === c.groupId);
+            list = (g?.members || []).map(av => c.characters.find(ch => ch.avatar === av)).filter(Boolean);
+        } else if (c.characterId !== undefined && c.characters?.[c.characterId]) {
+            list = [c.characters[c.characterId]];
+        }
+    } catch (e) { list = []; }
+    return list.filter(ch => ch.avatar && ch.avatar !== 'none').map(ch => ({ name: ch.name, file: `characters/${ch.avatar}` }));
+}
+
 async function personaAvatarDataUrl() {
     try {
         const chat = ctx().chat || [];
@@ -2129,18 +2156,18 @@ function imageSourceName() {
     return p ? `профиль «${p.name}»` : 'удалённый профиль';
 }
 
-async function drawSheetViaProfile(a, profileId) {
+// refs: { images: [dataUrl…], note: 'что делать с образцами' } или null
+async function drawViaProfile(basePrompt, refs, profileId) {
     const svc = ctx().ConnectionManagerRequestService;
     if (!svc?.sendRequest) throw new Error('в этой версии Таверны нет менеджера подключений');
-    const prompt = sheetPrompt(a) + '. Generate this image.';
-    const ref = settings().imageRef ? await personaAvatarDataUrl() : '';
+    const prompt = basePrompt + '. Generate this image.';
     const opts = { stream: false, extractData: false, includePreset: false };
     let raw;
-    if (ref) {
+    if (refs?.images?.length) {
         try {
             raw = await withTimeout(svc.sendRequest(profileId, [{ role: 'user', content: [
-                { type: 'text', text: prompt + ' The attached picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.' },
-                { type: 'image_url', image_url: { url: ref } },
+                { type: 'text', text: prompt + ' ' + refs.note },
+                ...refs.images.map(url => ({ type: 'image_url', image_url: { url } })),
             ] }], 8192, opts), 150000, 'рисунок с образцом');
             if (!extractImage(raw)) raw = null;
         } catch (e) {
@@ -2185,18 +2212,17 @@ async function imagesResult(res) {
     if (any) return any;
     throw new Error('сайт картинок ответил без картинки');
 }
-async function drawSheetViaImagesApi(a) {
+async function drawViaImagesApi(prompt, refs) {
     const s = settings();
     const base = String(s.imgApiBase || '').replace(/\/+$/, '');
     const auth = { Authorization: `Bearer ${s.imgApiKey}` };
-    const prompt = sheetPrompt(a);
-    const ref = s.imageRef ? await personaAvatarDataUrl() : '';
-    if (ref) {
+    if (refs?.images?.length) {
         try {
             const fd = new FormData();
             fd.append('model', s.imgApiModel);
-            fd.append('prompt', prompt + '. The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.');
-            fd.append('image', dataUrlToBlob(ref), 'reference.png');
+            fd.append('prompt', prompt + '. ' + refs.note);
+            if (refs.images.length === 1) fd.append('image', dataUrlToBlob(refs.images[0]), 'reference.png');
+            else refs.images.forEach((r, i) => fd.append('image[]', dataUrlToBlob(r), `reference${i + 1}.png`));
             fd.append('n', '1');
             if (s.imgApiSize) fd.append('size', s.imgApiSize);
             const res = await withTimeout(imagesFetch(`${base}/images/edits`, { method: 'POST', headers: auth, body: fd }), 180000, 'рисунок с образцом');
@@ -2221,47 +2247,236 @@ function sheetPrompt(a) {
         looks.map((o, i) => `${pos[i]} from the left wearing ${o.en || o.title}`).join('; ') + ', no text, no captions');
 }
 
-let drawing = false;
-const drawWaiters = new Set();
-async function drawSheet(a) {
+// Состояние рисования: отдельно для образов и для штрихов
+const drawingKind = { looks: false, accents: false };
+const drawWaitersOf = { looks: new Set(), accents: new Set() };
+const PIC_FIELDS = { looks: ['image', 'imageFailed'], accents: ['accentImage', 'accentImageFailed'] };
+
+async function drawPicture(prompt, refs) {
     const src = settings().imageSource;
-    if (src === 'openai-images') return drawSheetViaImagesApi(a);
-    if (src) return drawSheetViaProfile(a, src);
+    if (src === 'openai-images') return drawViaImagesApi(prompt, refs);
+    if (src) return drawViaProfile(prompt, refs, src);
     const c = ctx();
     const cmd = imageCommand();
     if (!cmd) throw new Error('генерация картинок не подключена');
     const run = c.executeSlashCommandsWithOptions || c.executeSlashCommands;
     if (typeof run !== 'function') throw new Error('эта версия Таверны не умеет запускать команды из расширений');
-    const r = await withTimeout(Promise.resolve(run(`/${cmd} quiet=true ${sheetPrompt(a)}`)), 180000, 'генерация картинок');
+    const r = await withTimeout(Promise.resolve(run(`/${cmd} quiet=true ${prompt}`)), 180000, 'генерация картинок');
     const url = String(typeof r === 'string' ? r : (r?.pipe ?? '')).trim();
     if (!url || /\s/.test(url)) throw new Error('генератор не вернул картинку');
     return url;
 }
 
-// Рисует картинку для текущего выбора; onDone вызывается, если картинка готова
-async function ensureSheet(force, onDone) {
+function accentsPrompt(a) {
+    const items = (a.accents || []).slice(0, 3);
+    const pos = ['first', 'second', 'third'];
+    return cleanForCommand(`still life product shot, ${items.length} separate items laid out side by side in a row with clear space between them, soft neutral background, gentle light, ` +
+        items.map((x, i) => `${pos[i]} from the left: ${x.en || x.title}`).join('; ') + ', no people, no text, no captions');
+}
+
+// Рисует картинку для текущего выбора (kind: looks | accents); onDone получает адрес картинки или ''
+async function ensurePicture(kind, force, onDone) {
     const st = store();
     const a = st?.wardrobe.active;
-    if (!a || a.status !== 'choosing' || drawing || !wantImages()) return;
-    if (a.image && !force) return;
-    drawing = true;
-    if (onDone) drawWaiters.add(onDone);
+    const [field, failField] = PIC_FIELDS[kind];
+    const okState = kind === 'looks' ? a?.status === 'choosing' : (a && (a.status === 'choosing' || (a.status === 'worn' && !a.accent)) && (a.accents || []).length);
+    if (!a || !okState || !wantImages()) { onDone?.(a?.[field] || ''); return; }
+    if (onDone) drawWaitersOf[kind].add(onDone);
+    if (drawingKind[kind]) return;
+    if (a[field] && !force) { flushPicture(kind, a[field]); return; }
+    drawingKind[kind] = true;
     let url = '';
     try {
-        url = await drawSheet(a);
-        a.image = url;
-        a.imageFailed = false;
+        let refs = null;
+        if (kind === 'looks' && settings().imageRef) {
+            const me = await personaAvatarDataUrl();
+            if (me) refs = { images: [me], note: 'The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.' };
+        }
+        url = await drawPicture(kind === 'looks' ? sheetPrompt(a) : accentsPrompt(a), refs);
+        a[field] = url;
+        a[failField] = false;
         await ctx().saveMetadata();
     } catch (err) {
-        a.imageFailed = true;
-        console.warn('[npc_notebook] image', err);
-        toastr.warning(`Картинку нарисовать не вышло: ${escapeHtml(err?.message || err)}. Выбирать можно и по описаниям.`, '👗 Гардероб', { escapeHtml: false, timeOut: 10000 });
+        a[failField] = true;
+        console.warn('[npc_notebook] image', kind, err);
+        toastr.warning(`Картинку ${kind === 'looks' ? 'с образами' : 'со штрихами'} нарисовать не вышло: ${escapeHtml(err?.message || err)}. Выбирать можно и по названиям.`, '👗 Гардероб', { escapeHtml: false, timeOut: 10000 });
     } finally {
-        drawing = false;
-        const waiters = [...drawWaiters];
-        drawWaiters.clear();
-        waiters.forEach(fn => { try { fn(url); } catch (e) { /* окно уже закрыто */ } });
+        drawingKind[kind] = false;
+        flushPicture(kind, url);
     }
+    // штрихи рисуем следом за образами, пока игрок выбирает наряд
+    if (kind === 'looks' && url && accentsOn(st) && (a.accents || []).length && !a.accentImage && !a.accentImageFailed) ensurePicture('accents', false);
+}
+function flushPicture(kind, url) {
+    const waiters = [...drawWaitersOf[kind]];
+    drawWaitersOf[kind].clear();
+    waiters.forEach(fn => { try { fn(url); } catch (e) { /* окно уже закрыто */ } });
+}
+
+// ---------- 🎬 Картинка сцены ----------
+function canDrawScene() {
+    const s = settings();
+    if (s.imageSource === 'openai-images') return !!(s.imgApiBase && s.imgApiKey && s.imgApiModel);
+    if (s.imageSource) return !!ctx().ConnectionManagerRequestService?.sendRequest;
+    return !!imageCommand();
+}
+
+function scenePromptRequest(st) {
+    const names = storyNames();
+    const a = st.wardrobe?.active;
+    const outfit = a?.status === 'worn' ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
+    const lastAppearance = st.wardrobe?.history?.length ? '' : '';
+    return [
+        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник художника: опиши картинку того, что происходит в сцене прямо сейчас (по последним сообщениям чата).',
+        st.time?.date ? `Время в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; место: ${placeLine(st)}` : ''}.` : '',
+        outfit,
+        lastAppearance,
+        'Ответь ровно двумя строками, без пояснений:',
+        `CAST: кто в кадре — имена через запятую, как в чате (${[names.user, ...names.chars].join(', ')} и другие)`,
+        'SCENE: один абзац по-английски для генератора картинок: место и обстановка, время суток и свет, кто в кадре и как выглядит (внешность, одежда), позы, выражения лиц, настроение, ракурс. Это одна иллюстрация, без текста и подписей.]',
+    ].filter(Boolean).join('\n');
+}
+
+let sceneDrawing = false;
+async function drawScene(popupEl) {
+    if (sceneDrawing) return toastr.info('Сцена уже рисуется', '🎬 Сцена');
+    if (!canDrawScene()) return toastr.warning('Не выбрано, чем рисовать: настрой «Чем рисовать» в настройках блокнота.', '🎬 Сцена', { timeOut: 8000 });
+    const st = store();
+    if (!st || !ctx().chat?.length) return toastr.warning('Сначала открой чат', '🎬 Сцена');
+    sceneDrawing = true;
+    const status = popupEl?.find('.nnb-scene-status');
+    const say = t => status?.text(t);
+    try {
+        // 1) описание сцены текстовой моделью
+        let desc = '';
+        let cast = [];
+        const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st)));
+        for (const line of answerLines(raw || '')) {
+            let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
+            if (m) { cast = m[1].split(/[,;]/).map(x => x.trim().toLowerCase().replace(/ё/g, 'е')).filter(Boolean); continue; }
+            m = line.match(/^SCENE\s*[:：—–-]\s*(.+)$/i);
+            if (m) desc = m[1].trim().replace(/\]$/, '');
+        }
+        if (!desc) throw new Error('модель не описала сцену — попробуй ещё раз');
+        // 2) образцы: аватар персоны и аватары тех, кто в кадре
+        say('🎨 Рисую сцену…');
+        const names = storyNames();
+        const norm = x => String(x || '').toLowerCase().replace(/ё/g, 'е');
+        const inFrame = n => !cast.length || cast.some(c => c.includes(norm(n)) || norm(n).includes(c));
+        const images = [];
+        const who = [];
+        if (settings().imageRef) {
+            if (inFrame(names.user)) {
+                const me = await personaAvatarDataUrl();
+                if (me) { images.push(me); who.push(names.user); }
+            }
+            for (const ch of characterAvatars()) {
+                if (images.length >= 4 || !inFrame(ch.name)) continue;
+                const img = await fileToDataUrl(ch.file);
+                if (img) { images.push(img); who.push(ch.name); }
+            }
+        }
+        const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description.` } : null;
+        const prompt = cleanForCommand(`${desc} Single illustration, no text, no captions.`);
+        const url = await withTimeout(drawPicture(prompt, refs), 240000, 'рисунок сцены');
+        if (!Array.isArray(st.scenes)) st.scenes = [];
+        st.scenes.push({ url, at: ctx().chat.length, date: st.time?.date || '', desc });
+        if (st.scenes.length > 12) st.scenes.shift();
+        await ctx().saveMetadata();
+        return url;
+    } catch (err) {
+        console.warn('[npc_notebook] scene', err);
+        toastr.warning(`Сцену нарисовать не вышло: ${escapeHtml(err?.message || err)}`, '🎬 Сцена', { escapeHtml: false, timeOut: 10000 });
+        return '';
+    } finally {
+        sceneDrawing = false;
+    }
+}
+
+async function attachToLastMessage(url) {
+    const c = ctx();
+    for (let i = c.chat.length - 1; i >= 0; i--) {
+        const m = c.chat[i];
+        if (!m || m.is_system) continue;
+        m.extra = m.extra || {};
+        m.extra.image = url;
+        m.extra.title = 'Сцена';
+        try { if (typeof c.updateMessageBlock === 'function') c.updateMessageBlock(i, m); } catch (e) { /* ignore */ }
+        await c.saveChat();
+        toastr.success('Картинка прикреплена к сообщению', '🎬 Сцена');
+        return;
+    }
+}
+
+async function showScenePopup() {
+    const el = $('<div class="nnb-pop nnb-pop-visual"><h3>🎬 Сцена</h3><div class="nnb-sheet"><div class="nnb-pop-sub nnb-scene-status">✍️ Модель описывает сцену…</div></div></div>');
+    const pic = el.find('.nnb-sheet');
+    const render = url => {
+        pic.empty();
+        if (!url) {
+            pic.append('<div class="nnb-pop-sub">Картинки нет.</div>');
+        } else {
+            pic.append($('<div class="nnb-sheet-frame"></div>').append($('<img alt="Сцена">').attr('src', url)));
+        }
+        const tools = $('<div class="nnb-pop-row"></div>');
+        tools.append($('<div class="menu_button"><i class="fa-solid fa-palette"></i> Перерисовать</div>').on('click', async () => {
+            pic.html('<div class="nnb-pop-sub nnb-scene-status">✍️ Модель описывает сцену…</div>');
+            render(await drawScene(el));
+        }));
+        if (url) {
+            tools.append($('<div class="menu_button"><i class="fa-solid fa-paperclip"></i> Прикрепить к сообщению</div>').on('click', () => attachToLastMessage(url)));
+            tools.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Во весь экран</div>').on('click', () => window.open(url, '_blank')));
+        }
+        pic.append(tools);
+    };
+    const popup = openPopup(el, true);
+    render(await drawScene(el));
+    await popup;
+}
+
+// Общий визуальный выбор: картинка с зонами, кнопки с названиями, свёрнутые описания
+function visualPicker({ kind, items, title, onPick, field, failField, a }) {
+    const box = $('<div class="nnb-visual"></div>');
+    const pic = $('<div class="nnb-sheet"></div>');
+    const chips = $('<div class="nnb-chips-row"></div>');
+    items.forEach((it, i) => chips.append($('<div class="menu_button nnb-look-chip" tabindex="0"></div>').text(`${i + 1}. ${title(it)}`).on('click', () => onPick(i))));
+    const cards = $('<div class="nnb-looks"></div>');
+    items.forEach((it, i) => {
+        const c = $('<div class="nnb-look" tabindex="0"><div class="nnb-look-title"></div><div class="nnb-look-desc"></div></div>');
+        c.find('.nnb-look-title').text(`${i + 1}. ${title(it)}`);
+        c.find('.nnb-look-desc').text(it.desc || '');
+        c.on('click', () => onPick(i));
+        cards.append(c);
+    });
+    const details = $('<details class="nnb-look-details"><summary>Описания</summary></details>').append(cards);
+    const waitText = () => pic.html('').append($('<div class="nnb-pop-sub nnb-wait"></div>').text(`🎨 Рисую через ${imageSourceName()}… обычно до пары минут`));
+    const showImg = url => {
+        pic.empty();
+        if (url) {
+            const frame = $('<div class="nnb-sheet-frame"></div>').append($('<img alt="">').attr('src', url));
+            const zones = $('<div class="nnb-sheet-zones"></div>');
+            items.slice(0, kind === 'looks' ? 4 : 3).forEach((it, i) => {
+                const z = $('<div class="nnb-sheet-zone" tabindex="0"><span></span></div>').attr('title', title(it));
+                z.find('span').text(i + 1);
+                z.on('click', () => onPick(i));
+                zones.append(z);
+            });
+            frame.append(zones);
+            pic.append(frame, '<div class="nnb-pop-sub">Нажми на картинку или на название ниже.</div>');
+        } else {
+            pic.append('<div class="nnb-pop-sub">Картинки нет — выбирай по названиям или загляни в описания.</div>');
+            details.attr('open', true);
+        }
+        const tools = $('<div class="nnb-pop-row"></div>');
+        tools.append($('<div class="menu_button nnb-redraw"><i class="fa-solid fa-palette"></i> Перерисовать</div>').on('click', () => { waitText(); ensurePicture(kind, !drawingKind[kind], showImg); }));
+        if (url) tools.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Во весь экран</div>').on('click', () => window.open(url, '_blank')));
+        pic.append(tools);
+    };
+    if (a[field]) showImg(a[field]);
+    else if (a[failField] && !drawingKind[kind]) showImg('');
+    else { waitText(); ensurePicture(kind, false, showImg); }
+    box.append(pic, chips, details);
+    return box;
 }
 
 function parseLooks(raw) {
@@ -2273,7 +2488,7 @@ function parseLooks(raw) {
         let m = line.match(/^APPEARANCE\s*[:：—–-]\s*(.+)$/i);
         if (m) { appearance = m[1].trim(); continue; }
         m = line.match(/^EN\s*[:：—–-]\s*(.+)$/i);
-        if (m) { if (looks.length) looks[looks.length - 1].en = m[1].trim().replace(/\]$/, ''); continue; }
+        if (m) { if (last) last.en = m[1].trim().replace(/\]$/, ''); continue; }
         m = line.match(/^LOOK\s*\d*\s*[:：—–-]\s*(.+)$/i);
         if (m) {
             const [title, ...rest] = m[1].split('|');
@@ -2361,25 +2576,36 @@ async function showAccentPopup() {
     const st = store();
     const a = st?.wardrobe.active;
     if (!a || a.status !== 'worn') return;
-    const el = $('<div class="nnb-pop"><h3>✨ Добавить штрих?</h3></div>');
+    const accents = a.accents || [];
+    const visual = wantImages() && accents.length > 0;
+    const el = $(`<div class="nnb-pop${visual ? ' nnb-pop-visual' : ''}"><h3>✨ Добавить штрих?</h3></div>`);
     el.append($('<div class="nnb-pop-sub"></div>').text(`К образу «${a.look.title}»`));
-    const card = (icon, title, desc, sub, fn) => {
+    const icon = k => (ACCENT_KINDS[k] || ACCENT_KINDS.accessory).icon;
+    const pickAccent = async i => { closePopupOf(el); await chooseAccent(accents[i]); };
+    const card = (title, desc, sub, fn) => {
         const c = $('<div class="nnb-look" tabindex="0"><div class="nnb-look-title"></div><div class="nnb-look-desc"></div></div>');
-        c.find('.nnb-look-title').text(`${icon} ${title}`);
+        c.find('.nnb-look-title').text(title);
         c.find('.nnb-look-desc').text([desc, sub].filter(Boolean).join(' · '));
         c.on('click', async () => { closePopupOf(el); await fn(); });
         return c;
     };
-    (a.accents || []).forEach(ac => el.append(card((ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory).icon, ac.title, ac.desc, '', () => chooseAccent(ac))));
-    const fresh = st.wardrobe.box.filter(x => !(a.accents || []).some(ac => ac.title.toLowerCase() === x.title.toLowerCase()));
+    if (visual) {
+        el.append(visualPicker({ kind: 'accents', items: accents, title: x => `${icon(x.kind)} ${x.title}`, onPick: pickAccent, field: 'accentImage', failField: 'accentImageFailed', a }));
+    } else {
+        accents.forEach((ac, i) => el.append(card(`${icon(ac.kind)} ${ac.title}`, ac.desc, '', () => chooseAccent(accents[i]))));
+    }
+    const fresh = st.wardrobe.box.filter(x => !accents.some(ac => ac.title.toLowerCase() === x.title.toLowerCase()));
     if (fresh.length) {
         el.append('<div class="nnb-pop-sub">🎁 Из шкатулки</div>');
-        fresh.forEach(x => el.append(card((ACCENT_KINDS[x.kind] || ACCENT_KINDS.accessory).icon, x.title, x.desc, x.origin, () => chooseAccent({ kind: x.kind, title: x.title, desc: x.desc, origin: x.origin, effects: '', fromBox: true }))));
+        const boxRow = $('<div class="nnb-chips-row"></div>');
+        fresh.forEach(x => boxRow.append($('<div class="menu_button nnb-look-chip" tabindex="0"></div>').text(`${icon(x.kind)} ${x.title}`).attr('title', x.origin || '')
+            .on('click', async () => { closePopupOf(el); await chooseAccent({ kind: x.kind, title: x.title, desc: x.desc, origin: x.origin, effects: '', fromBox: true }); })));
+        el.append(boxRow);
     }
     const none = $('<div class="menu_button"><i class="fa-solid fa-xmark"></i> Без штриха</div>');
     none.on('click', async () => { closePopupOf(el); await chooseAccent(null); });
     el.append($('<div class="nnb-pop-row"></div>').append(none));
-    if (!(await openPopup(el))) await chooseAccent(null);
+    if (!(await openPopup(el, visual))) await chooseAccent(null);
 }
 
 function revealPrompt(st) {
@@ -2443,10 +2669,10 @@ function closePopupOf(el) {
     else dlg[0]?.close?.();
 }
 
-async function openPopup(el) {
+async function openPopup(el, wide = false) {
     const c = ctx();
     if (typeof c.callGenericPopup === 'function' && c.POPUP_TYPE) {
-        await c.callGenericPopup(el[0], c.POPUP_TYPE.TEXT, '', { okButton: 'Закрыть', allowVerticalScrolling: true, wide: false });
+        await c.callGenericPopup(el[0], c.POPUP_TYPE.TEXT, '', { okButton: 'Закрыть', allowVerticalScrolling: true, wide, large: wide });
         return true;
     }
     return false;
@@ -2456,40 +2682,27 @@ async function showWardrobePopup() {
     const st = store();
     const a = st?.wardrobe.active;
     if (!a || a.status !== 'choosing') return;
-    const el = $('<div class="nnb-pop"><h3>👗 Что надеть?</h3></div>');
+    const pick = async i => { closePopupOf(el); await chooseOutfit(i); };
+    const visual = wantImages();
+    const el = $(`<div class="nnb-pop${visual ? ' nnb-pop-visual' : ''}"><h3>👗 Что надеть?</h3></div>`);
     if (a.occasion) el.append($('<div class="nnb-pop-sub"></div>').text(a.occasion));
-    if (wantImages()) {
-        const pic = $('<div class="nnb-sheet"></div>');
-        const showImg = url => {
-            pic.empty();
-            if (url) {
-                pic.append($('<img alt="Образы">').attr('src', url).on('click', function () { $(this).toggleClass('nnb-zoom'); }));
-                pic.append('<div class="nnb-pop-sub">Образы на картинке слева направо — в том же порядке, что и ниже. Нажми на картинку, чтобы увеличить.</div>');
-            } else {
-                pic.append('<div class="nnb-pop-sub">Картинки нет — выбирай по описаниям.</div>');
-            }
-            const redraw = $('<div class="menu_button nnb-redraw"><i class="fa-solid fa-palette"></i> Перерисовать</div>');
-            redraw.on('click', () => {
-                if (drawing) { waitText(); drawWaiters.add(showImg); return; }
-                waitText();
-                ensureSheet(true, showImg);
-            });
-            pic.append(redraw);
-        };
-        const waitText = () => pic.html('').append($('<div class="nnb-pop-sub"></div>').text(`🎨 Рисую образы через ${imageSourceName()}… обычно до пары минут`));
-        if (a.image) showImg(a.image);
-        else if (drawing) { waitText(); drawWaiters.add(showImg); }
-        else if (a.imageFailed) showImg('');
-        else { waitText(); ensureSheet(false, showImg); }
-        el.append(pic);
-    }
+
+    // описания образов: в режиме картинок — свёрнуты
+    const cards = $('<div class="nnb-looks"></div>');
     a.options.forEach((o, i) => {
         const card = $('<div class="nnb-look" tabindex="0"><div class="nnb-look-title"></div><div class="nnb-look-desc"></div></div>');
-        card.find('.nnb-look-title').text(o.title);
+        card.find('.nnb-look-title').text(`${visual ? `${i + 1}. ` : ''}${o.title}`);
         card.find('.nnb-look-desc').text(o.desc);
-        card.on('click', async () => { closePopupOf(el); await chooseOutfit(i); });
-        el.append(card);
+        card.on('click', () => pick(i));
+        cards.append(card);
     });
+
+    if (visual) {
+        el.append(visualPicker({ kind: 'looks', items: a.options, title: o => o.title, onPick: pick, field: 'image', failField: 'imageFailed', a }));
+    } else {
+        el.append(cards);
+    }
+
     const row = $('<div class="nnb-pop-row"></div>');
     const own = $('<div class="menu_button"><i class="fa-solid fa-pen"></i> Свой вариант</div>');
     own.on('click', async () => {
@@ -2501,7 +2714,7 @@ async function showWardrobePopup() {
     reroll.on('click', () => { closePopupOf(el); rerollOutfits(); });
     row.append(own, reroll);
     el.append(row);
-    if (!(await openPopup(el))) toastr.info('Образы готовы — выбери в панели Блокнота', '👗 Гардероб');
+    if (!(await openPopup(el, visual))) toastr.info('Образы готовы — выбери в панели Блокнота', '👗 Гардероб');
 }
 
 function revealCard(entry) {
@@ -2747,6 +2960,7 @@ const PANEL_HTML = `
       <div class="nnb-buttons">
         <div class="menu_button" id="nnb_think_now"><i class="fa-solid fa-feather"></i> Подумать сейчас</div>
         <div class="menu_button" id="nnb_ff_panel"><i class="fa-solid fa-forward"></i> Дальше</div>
+        <div class="menu_button" id="nnb_scene_panel"><i class="fa-solid fa-image"></i> Сцена</div>
         <div class="menu_button" id="nnb_add"><i class="fa-solid fa-plus"></i> Добавить запись</div>
         <div class="menu_button" id="nnb_clear"><i class="fa-solid fa-broom"></i> Очистить блокнот</div>
       </div>
@@ -3379,6 +3593,7 @@ function addMenuItems() {
     const item = (id, icon, text, fn) => $(`<div id="${id}" class="list-group-item flex-container flexGap5 interactable" tabindex="0"><div class="fa-solid ${icon} extensionsMenuExtensionButton"></div><span></span></div>`)
         .find('span').text(text).end().on('click', fn);
     menu.append(item('nnb_menu_ff', 'fa-forward', 'Дальше: следующее событие', fastForward));
+    menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена: нарисовать', showScenePopup));
     menu.append(item('nnb_menu_wardrobe', 'fa-shirt', 'Гардероб: подобрать образ', () => {
         const st = store();
         if (st && !st.direction.wardrobe) return toastr.info('Гардероб выключен в этом чате — включи его в панели Блокнота', 'Блокнот рассказчика');
@@ -3499,6 +3714,7 @@ jQuery(async () => {
 
     $('#nnb_think_now').on('click', () => think(true));
     $('#nnb_ff_panel').on('click', fastForward);
+    $('#nnb_scene_panel').on('click', showScenePopup);
     addMenuItems();
     placeFfButton();
     $('#nnb_add').on('click', async () => {
