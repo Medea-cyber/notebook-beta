@@ -2297,10 +2297,12 @@ async function drawPicture(prompt, refs, orient = 'landscape') {
     return url;
 }
 
+// предметы рисуем в том же духе, что и образы: иллюстрация, а не фото
+const ITEM_STYLE = 'semi-realistic anime illustration, soft painterly digital art, clean outlines, warm gentle colors, visual novel item art, not a photo';
 function accentsPrompt(a) {
     const items = (a.accents || []).slice(0, 3);
     const pos = ['first', 'second', 'third'];
-    return cleanForCommand(`still life product shot, ${items.length} separate items in a row, each item centered in its own equal part of the image with wide empty space around it, plain light neutral background, gentle light, ` +
+    return cleanForCommand(`${ITEM_STYLE}, ${items.length} separate items in a row, evenly spaced, each item small and centered in its own third of the image with wide empty space between items, nothing overlapping, plain light cream background, ` +
         items.map((x, i) => `${pos[i]} from the left: ${x.en || x.title}`).join('; ') + ', no people, no text, no captions');
 }
 
@@ -2568,6 +2570,13 @@ function smartCrops(url, n, kind, layout) {
                     rowBg.push([0, 1, 2].map(k => pts.reduce((s2, c) => s2 + c[k], 0) / pts.length));
                 }
                 const isFg = (x, y) => { const c = px(x, y), b = rowBg[y]; return Math.abs(c[0] - b[0]) + Math.abs(c[1] - b[1]) + Math.abs(c[2] - b[2]) > 70; };
+                const mid = rowBg[Math.floor(H / 2)] || [244, 241, 238];
+                const bg = `rgb(${mid.map(v => Math.round(v)).join(',')})`;
+                // предметы в ряд: художник редко ставит их ровно по третям — ищем каждый предмет по пустым промежуткам
+                if (kind !== 'looks' && rowsN === 1) {
+                    const segs = itemSegments(W, H, isFg, n);
+                    if (segs) { segs.bg = bg; resolve(segs); return; }
+                }
                 const out = [];
                 for (let i = 0; i < n; i++) {
                     const r = Math.floor(i / colsN), c = i % colsN;
@@ -2592,8 +2601,7 @@ function smartCrops(url, n, kind, layout) {
                     const x = Math.max(x0, Math.min(x1 - w, cx - w / 2)), y = Math.max(y0, Math.min(y1 - h, cy - h / 2));
                     out.push({ x: x / W, y: y / H, w: w / W, h: h / H });
                 }
-                const mid = rowBg[Math.floor(H / 2)] || [244, 241, 238];
-                out.bg = `rgb(${mid.map(v => Math.round(v)).join(',')})`;
+                out.bg = bg;
                 resolve(out);
             } catch (e) {
                 resolve([]); // картинка с другого сайта без разрешения — режем поровну
@@ -2606,6 +2614,62 @@ function smartCrops(url, n, kind, layout) {
     cropCache.set(key, job);
     return job;
 }
+// Делим полосу с предметами на n кусков по пустым промежуткам между ними; null — если не вышло
+function itemSegments(W, H, isFg, n) {
+    const colCnt = new Array(W).fill(0);
+    for (let x = 0; x < W; x++) for (let y = 0; y < H; y++) if (isFg(x, y)) colCnt[x]++;
+    const peak = Math.max(...colCnt);
+    const on = colCnt.map(v => v > Math.max(H * 0.015, peak * 0.08)); // фон с виньеткой тоже даёт немного «не фона» — считаем от самого плотного столбца
+    let runs = [];
+    for (let x = 0; x < W; x++) {
+        if (!on[x]) continue;
+        const last = runs[runs.length - 1];
+        if (last && x - last.x1 <= Math.max(2, W * 0.015)) last.x1 = x; else runs.push({ x0: x, x1: x });
+    }
+    runs.forEach(r => { r.mass = colCnt.slice(r.x0, r.x1 + 1).reduce((a, b) => a + b, 0); });
+    runs = runs.filter(r => r.mass > H * 2); // соринки и тени не считаем
+    if (!runs.length) return null;
+    // предметы слиплись — режем самый широкий кусок по самому «пустому» месту в его середине
+    while (runs.length < n) {
+        const wi = runs.reduce((b, r, i) => (r.x1 - r.x0 > runs[b].x1 - runs[b].x0 ? i : b), 0);
+        const r = runs[wi];
+        if (r.x1 - r.x0 < W * 0.12) return null;
+        const a0 = Math.round(r.x0 + (r.x1 - r.x0) * 0.2), a1 = Math.round(r.x1 - (r.x1 - r.x0) * 0.2);
+        let cut = a0;
+        for (let x = a0; x <= a1; x++) if (colCnt[x] < colCnt[cut]) cut = x;
+        const m = (x0, x1) => colCnt.slice(x0, x1 + 1).reduce((a, b) => a + b, 0);
+        runs.splice(wi, 1, { x0: r.x0, x1: cut - 1, mass: m(r.x0, cut - 1) }, { x0: cut + 1, x1: r.x1, mass: m(cut + 1, r.x1) });
+    }
+    // если кусков больше — склеиваем ближайшие соседние, пока не останется n
+    while (runs.length > n) {
+        let best = 0, gap = Infinity;
+        for (let i = 0; i < runs.length - 1; i++) { const g = runs[i + 1].x0 - runs[i].x1; if (g < gap) { gap = g; best = i; } }
+        const a = runs[best], b = runs[best + 1];
+        runs.splice(best, 2, { x0: a.x0, x1: b.x1, mass: a.mass + b.mass });
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        const r = runs[i];
+        const left = i ? Math.ceil((runs[i - 1].x1 + r.x0) / 2) : 0;
+        const right = i < n - 1 ? Math.floor((r.x1 + runs[i + 1].x0) / 2) : W - 1;
+        let minY = H, maxY = -1;
+        for (let y = 0; y < H; y++) {
+            let c = 0;
+            for (let x = r.x0; x <= r.x1; x++) if (isFg(x, y)) c++;
+            if (c > (r.x1 - r.x0 + 1) * 0.04) { if (y < minY) minY = y; maxY = y; }
+        }
+        if (maxY < 0) return null;
+        const cx = (r.x0 + r.x1) / 2, cy = (minY + maxY) / 2;
+        // квадрат, если есть место; высокий предмет не режем — рамка просто станет уже
+        const h = Math.min(H, Math.max(r.x1 - r.x0, maxY - minY) * 1.25);
+        const w = Math.min(right - left + 1, Math.max(h, (r.x1 - r.x0) * 1.25));
+        const x = Math.max(left, Math.min(right + 1 - w, cx - w / 2));
+        const y = Math.max(0, Math.min(H - h, cy - h / 2));
+        out.push({ x: x / W, y: y / H, w: w / W, h: h / H });
+    }
+    return out;
+}
+
 function applyCrop(el, url, box, imgRatio) {
     // показываем область box (в долях) так, чтобы она заполнила свою рамку внутри карточки
     if (el.hasClass('nnb-card-img')) {
@@ -2874,7 +2938,7 @@ function parseGacha(raw, rarities) {
 }
 function gachaPicPrompt(a) {
     const pos = ['first', 'second', 'third'];
-    return cleanForCommand(`still life photo of ${a.options.length} separate vintage finds in a row on a plain light neutral background, each item centered in its own equal part of the image with wide empty space around it, soft daylight, ` +
+    return cleanForCommand(`${ITEM_STYLE}, ${a.options.length} separate vintage finds in a row, evenly spaced, each item small and centered in its own third of the image with wide empty space between items, nothing overlapping, plain light cream background, ` +
         a.options.map((x, i) => `${pos[i]} from the left: ${x.en || x.title}`).join('; ') + ', no people, no hands, no text, no captions');
 }
 
@@ -3459,9 +3523,19 @@ function openBook(tab) {
     if (tab) bookTab = tab;
     renderDirection();
     renderPanel();
-    $('#nnb_book').css('display', 'flex');
+    $('#nnb_book').css({ display: 'flex', 'background-color': solidThemeColor() });
     bookTabs();
     $('#nnb_book .nnb-book-body').scrollTop(0);
+}
+// цвет темы бывает полупрозрачным — для окна блокнота берём его без прозрачности
+function solidThemeColor() {
+    try {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeBlurTintColor').trim();
+        const m = raw.match(/rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+        if (m) return `rgb(${Math.round(m[1])}, ${Math.round(m[2])}, ${Math.round(m[3])})`;
+        if (/^#[0-9a-f]{6}/i.test(raw)) return raw.slice(0, 7);
+    } catch (e) { /* ignore */ }
+    return '#1e1b26';
 }
 function closeBook() {
     $('#nnb_book').hide();

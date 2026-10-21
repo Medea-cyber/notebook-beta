@@ -105,7 +105,7 @@
 .nnb-album-big img { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto; border-radius: 10px; }
 
 /* --- окно блокнота --- */
-.nnb-book { position: fixed; inset: 0; z-index: 9000; flex-direction: column; background: var(--SmartThemeBlurTintColor, #1e1e1e); backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px)); color: var(--SmartThemeBodyColor); }
+.nnb-book { position: fixed; inset: 0; z-index: 9000; flex-direction: column; background-color: #1e1b26; isolation: isolate; overflow: hidden; color: var(--SmartThemeBodyColor); }
 .nnb-book-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
 .nnb-book-head b { font-size: 1.1em; white-space: nowrap; }
 .nnb-book-head .nnb-status { flex: 1; margin: 0; font-size: 0.8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
