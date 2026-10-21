@@ -144,3 +144,7 @@
 .nnb-find-thumb { flex: 0 0 auto; border-radius: 6px; background-color: #f4f1ee; }
 .nnb-find-big { margin: 0 auto 8px; border-radius: 10px; }
 .nnb-find-big.nnb-rar { border: 3px solid var(--nnb-rar); }
+.nnb-card-pick.nnb-taken { cursor: default; }
+.nnb-card-pick.nnb-taken .nnb-card-img { filter: saturate(0.6) brightness(0.85); }
+.nnb-card-pick.nnb-taken .nnb-card-title::before { content: '✓ '; color: var(--nnb-rar, #6c6); }
+.nnb-card-pick.nnb-taken .nnb-card-body::after { content: 'в шкатулке'; display: block; font-size: 0.8em; opacity: 0.7; margin-top: 4px; }

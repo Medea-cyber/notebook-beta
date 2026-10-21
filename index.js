@@ -2960,6 +2960,8 @@ async function startGacha(hintArg) {
         }
         s2.gacha.spins.push(ctx().chat.length);
         s2.gacha.total = (s2.gacha.total || 0) + 1;
+        s2.gacha.stats = s2.gacha.stats || {};
+        rarities.forEach(r => { s2.gacha.stats[r] = (s2.gacha.stats[r] || 0) + 1; });
         s2.gacha.active = { place, options: items, status: 'choosing', at: ctx().chat.length, date: s2.time.date || '' };
         return true;
     });
@@ -2974,15 +2976,21 @@ async function showGachaPopup() {
     const visual = wantImages();
     const el = $(`<div class="nnb-pop${visual ? ' nnb-pop-visual' : ''}"><h3></h3></div>`);
     el.find('h3').text(`🎰 ${a.place || 'Находки'}`);
-    el.append($('<div class="nnb-pop-sub"></div>').text('Можно взять только одну — остальные уйдут другим.'));
-    const pick = async i => { closePopupOf(el); await chooseFind(i); };
+    el.append($('<div class="nnb-pop-sub"></div>').text('Бери, что приглянулось, — можно несколько. Остальное уйдёт другим.'));
+    const pick = async i => {
+        if (a.options[i]?.taken) return;
+        await chooseFind(i);
+        el.find('.nnb-card-pick').eq(i).addClass('nnb-taken');
+        leave.html('<i class="fa-solid fa-check"></i> Готово');
+        if (a.options.every(o => o.taken)) closePopupOf(el);
+    };
     const label = x => `${rarityOf(x.rarity).stars} ${rarityOf(x.rarity).name}${x.price ? ` · ${x.price}` : ''}`;
     if (visual) {
-        el.append(visualPicker({ kind: 'gacha', items: a.options, title: x => x.title, label, onPick: pick, field: 'image', failField: 'imageFailed', a, cardClass: x => `nnb-rar nnb-rar-${x.rarity}` }));
+        el.append(visualPicker({ kind: 'gacha', items: a.options, title: x => x.title, label, onPick: pick, field: 'image', failField: 'imageFailed', a, cardClass: x => `nnb-rar nnb-rar-${x.rarity}${x.taken ? ' nnb-taken' : ''}` }));
     } else {
         const grid = $('<div class="nnb-cards nnb-cards-text"></div>');
         a.options.forEach((x, i) => {
-            const card = $(`<div class="nnb-card-pick nnb-rar nnb-rar-${x.rarity}" tabindex="0"><div class="nnb-card-body"><div class="nnb-card-kind"></div><div class="nnb-card-title"></div><div class="nnb-card-desc"></div></div></div>`);
+            const card = $(`<div class="nnb-card-pick nnb-rar nnb-rar-${x.rarity}${x.taken ? ' nnb-taken' : ''}" tabindex="0"><div class="nnb-card-body"><div class="nnb-card-kind"></div><div class="nnb-card-title"></div><div class="nnb-card-desc"></div></div></div>`);
             card.find('.nnb-card-kind').text(label(x));
             card.find('.nnb-card-title').text(x.title);
             card.find('.nnb-card-desc').text(x.desc);
@@ -2991,13 +2999,25 @@ async function showGachaPopup() {
         });
         el.append(grid);
     }
-    const leave = $('<div class="menu_button"><i class="fa-solid fa-person-walking-arrow-right"></i> Уйти ни с чем</div>').on('click', async () => {
+    const anyTaken = () => a.options.some(o => o.taken);
+    const leave = $('<div class="menu_button"></div>').html(anyTaken() ? '<i class="fa-solid fa-check"></i> Готово' : '<i class="fa-solid fa-person-walking-arrow-right"></i> Уйти ни с чем').on('click', async () => {
         closePopupOf(el);
-        st.gacha.active = null;
-        await commit();
+        if (!anyTaken()) { st.gacha.active = null; await commit(); }
     });
     el.append($(`<div class="nnb-pop-row${visual ? ' nnb-pop-links' : ''}"></div>`).append(leave));
     await openPopup(el, visual);
+    // что-то взяли — прилавок закрывается; ничего — можно вернуться к нему из шкатулки
+    if (anyTaken() && st.gacha.active === a) await finishGacha();
+}
+
+async function finishGacha() {
+    const st = store();
+    const a = st?.gacha.active;
+    if (!a) return;
+    const left = a.options.filter(o => !o.taken).map(o => o.title);
+    (Array.isArray(st.gacha.pending) ? st.gacha.pending : []).forEach(p => { if (p.spin === a.spin) p.others = left; });
+    st.gacha.active = null;
+    await commit();
 }
 
 async function chooseFind(i) {
@@ -3005,7 +3025,9 @@ async function chooseFind(i) {
     const a = st?.gacha.active;
     const x = a?.options[i];
     if (!x) return;
-    const others = a.options.filter(o => o !== x).map(o => o.title);
+    if (!a.spin) a.spin = Date.now();
+    x.taken = true;
+    const others = a.options.filter(o => !o.taken).map(o => o.title);
     let crop = null;
     if (a.image) {
         try {
@@ -3021,15 +3043,14 @@ async function chooseFind(i) {
     });
     const len = ctx().chat.length;
     const prev = Array.isArray(st.gacha.pending) ? st.gacha.pending.filter(p => p.at === len) : [];
-    st.gacha.pending = [...prev, { title: x.title, desc: x.desc, hook: x.hook, rarity: x.rarity, place: a.place, price: x.price, others, at: len }];
+    st.gacha.pending = [...prev, { title: x.title, desc: x.desc, hook: x.hook, rarity: x.rarity, place: a.place, price: x.price, others, at: len, spin: a.spin }];
     // легендарная находка открывает тайну
     if (x.rarity === 'legendary' && st.direction.intrigues && x.hook) {
         st.intrigues.push({ id: st.nextIntrigueId++, tag: 'находка', text: `${x.title}: ${x.hook}`, clues: [], at: ctx().chat.length });
     }
-    st.gacha.active = null;
     await commit();
     const r = rarityOf(x.rarity);
-    toastr.success(`${r.icon} ${escapeHtml(r.name)}: «${escapeHtml(x.title)}» — в шкатулке. Следующий пост это обыграет.`, '🎰 Находки', { escapeHtml: false, timeOut: 7000 });
+    toastr.success(`${r.icon} ${escapeHtml(r.name)}: «${escapeHtml(x.title)}» — в шкатулке.`, '🎰 Находки', { escapeHtml: false, timeOut: 7000 });
 }
 
 function gachaInjection(st) {
@@ -3040,7 +3061,7 @@ function gachaInjection(st) {
     const names = storyNames();
     const one = p => {
         const r = rarityOf(p.rarity);
-        return `${p.price ? `купил(а) за ${p.price}` : 'взял(а)'}${p.place ? ` (${p.place})` : ''} ${r.name.toLowerCase().replace(/ая$/, 'ую')} находку — «${p.title}»${p.desc ? `: ${p.desc}` : ''}.${p.hook ? ` Как её обыграть: ${p.hook}.` : ''}${p.others.length ? ` Остальное (${p.others.join(', ')}) осталось на прилавке или досталось другим.` : ''}`;
+        return `${p.price ? `купил(а) за ${p.price}` : 'взял(а)'}${p.place ? ` (${p.place})` : ''} ${r.name.toLowerCase().replace(/ая$/, 'ую')} находку — «${p.title}»${p.desc ? `: ${p.desc}` : ''}.${p.hook ? ` Как её обыграть: ${p.hook}.` : ''}${p.others?.length && !list.some(q => q !== p && q.spin && q.spin === p.spin && list.indexOf(q) > list.indexOf(p)) ? ` Остальное (${p.others.join(', ')}) осталось на прилавке или досталось другим.` : ''}`;
     };
     const body = list.length === 1 ? `${names.user} только что ${one(list[0])}` : `${names.user} только что сделал(а) несколько находок:\n${list.map((p, i) => `${i + 1}) ${one(p)}`).join('\n')}`;
     return `[Находка: ${body}\nВ СЛЕДУЮЩЕМ ответе обязательно обыграй ${list.length === 1 ? 'её' : 'их'}. Чем реже находка, тем заметнее её след в сюжете.]`;
@@ -3218,12 +3239,15 @@ function renderBox(st) {
             const card = $('<div class="nnb-note nnb-event"><div class="nnb-event-title"></div><div class="nnb-meta">Находки ждут выбора</div></div>');
             card.find('.nnb-event-title').text(g.active.place || 'Прилавок');
             card.append($('<div class="menu_button"><i class="fa-solid fa-eye"></i> Посмотреть</div>').on('click', presentGacha));
-            card.append($('<div class="menu_button"><i class="fa-solid fa-xmark"></i> Уйти ни с чем</div>').on('click', async () => { g.active = null; await commit(); }));
+            card.append($('<div class="menu_button"><i class="fa-solid fa-xmark"></i> Уйти ни с чем</div>').on('click', async () => { if (g.active.options.some(o => o.taken)) await finishGacha(); else { g.active = null; await commit(); } }));
             det.append(card);
         } else {
             const left = gachaSpinsLeft(st);
             det.append($('<div class="nnb-npc-status"></div>').text(`Прокруток на этом посте: ${left} из ${GACHA_LIMIT}${left ? '' : ' (снова — со следующим постом)'} · до гарантированной эпической: ${Math.max(1, GACHA_PITY - (g.pity || 0))}`));
             det.append($('<div class="menu_button"><i class="fa-solid fa-dice"></i> Испытать удачу</div>').on('click', () => startGacha()));
+            const stt = g.stats || {};
+            const seen = RARITIES.reduce((a2, r) => a2 + (stt[r.id] || 0), 0);
+            if (seen) det.append($('<div class="nnb-npc-status"></div>').text(`Выпадало за ${g.total || 0} прокр. (${seen} находок): ` + RARITIES.map(r => `${r.icon} ${stt[r.id] || 0}`).join(' · ') + ' — шансы на каждую находку: ' + RARITIES.map(r => `${r.w}%`).join(' / ')));
         }
         root.append(det);
     }
