@@ -3545,9 +3545,12 @@ function bookTabs() {
 function openBook(tab) {
     if (!store()) return toastr.warning('Сначала открой чат', 'Блокнот рассказчика');
     if (tab) bookTab = tab;
-    renderDirection();
-    renderPanel();
-    $('#nnb_book').css({ display: 'flex', 'background-color': solidThemeColor() });
+    let book = $('#nnb_book');
+    if (!book.length) { $('body').append(BOOK_HTML); book = $('#nnb_book'); bindBook(); }
+    if (!book.parent().is('body')) book.appendTo('body'); // окно должно лежать прямо в body, иначе его закроют панели Таверны
+    book.css({ display: 'flex', 'background-color': solidThemeColor() });
+    safeRender('направление', renderDirection);
+    safeRender('блокнот', renderPanel);
     bookTabs();
     $('#nnb_book .nnb-book-body').scrollTop(0);
 }
@@ -3560,6 +3563,21 @@ function solidThemeColor() {
         if (/^#[0-9a-f]{6}/i.test(raw)) return raw.slice(0, 7);
     } catch (e) { /* ignore */ }
     return '#1e1b26';
+}
+// ошибка в одном разделе не должна ломать весь блокнот — показываем, где именно
+const renderErrors = new Set();
+function safeRender(name, fn, ...args) {
+    try { fn(...args); } catch (e) {
+        console.error(`[npc_notebook] ${name}`, e);
+        if (!renderErrors.has(name)) {
+            renderErrors.add(name);
+            toastr.error(`Раздел «${escapeHtml(name)}» не отрисовался: ${escapeHtml(e?.message || e)}`, 'Блокнот рассказчика', { escapeHtml: false, timeOut: 15000 });
+        }
+    }
+}
+function bindBook() {
+    $('#nnb_book .nnb-book-close').off('click').on('click', closeBook);
+    $('#nnb_book').off('click', '.nnb-tab').on('click', '.nnb-tab', function () { bookTab = String($(this).data('tab')); bookTabs(); $('#nnb_book .nnb-book-body').scrollTop(0); });
 }
 function closeBook() {
     $('#nnb_book').hide();
@@ -3633,13 +3651,13 @@ function renderPanel() {
         list.append(row);
     }
 
-    renderWardrobe(st);
-    renderBox(st);
-    renderAlbum(st);
-    renderTime(st);
-    renderIntrigues(st, len);
-    renderNpcs(st);
-    renderArcs(st);
+    safeRender('гардероб', renderWardrobe, st);
+    safeRender('шкатулка', renderBox, st);
+    safeRender('альбом', renderAlbum, st);
+    safeRender('время', renderTime, st);
+    safeRender('тайны', renderIntrigues, st, len);
+    safeRender('NPC', renderNpcs, st);
+    safeRender('развитие', renderArcs, st);
 
     if (st.archive.length) {
         const det = $('<details><summary></summary><div></div></details>');
@@ -4217,9 +4235,8 @@ jQuery(async () => {
     }
     $('#extensions_settings2').append(PANEL_HTML);
     $('body').append(BOOK_HTML);
-    $('#nnb_open_book').on('click', () => openBook());
-    $('#nnb_book .nnb-book-close').on('click', closeBook);
-    $('#nnb_book').on('click', '.nnb-tab', function () { bookTab = String($(this).data('tab')); bookTabs(); $('#nnb_book .nnb-book-body').scrollTop(0); });
+    $('#nnb_open_book').on('click', () => { try { openBook(); } catch (e) { console.error('[npc_notebook] open', e); toastr.error(escapeHtml(e?.message || e), 'Блокнот не открылся', { escapeHtml: false }); } });
+    bindBook();
     $(document).on('keydown', e => { if (e.key === 'Escape' && $('#nnb_book').is(':visible') && !$('dialog[open]').length) closeBook(); });
 
     bind('nnb_enabled', 'enabled', 'checkbox');
