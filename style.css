@@ -148,3 +148,24 @@
 .nnb-card-pick.nnb-taken .nnb-card-img { filter: saturate(0.6) brightness(0.85); }
 .nnb-card-pick.nnb-taken .nnb-card-title::before { content: '✓ '; color: var(--nnb-rar, #6c6); }
 .nnb-card-pick.nnb-taken .nnb-card-body::after { content: 'в шкатулке'; display: block; font-size: 0.8em; opacity: 0.7; margin-top: 4px; }
+
+/* --- карусель выбора: одна карточка на экран, листаем вбок --- */
+.nnb-cards.nnb-carousel { display: flex; grid-template-columns: none; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+.nnb-cards.nnb-carousel::-webkit-scrollbar { display: none; }
+.nnb-cards.nnb-carousel > .nnb-card-pick { flex: 0 0 100%; scroll-snap-align: center; scroll-snap-stop: always; }
+.nnb-cards.nnb-carousel .nnb-card-img { max-height: 62vh; }
+.nnb-cards.nnb-carousel .nnb-card-title { font-size: 1.15em; }
+.nnb-dots { display: flex; justify-content: center; gap: 8px; margin: 10px 0 4px; }
+.nnb-dots span { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: 0.3; cursor: pointer; transition: opacity 0.2s, transform 0.2s; }
+.nnb-dots span.active { opacity: 0.9; transform: scale(1.3); }
+
+/* --- 🗺 карта --- */
+.nnb-scope .nnb-note.nnb-place, .nnb-map-pop .nnb-note.nnb-place { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.nnb-place-main { flex: 1 1 auto; min-width: 0; }
+.nnb-map-pop .nnb-place { border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; padding: 8px 10px; margin: 6px 0; text-align: left; }
+.nnb-map-pop .nnb-place:active { transform: scale(0.99); }
+.nnb-map-pop .nnb-npc-status { font-size: 0.85em; opacity: 0.75; }
+.nnb-place-here { border-color: var(--SmartThemeQuoteColor, #e18a24) !important; }
+.nnb-map-custom { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.nnb-map-custom input { flex: 1 1 auto; margin: 0; }
+.nnb-map-custom .menu_button { margin: 0; white-space: nowrap; }
