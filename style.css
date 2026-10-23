@@ -245,22 +245,19 @@
 /* --- 💡 Подсказки действий в конце поста --- */
 #chat .mes .nnb-action-prompts,
 #chat .nnb-action-prompts,
+.mes_text .nnb-action-prompts,
 .mes_block .nnb-action-prompts,
 .nnb-action-prompts {
-    display: flex !important;
-    flex-direction: column !important;
+    display: block !important;
     width: 100% !important;
     max-width: 100% !important;
-    min-width: min(100%, 280px) !important;
-    align-self: stretch !important;
     box-sizing: border-box !important;
-    margin: 12px 0 6px 0 !important;
-    padding: 10px 14px !important;
-    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 28%, transparent);
-    border-radius: 12px;
-    gap: 8px;
     clear: both !important;
+    margin: 14px 0 6px 0 !important;
+    padding: 10px 14px !important;
+    border-radius: 12px !important;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 28%, transparent) !important;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 8%, transparent) !important;
     overflow: visible !important;
     animation: nnb-fade-in 0.25s ease-out;
 }
@@ -269,14 +266,14 @@
     to { opacity: 1; transform: translateY(0); }
 }
 .nnb-action-prompts-head {
-    font-size: 0.85em;
-    font-weight: 600;
-    opacity: 0.85;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--SmartThemeQuoteColor, #8b78c4);
-    white-space: nowrap;
+    font-size: 0.85em !important;
+    font-weight: 600 !important;
+    opacity: 0.85 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    color: var(--SmartThemeQuoteColor, #8b78c4) !important;
+    margin-bottom: 8px !important;
 }
 #chat .mes .nnb-action-chips,
 #chat .nnb-action-chips,
@@ -285,74 +282,42 @@
     flex-direction: column !important;
     gap: 8px !important;
     width: 100% !important;
-    min-width: 100% !important;
     box-sizing: border-box !important;
 }
 #chat .mes .nnb-action-chip,
 #chat .nnb-action-chip,
 .nnb-action-chip {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center !important;
-    justify-content: space-between !important;
-    gap: 12px !important;
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
     padding: 10px 14px !important;
     border-radius: 10px !important;
     border: 1px solid var(--SmartThemeBorderColor) !important;
     background: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 8%, transparent) !important;
-    font-size: 0.9em !important;
-    cursor: pointer !important;
+    color: var(--SmartThemeBodyColor, inherit) !important;
+    font-size: 0.92em !important;
     line-height: 1.4 !important;
-    transition: all 0.15s ease;
-    user-select: none;
-    width: 100% !important;
-    min-width: 100% !important;
-    box-sizing: border-box !important;
+    cursor: pointer !important;
+    user-select: none !important;
     text-align: left !important;
     white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+    transition: all 0.15s ease !important;
 }
 .nnb-action-chip:hover {
     border-color: var(--SmartThemeQuoteColor, #8b78c4) !important;
     background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 14%, transparent) !important;
 }
 .nnb-action-chip:active {
-    transform: translateY(1px);
-}
-#chat .mes .nnb-action-chip-text,
-#chat .nnb-action-chip-text,
-.nnb-action-chip-text {
-    flex: 1 1 auto !important;
-    display: inline-block !important;
-    min-width: 180px !important;
-    word-break: normal !important;
-    overflow-wrap: break-word !important;
-    white-space: normal !important;
-    text-align: left !important;
-    line-height: 1.4 !important;
-}
-#chat .mes .nnb-action-chip-send,
-#chat .nnb-action-chip-send,
-.nnb-action-chip-send {
-    flex: 0 0 auto !important;
-    opacity: 0.6;
-    padding: 4px 6px;
-    border-radius: 4px;
-    font-size: 0.9em;
-    min-width: 24px !important;
-    text-align: center !important;
-    transition: opacity 0.15s ease, transform 0.15s ease;
-}
-.nnb-action-chip-send:hover {
-    opacity: 1;
-    transform: scale(1.15);
-    color: var(--SmartThemeQuoteColor, #8b78c4);
+    transform: translateY(1px) !important;
 }
 .nnb-action-custom {
     display: flex !important;
     align-items: center !important;
     gap: 8px !important;
     border-style: dashed !important;
-    opacity: 0.75 !important;
+    opacity: 0.8 !important;
 }
 .nnb-action-custom:hover {
     opacity: 1 !important;

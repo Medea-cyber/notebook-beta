@@ -1278,12 +1278,13 @@ function fillTemplate(template, notes, direction = '', intrigues = '', npcs = ''
 
 function buildActionPromptsInjection() {
     const user = storyNames().user;
-    return `[Подсказки действий: в самом конце своего ответа добавь одну скрытую служебную строку с тремя возможными вариантами действий или реплик для ${user}:
+    return `[Подсказки действий: в самом конце своего ответа добавь одну скрытую служебную строку с тремя вариантами следующего хода для игрока (${user}) — что может сделать или сказать САМА ${user} в ответ на происходящее:
 <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->
 Требования к вариантам:
+— Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «погладить ${user}» — действует только сама ${user}.
 — Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).
-— Формулируй кратко (1–2 фразы). Метка невидима для игрока, не упоминай её в основном тексте ответа.]`;
+— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).
+— Формулируй кратко (1–2 фразы), чтобы ${user} могла отправить этот вариант как свой ход. Метка невидима для игрока, не упоминай её в основном тексте ответа.]`;
 }
 
 function updateInjection() {
@@ -1749,12 +1750,13 @@ async function generateActionPromptsNow() {
     }
 
     const user = storyNames().user;
-    const prompt = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Предложи три возможных варианта того, как ${user} может повести себя дальше в текущей сцене:
+    const prompt = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Предложи три возможных варианта следующего хода для игрока (${user}) — что может сделать или сказать САМА ${user} в ответ на последнее сообщение:
 <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->
 Требования к вариантам:
+— Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «посмотреть на ${user}» — действует только сама ${user}.
 — Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).
-— Формулируй кратко (1–2 фразы).
+— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).
+— Формулируй кратко (1–2 фразы), чтобы ${user} могла выбрать вариант как свой следующий ход.
 Ответь ТОЛЬКО строкой в формате <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->]`;
 
     toastr.info('Придумываю варианты действий…', '💡 Подсказки');
@@ -2309,11 +2311,13 @@ async function storeImage(url) {
 
 // Аватар персоны как образец лица
 async function fileToDataUrl(file) {
+    if (!file) return '';
+    if (file.startsWith('data:')) return file;
     try {
         const res = await fetch(file.startsWith('/') || file.startsWith('http') ? file : '/' + file.split('/').map(encodeURIComponent).join('/'));
         if (!res.ok) return '';
         const blob = await res.blob();
-        if (!blob.type.startsWith('image/') || blob.size > 4 * 1024 * 1024) return '';
+        if (!blob.type.startsWith('image/') || blob.size > 8 * 1024 * 1024) return '';
         return await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result || '')); fr.onerror = () => r(''); fr.readAsDataURL(blob); });
     } catch (e) {
         return '';
@@ -2645,7 +2649,7 @@ function scenePromptRequest(st, mesId) {
         outfit,
         lastAppearance,
         'Ответь ровно двумя строками, без пояснений:',
-        `CAST: кто в кадре — имена через запятую, как в чате (${[names.user, ...names.chars].join(', ')} и другие)`,
+        `CAST: кто в кадре — имена через запятую, как в чате (${[names.user, ...names.chars, ...(st.npcs || []).slice(0, 8).map(n => n.name)].join(', ')})`,
         'SCENE: один абзац по-английски для генератора картинок: место и обстановка, время суток и свет, кто в кадре и как выглядит (внешность, одежда), позы, выражения лиц, настроение, ракурс. Это одна иллюстрация, без текста и подписей.]',
     ].filter(Boolean).join('\n');
 }
@@ -2687,6 +2691,11 @@ async function drawScene(popupEl, mesId) {
                 if (images.length >= 4 || !inFrame(ch.name)) continue;
                 const img = await fileToDataUrl(ch.file);
                 if (img) { images.push(img); who.push(ch.name); }
+            }
+            for (const npc of (st.npcs || [])) {
+                if (images.length >= 4 || !inFrame(npc.name) || !npc.avatar) continue;
+                const img = await fileToDataUrl(npc.avatar);
+                if (img) { images.push(img); who.push(npc.name); }
             }
         }
         const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description.` } : null;
@@ -4215,19 +4224,31 @@ function ensureActionStyles() {
     style.textContent = `
         #chat .mes .nnb-action-prompts,
         #chat .nnb-action-prompts,
+        .mes_text .nnb-action-prompts,
         .mes_block .nnb-action-prompts,
         .nnb-action-prompts {
-            display: flex !important;
-            flex-direction: column !important;
+            display: block !important;
             width: 100% !important;
             max-width: 100% !important;
-            min-width: min(100%, 280px) !important;
-            align-self: stretch !important;
             box-sizing: border-box !important;
             clear: both !important;
-            margin: 12px 0 6px 0 !important;
+            margin: 14px 0 6px 0 !important;
             padding: 10px 14px !important;
+            border-radius: 12px !important;
+            border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 28%, transparent) !important;
+            background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 8%, transparent) !important;
             overflow: visible !important;
+        }
+        #chat .mes .nnb-action-prompts-head,
+        .nnb-action-prompts-head {
+            font-size: 0.85em !important;
+            font-weight: 600 !important;
+            opacity: 0.85 !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            color: var(--SmartThemeQuoteColor, #8b78c4) !important;
+            margin-bottom: 8px !important;
         }
         #chat .mes .nnb-action-chips,
         #chat .nnb-action-chips,
@@ -4236,55 +4257,45 @@ function ensureActionStyles() {
             flex-direction: column !important;
             gap: 8px !important;
             width: 100% !important;
-            min-width: 100% !important;
             box-sizing: border-box !important;
         }
         #chat .mes .nnb-action-chip,
         #chat .nnb-action-chip,
         .nnb-action-chip {
-            display: flex !important;
-            flex-direction: row !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 12px !important;
+            display: block !important;
             width: 100% !important;
-            min-width: 100% !important;
             box-sizing: border-box !important;
             padding: 10px 14px !important;
             border-radius: 10px !important;
             border: 1px solid var(--SmartThemeBorderColor) !important;
             background: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 8%, transparent) !important;
-            font-size: 0.9em !important;
+            color: var(--SmartThemeBodyColor, inherit) !important;
+            font-size: 0.92em !important;
             cursor: pointer !important;
             line-height: 1.4 !important;
-            white-space: normal !important;
-            text-align: left !important;
-        }
-        #chat .mes .nnb-action-chip-text,
-        #chat .nnb-action-chip-text,
-        .nnb-action-chip-text {
-            flex: 1 1 auto !important;
-            display: inline-block !important;
-            min-width: 180px !important;
             white-space: normal !important;
             word-break: normal !important;
             overflow-wrap: break-word !important;
             text-align: left !important;
-            line-height: 1.4 !important;
+            transition: all 0.15s ease !important;
+            user-select: none !important;
         }
-        #chat .mes .nnb-action-chip-send,
-        #chat .nnb-action-chip-send,
-        .nnb-action-chip-send {
-            flex: 0 0 auto !important;
-            min-width: 24px !important;
-            text-align: center !important;
+        .nnb-action-chip:hover {
+            border-color: var(--SmartThemeQuoteColor, #8b78c4) !important;
+            background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 14%, transparent) !important;
+        }
+        .nnb-action-chip:active {
+            transform: translateY(1px) !important;
         }
         .nnb-action-custom {
             display: flex !important;
             align-items: center !important;
             gap: 8px !important;
             border-style: dashed !important;
-            opacity: 0.75 !important;
+            opacity: 0.8 !important;
+        }
+        .nnb-action-custom:hover {
+            opacity: 1 !important;
         }
     `;
     document.head.appendChild(style);
@@ -4322,15 +4333,12 @@ function renderActionPrompts() {
 
     const container = $('<div class="nnb-action-prompts"></div>');
     container.css({
-        'display': 'flex',
-        'flex-direction': 'column',
+        'display': 'block',
         'width': '100%',
         'max-width': '100%',
-        'min-width': 'min(100%, 280px)',
-        'align-self': 'stretch',
         'box-sizing': 'border-box',
         'clear': 'both',
-        'margin': '12px 0 6px 0',
+        'margin': '14px 0 6px 0',
         'padding': '10px 14px'
     });
 
@@ -4343,56 +4351,29 @@ function renderActionPrompts() {
         'flex-direction': 'column',
         'gap': '8px',
         'width': '100%',
-        'min-width': '100%',
         'box-sizing': 'border-box'
     });
 
     lastMsg.extra.actions.forEach((actText) => {
-        const chip = $('<div class="nnb-action-chip" tabindex="0"></div>');
+        const chip = $('<div class="nnb-action-chip" tabindex="0"></div>').text(actText);
         chip.css({
-            'display': 'flex',
-            'flex-direction': 'row',
-            'align-items': 'center',
-            'justify-content': 'space-between',
-            'gap': '12px',
+            'display': 'block',
             'width': '100%',
-            'min-width': '100%',
             'box-sizing': 'border-box',
             'padding': '10px 14px',
             'border-radius': '10px',
             'white-space': 'normal',
-            'text-align': 'left'
-        });
-
-        const textSpan = $('<span class="nnb-action-chip-text"></span>').text(actText);
-        textSpan.css({
-            'flex': '1 1 auto',
-            'min-width': '180px',
-            'white-space': 'normal',
             'word-break': 'normal',
             'overflow-wrap': 'break-word',
             'text-align': 'left',
-            'line-height': '1.4'
+            'line-height': '1.4',
+            'cursor': 'pointer'
         });
-
-        const sendIcon = $('<i class="fa-solid fa-paper-plane nnb-action-chip-send" title="Отправить сразу"></i>');
-        sendIcon.css({
-            'flex': '0 0 auto',
-            'min-width': '24px',
-            'text-align': 'center'
-        });
-
-        chip.append(textSpan, sendIcon);
-        chip.attr('title', 'Нажми, чтобы вставить в поле ввода');
+        chip.attr('title', 'Нажми, чтобы выбрать этот вариант');
 
         chip.on('click', function(e) {
             e.stopPropagation();
             chooseActionPrompt(actText, false);
-        });
-
-        sendIcon.on('click', function(e) {
-            e.stopPropagation();
-            chooseActionPrompt(actText, true);
         });
 
         list.append(chip);
@@ -4405,11 +4386,11 @@ function renderActionPrompts() {
         'align-items': 'center',
         'gap': '10px',
         'width': '100%',
-        'min-width': '100%',
         'box-sizing': 'border-box',
         'padding': '10px 14px',
         'border-radius': '10px',
-        'white-space': 'normal'
+        'white-space': 'normal',
+        'cursor': 'pointer'
     });
     customChip.attr('title', 'Написать свой вариант действия');
     customChip.on('click', function(e) {
@@ -4426,11 +4407,8 @@ function renderActionPrompts() {
 
     const textEl = mesEl.find('.mes_text').first();
     const mesBlock = mesEl.find('.mes_block').first();
-    if (mesBlock.length) {
-        mesBlock.css({ 'min-width': 'min(100%, 280px)' });
-    }
     if (textEl.length) {
-        textEl.after(container);
+        textEl.append(container);
     } else if (mesBlock.length) {
         mesBlock.append(container);
     } else {
@@ -4929,6 +4907,75 @@ function renderIntrigues(st, len) {
     box.append(addBtn);
 }
 
+
+async function promptNpcAvatar(n) {
+    const st = store();
+    if (!st || !n) return;
+    const el = $('<div class="nnb-pop"></div>');
+    el.append($('<h3></h3>').text(`🖼 Внешность: ${n.name}`));
+    el.append($('<div class="nnb-pop-sub"></div>').text('Картинка-референс лица для сцен (🎬). Когда этот персонаж будет в кадре, генератор возьмёт её как образец внешности.'));
+
+    if (n.avatar) {
+        const preview = $('<div style="display:flex; justify-content:center; margin:12px 0;"></div>');
+        preview.append($('<img alt="" style="max-width:180px; max-height:180px; border-radius:12px; object-fit:cover; border:2px solid var(--SmartThemeQuoteColor, #8b78c4); box-shadow:0 4px 12px rgba(0,0,0,0.3);">').attr('src', n.avatar));
+        el.append(preview);
+    }
+
+    const fileInput = $('<input type="file" accept="image/*" style="display:none">');
+    const uploadBtn = $('<div class="menu_button"><i class="fa-solid fa-upload"></i> Загрузить с устройства</div>');
+    uploadBtn.on('click', () => fileInput.trigger('click'));
+
+    fileInput.on('change', async function() {
+        const file = this.files?.[0];
+        if (!file) return;
+        if (file.size > 8 * 1024 * 1024) {
+            toastr.warning('Файл слишком большой (максимум 8 МБ)', 'Внешность NPC');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = async () => {
+            const dataUrl = String(reader.result || '');
+            if (dataUrl) {
+                const savedPath = await storeImage(dataUrl);
+                n.avatar = savedPath;
+                closePopupOf(el);
+                await commit();
+                toastr.success(`Референс внешности для «${escapeHtml(n.name)}» сохранён!`, '👥 NPC', { escapeHtml: false });
+            }
+        };
+        reader.readAsDataURL(file);
+    });
+
+    el.append(fileInput);
+
+    const urlRow = $('<div class="nnb-pop-row" style="margin-top:12px;"><input type="text" class="text_pole" placeholder="Или прямая ссылка на картинку (https://…)" style="flex:1;"><div class="menu_button"><i class="fa-solid fa-link"></i> Ок</div></div>');
+    if (n.avatar && !n.avatar.startsWith('data:')) urlRow.find('input').val(n.avatar);
+    urlRow.find('.menu_button').on('click', async () => {
+        const url = urlRow.find('input').val().trim();
+        if (!url) return;
+        n.avatar = url;
+        closePopupOf(el);
+        await commit();
+        toastr.success(`Ссылка на внешность для «${escapeHtml(n.name)}» сохранена!`, '👥 NPC', { escapeHtml: false });
+    });
+
+    const actRow = $('<div class="nnb-pop-row nnb-pop-links" style="margin-top:14px;"></div>');
+    actRow.append(uploadBtn);
+    if (n.avatar) {
+        const removeBtn = $('<div class="menu_button"><i class="fa-solid fa-trash"></i> Удалить референс</div>');
+        removeBtn.on('click', async () => {
+            delete n.avatar;
+            closePopupOf(el);
+            await commit();
+            toastr.info(`Референс для «${escapeHtml(n.name)}» удалён`, '👥 NPC', { escapeHtml: false });
+        });
+        actRow.append(removeBtn);
+    }
+    el.append(urlRow, actRow);
+
+    await openPopup(el);
+}
+
 function renderNpcs(st) {
     const root = $('#nnb_npc_list').empty();
     if (!st.direction.npcs) return;
@@ -4941,17 +4988,41 @@ function renderNpcs(st) {
     for (const n of st.npcs) {
         const row = $(`
           <div class="nnb-note nnb-npc">
-            <div class="nnb-meta"></div>
-            <div class="nnb-npc-text"></div>
-            <div class="nnb-npc-status"></div>
+            <div class="nnb-npc-header" style="display:flex; flex-direction:row; align-items:flex-start; gap:10px;">
+              <div class="nnb-npc-details" style="flex:1; min-width:0;">
+                <div class="nnb-meta"></div>
+                <div class="nnb-npc-text"></div>
+                <div class="nnb-npc-status"></div>
+              </div>
+            </div>
             <div class="nnb-actions">
               <i class="fa-solid nnb-lock"></i>
+              <i class="fa-solid fa-image nnb-npc-avatar-btn" title="Внешность (картинка-референс)"></i>
               <i class="fa-solid fa-pen" title="Изменить карточку"></i>
               <i class="fa-solid fa-comment-dots" title="Изменить состояние"></i>
               <i class="fa-solid fa-trash" title="Удалить"></i>
             </div>
           </div>`);
-        row.find('.nnb-meta').text(n.name + (n.locked ? ' · правлено вручную' : ''));
+        if (n.avatar) {
+            const av = $('<img class="nnb-npc-avatar" alt="">').attr('src', n.avatar).attr('title', `Внешность ${n.name} (нажми, чтобы изменить)`);
+            av.css({
+                'width': '46px',
+                'height': '46px',
+                'border-radius': '10px',
+                'object-fit': 'cover',
+                'flex-shrink': '0',
+                'cursor': 'pointer',
+                'border': '1.5px solid var(--SmartThemeQuoteColor, #8b78c4)',
+                'margin-top': '2px'
+            });
+            av.on('click', () => promptNpcAvatar(n));
+            row.find('.nnb-npc-header').prepend(av);
+        }
+        row.find('.nnb-npc-avatar-btn')
+            .css(n.avatar ? { color: 'var(--SmartThemeQuoteColor, #8b78c4)' } : {})
+            .attr('title', n.avatar ? 'Изменить/удалить референс внешности' : 'Задать референс внешности (картинку)')
+            .on('click', () => promptNpcAvatar(n));
+        row.find('.nnb-meta').text(n.name + (n.locked ? ' · правлено вручную' : '') + (n.avatar ? ' · 🖼 реф' : ''));
         row.find('.nnb-npc-text').text(n.card);
         if (n.status) row.find('.nnb-npc-status').text('Сейчас: ' + n.status);
         else row.find('.nnb-npc-status').remove();
