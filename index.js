@@ -511,7 +511,10 @@ const GENRE_HINTS = {
           if (!st.direction.time) return true;
           const iso = parseDateText(m[1], t.date);
           if (iso) {
-              if (t.date && iso !== t.date) res.timeMoved = daysBetween(t.date, iso);
+              if (t.date && iso !== t.date) {
+                  res.timeMoved = daysBetween(t.date, iso);
+                  if (iso < t.date) handleDateRollback(st, t.date, iso);
+              }
               else if (!t.date) res.dateSet = iso;
               t.date = iso;
           }
@@ -4205,6 +4208,88 @@ function chooseActionPrompt(text, autoSend = false) {
     }
 }
 
+function ensureActionStyles() {
+    if (document.getElementById('nnb-action-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'nnb-action-styles';
+    style.textContent = `
+        #chat .mes .nnb-action-prompts,
+        #chat .nnb-action-prompts,
+        .mes_block .nnb-action-prompts,
+        .nnb-action-prompts {
+            display: flex !important;
+            flex-direction: column !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: min(100%, 280px) !important;
+            align-self: stretch !important;
+            box-sizing: border-box !important;
+            clear: both !important;
+            margin: 12px 0 6px 0 !important;
+            padding: 10px 14px !important;
+            overflow: visible !important;
+        }
+        #chat .mes .nnb-action-chips,
+        #chat .nnb-action-chips,
+        .nnb-action-chips {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 8px !important;
+            width: 100% !important;
+            min-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        #chat .mes .nnb-action-chip,
+        #chat .nnb-action-chip,
+        .nnb-action-chip {
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 12px !important;
+            width: 100% !important;
+            min-width: 100% !important;
+            box-sizing: border-box !important;
+            padding: 10px 14px !important;
+            border-radius: 10px !important;
+            border: 1px solid var(--SmartThemeBorderColor) !important;
+            background: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 8%, transparent) !important;
+            font-size: 0.9em !important;
+            cursor: pointer !important;
+            line-height: 1.4 !important;
+            white-space: normal !important;
+            text-align: left !important;
+        }
+        #chat .mes .nnb-action-chip-text,
+        #chat .nnb-action-chip-text,
+        .nnb-action-chip-text {
+            flex: 1 1 auto !important;
+            display: inline-block !important;
+            min-width: 180px !important;
+            white-space: normal !important;
+            word-break: normal !important;
+            overflow-wrap: break-word !important;
+            text-align: left !important;
+            line-height: 1.4 !important;
+        }
+        #chat .mes .nnb-action-chip-send,
+        #chat .nnb-action-chip-send,
+        .nnb-action-chip-send {
+            flex: 0 0 auto !important;
+            min-width: 24px !important;
+            text-align: center !important;
+        }
+        .nnb-action-custom {
+            display: flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            border-style: dashed !important;
+            opacity: 0.75 !important;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
 function renderActionPrompts() {
     $('.nnb-action-prompts').remove();
     const s = settings();
@@ -4212,6 +4297,8 @@ function renderActionPrompts() {
     const c = ctx();
     const chat = c.chat;
     if (!chat || !chat.length) return;
+
+    ensureActionStyles();
 
     const lastIdx = chat.length - 1;
     const lastMsg = chat[lastIdx];
@@ -4234,14 +4321,66 @@ function renderActionPrompts() {
     if (!mesEl.length) return;
 
     const container = $('<div class="nnb-action-prompts"></div>');
+    container.css({
+        'display': 'flex',
+        'flex-direction': 'column',
+        'width': '100%',
+        'max-width': '100%',
+        'min-width': 'min(100%, 280px)',
+        'align-self': 'stretch',
+        'box-sizing': 'border-box',
+        'clear': 'both',
+        'margin': '12px 0 6px 0',
+        'padding': '10px 14px'
+    });
+
     const head = $('<div class="nnb-action-prompts-head"><i class="fa-solid fa-lightbulb"></i> Что сделать дальше:</div>');
     container.append(head);
 
     const list = $('<div class="nnb-action-chips"></div>');
+    list.css({
+        'display': 'flex',
+        'flex-direction': 'column',
+        'gap': '8px',
+        'width': '100%',
+        'min-width': '100%',
+        'box-sizing': 'border-box'
+    });
+
     lastMsg.extra.actions.forEach((actText) => {
         const chip = $('<div class="nnb-action-chip" tabindex="0"></div>');
+        chip.css({
+            'display': 'flex',
+            'flex-direction': 'row',
+            'align-items': 'center',
+            'justify-content': 'space-between',
+            'gap': '12px',
+            'width': '100%',
+            'min-width': '100%',
+            'box-sizing': 'border-box',
+            'padding': '10px 14px',
+            'border-radius': '10px',
+            'white-space': 'normal',
+            'text-align': 'left'
+        });
+
         const textSpan = $('<span class="nnb-action-chip-text"></span>').text(actText);
+        textSpan.css({
+            'flex': '1 1 auto',
+            'min-width': '180px',
+            'white-space': 'normal',
+            'word-break': 'normal',
+            'overflow-wrap': 'break-word',
+            'text-align': 'left',
+            'line-height': '1.4'
+        });
+
         const sendIcon = $('<i class="fa-solid fa-paper-plane nnb-action-chip-send" title="Отправить сразу"></i>');
+        sendIcon.css({
+            'flex': '0 0 auto',
+            'min-width': '24px',
+            'text-align': 'center'
+        });
 
         chip.append(textSpan, sendIcon);
         chip.attr('title', 'Нажми, чтобы вставить в поле ввода');
@@ -4259,7 +4398,19 @@ function renderActionPrompts() {
         list.append(chip);
     });
 
-    const customChip = $('<div class="nnb-action-chip nnb-action-custom" tabindex="0"><i class="fa-solid fa-pen"></i> Свой вариант</div>');
+    const customChip = $('<div class="nnb-action-chip nnb-action-custom" tabindex="0"><i class="fa-solid fa-pen"></i> <span>Свой вариант</span></div>');
+    customChip.css({
+        'display': 'flex',
+        'flex-direction': 'row',
+        'align-items': 'center',
+        'gap': '10px',
+        'width': '100%',
+        'min-width': '100%',
+        'box-sizing': 'border-box',
+        'padding': '10px 14px',
+        'border-radius': '10px',
+        'white-space': 'normal'
+    });
     customChip.attr('title', 'Написать свой вариант действия');
     customChip.on('click', function(e) {
         e.stopPropagation();
@@ -4274,10 +4425,16 @@ function renderActionPrompts() {
     container.append(list);
 
     const textEl = mesEl.find('.mes_text').first();
+    const mesBlock = mesEl.find('.mes_block').first();
+    if (mesBlock.length) {
+        mesBlock.css({ 'min-width': 'min(100%, 280px)' });
+    }
     if (textEl.length) {
         textEl.after(container);
+    } else if (mesBlock.length) {
+        mesBlock.append(container);
     } else {
-        mesEl.find('.mes_block').first().append(container);
+        mesEl.append(container);
     }
 }
 
@@ -5015,6 +5172,64 @@ function renderArcs(st) {
     det.append(add);
 }
 
+
+function handleDateRollback(st, oldDate, newDate) {
+    if (!st || !newDate || !oldDate || newDate >= oldDate) return;
+    ensureHolidayState(st);
+
+    const reopened = [];
+    const keysToDelete = [];
+    for (const key of Object.keys(st.holidayDone || {})) {
+        const [name, start] = key.split('|');
+        if (!start) continue;
+        const holInfo = holidaysFor(st).find(h => h.name === name);
+        const y = Number(start.slice(0, 4));
+        const occ = holInfo ? occurrences(holInfo, y) : { start, end: start };
+        const end = occ ? occ.end : start;
+
+        if (end >= newDate) {
+            keysToDelete.push(key);
+            reopened.push(name);
+            st.medals = (st.medals || []).filter(m => !(m.holiday === name && m.tier === 'anti'));
+            if (Array.isArray(st.time.timeline)) {
+                st.time.timeline = st.time.timeline.filter(e => !(e.text.startsWith(name + ':') && e.text.includes('антимедаль')));
+            }
+            st.traces = (st.traces || []).filter(tr => !tr.text.includes(name));
+            st.memories = (st.memories || []).filter(mem => !mem.text.startsWith(name));
+        }
+    }
+    keysToDelete.forEach(k => delete st.holidayDone[k]);
+
+    if (st.holiday) {
+        if (st.holiday.finished || (reopened.length && st.holiday.start > newDate)) {
+            st.holiday = null;
+        }
+    }
+
+    if (reopened.length) {
+        toastr.info(`Время отмотано назад: праздник «${reopened.join(', ')}» снова доступен, антимедаль снята!`, '📅 Календарь');
+    }
+}
+
+function removeMedal(st, m) {
+    if (!st || !m) return;
+    ensureHolidayState(st);
+    st.medals = (st.medals || []).filter(x => x !== m);
+    for (const key of Object.keys(st.holidayDone || {})) {
+        if (key.startsWith(m.holiday + '|')) {
+            delete st.holidayDone[key];
+        }
+    }
+    if (Array.isArray(st.time.timeline)) {
+        st.time.timeline = st.time.timeline.filter(e => !e.text.includes(`медаль «${m.title}»`) && !(e.text.startsWith(m.holiday + ':') && e.date === m.date));
+    }
+    st.memories = (st.memories || []).filter(mem => !mem.text.startsWith(m.holiday));
+    st.traces = (st.traces || []).filter(tr => !tr.text.includes(m.holiday));
+    if (st.holiday && (st.holiday.name === m.holiday || st.holiday.finished)) {
+        st.holiday = null;
+    }
+}
+
 function renderTime(st) {
     const root = $('#nnb_time_box').empty();
     if (!st.direction.time) return;
@@ -5041,12 +5256,20 @@ function renderTime(st) {
       </div>`);
     dateRow.find('.nnb-date').val(t.date).on('change', async function () {
         const v = $(this).val();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) { t.date = v; await commit(); runHolidayStep(); }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+            const oldDate = t.date;
+            t.date = v;
+            if (oldDate && v < oldDate) handleDateRollback(st, oldDate, v);
+            await commit();
+            runHolidayStep();
+        }
     });
     dateRow.find('.nnb-shift').on('click', async function () {
         const base = t.date || toIso(new Date());
         const d = Number($(this).data('d') || 0), mo = Number($(this).data('m') || 0);
+        const oldDate = t.date;
         t.date = mo ? addMonths(base, mo) : addDays(base, d);
+        if (oldDate && t.date < oldDate) handleDateRollback(st, oldDate, t.date);
         await commit();
         runHolidayStep();
     });
@@ -5102,9 +5325,25 @@ function renderTime(st) {
         det.append('<div class="nnb-subhead">Ближайшие праздники и события</div>');
         if (!up.length) det.append('<div class="nnb-empty">В ближайшие два месяца ничего нет.</div>');
         for (const h of up) {
-            const row = $('<div class="nnb-npc-status"></div>');
+            const key = h.name + '|' + h.start;
+            const isDone = !!st.holidayDone[key];
+            const row = $('<div class="nnb-task-row" style="margin: 3px 0;"></div>');
             const when = h.ongoing ? 'идёт сейчас' : h.inDays === 0 ? 'сегодня' : `через ${daysWord(h.inDays)}`;
-            row.text(`${formatDate(h.start, false)} — ${h.name} (${when})`);
+            const label = $('<div class="nnb-npc-status" style="margin: 0;"></div>').text(`${formatDate(h.start, false)} — ${h.name} (${when})${isDone ? ' · ✓ пройден' : ''}`);
+            row.append(label);
+            if (isDone) {
+                const act = $('<div class="nnb-actions"><i class="fa-solid fa-rotate-left" title="Сбросить статус и запустить праздник снова"></i></div>');
+                act.find('.fa-rotate-left').on('click', async () => {
+                    if (!confirm(`Сбросить праздник «${h.name}» и запустить его снова?`)) return;
+                    delete st.holidayDone[key];
+                    st.medals = (st.medals || []).filter(m => !(m.holiday === h.name && m.tier === 'anti'));
+                    if (st.holiday && (st.holiday.name === h.name || st.holiday.finished)) st.holiday = null;
+                    await commit();
+                    runHolidayStep();
+                    toastr.success(`Праздник «${h.name}» сброшен и снова активен!`, '📅 Праздники');
+                });
+                row.append(act);
+            }
             det.append(row);
         }
     }
@@ -5152,9 +5391,19 @@ function renderHolidayCard(st, det) {
         });
         box.find('.nnb-tasks').append(row);
     });
+    const btns = $('<div class="nnb-buttons" style="margin-top: 8px;"></div>');
     const fin = $('<div class="menu_button"><i class="fa-solid fa-flag-checkered"></i> Завершить праздник и получить медаль</div>');
     fin.on('click', () => runHolidayStep({ finish: true }));
-    box.append(fin);
+    const rst = $('<div class="menu_button"><i class="fa-solid fa-rotate-left"></i> Начать заново</div>');
+    rst.on('click', async () => {
+        if (!confirm(`Начать праздник «${hol.name}» заново? Задачи будут перегенерированы.`)) return;
+        delete st.holidayDone[hol.key];
+        st.holiday = null;
+        await commit();
+        runHolidayStep();
+    });
+    btns.append(fin, rst);
+    box.append(btns);
     det.append(box);
 }
 
@@ -5189,10 +5438,17 @@ function renderChronicleAndMedals(st, det) {
     const med = $('<details class="nnb-section"><summary></summary></details>');
     med.find('summary').text(`🏅 Витрина медалей (${st.medals.length})`);
     [...st.medals].reverse().forEach(m => {
-        const row = $('<div class="nnb-note"><div class="nnb-npc-text"></div><div class="nnb-meta"></div><div class="nnb-npc-status"></div></div>');
+        const row = $('<div class="nnb-note"><div class="nnb-npc-text"></div><div class="nnb-meta"></div><div class="nnb-npc-status"></div><div class="nnb-actions"><i class="fa-solid fa-trash" title="Удалить медаль"></i></div></div>');
         row.find('.nnb-npc-text').text(`${m.emoji || ''} «${m.title}»${m.secret ? ' ✨' : ''}`);
         row.find('.nnb-meta').text(`${TIER_ICONS[m.tier] || ''} ${TIER_NAMES[m.tier] || ''} · ${m.holiday} ${String(m.date || '').slice(0, 4)}`);
         row.find('.nnb-npc-status').text(m.desc);
+        row.find('.fa-trash').on('click', async () => {
+            if (!confirm(`Удалить медаль «${m.title}» (${m.holiday})? Если дата сейчас подходящая, праздник снова станет доступен.`)) return;
+            removeMedal(st, m);
+            await commit();
+            runHolidayStep();
+            toastr.info(`Медаль «${m.title}» удалена`, '🏅 Медали');
+        });
         med.append(row);
     });
     det.append(med);
