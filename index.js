@@ -4,6 +4,7 @@
 
 const MODULE = 'npc_notebook';
 const INJECT_KEY = 'npc_notebook_inject';
+const ACTION_INJECT_KEY = 'npc_notebook_actions';
 
 // Константы SillyTavern (extension_prompt_types / extension_prompt_roles)
 const POS_IN_CHAT = 1;
@@ -1307,7 +1308,6 @@ function updateInjection() {
     if (showArcs) blocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
     if (st.notes.length) blocks.push(fillTemplate(s.injectPrompt, st.notes));
     if (showIntrigues) blocks.push(INTRIGUE_INJECT_HEADER + '\n' + formatIntrigues(st.intrigues));
-    if (actionBlock) blocks.push(actionBlock);
     c.setExtensionPrompt(
         INJECT_KEY,
         blocks.join('\n\n'),
@@ -1316,6 +1316,18 @@ function updateInjection() {
         false,
         Number(s.role) || 0,
     );
+    if (!s.enabled || !s.actionPrompts || !st) {
+        c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
+    } else {
+        c.setExtensionPrompt(
+            ACTION_INJECT_KEY,
+            buildActionPromptsInjection(),
+            POS_IN_CHAT,
+            0,
+            false,
+            Number(s.role) || 0,
+        );
+    }
 }
 
 // Совместимость со старой и новой сигнатурой generateQuietPrompt
@@ -1719,6 +1731,51 @@ function escapeHtml(t) {
     return String(t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
+
+async function generateActionPromptsNow() {
+    const c = ctx();
+    const chat = c.chat;
+    if (!chat || !chat.length) return toastr.warning('Чат пуст', '💡 Подсказки');
+    const lastIdx = chat.length - 1;
+    const lastMsg = chat[lastIdx];
+    if (!lastMsg || lastMsg.is_user) return toastr.info('Подсказки действий создаются для последнего ответа персонажа', '💡 Подсказки');
+
+    if (Array.isArray(lastMsg.extra?.actions) && lastMsg.extra.actions.length) {
+        renderActionPrompts();
+        return;
+    }
+
+    const user = storyNames().user;
+    const prompt = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Предложи три возможных варианта того, как ${user} может повести себя дальше в текущей сцене:
+<!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->
+Требования к вариантам:
+— Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
+— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).
+— Формулируй кратко (1–2 фразы).
+Ответь ТОЛЬКО строкой в формате <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->]`;
+
+    toastr.info('Придумываю варианты действий…', '💡 Подсказки');
+    try {
+        const raw = await quietGenerate(prompt);
+        const m = raw && raw.match(/(?:<!--\s*ACTIONS|\[\s*ACTIONS|\bACTIONS)\s*[:：]\s*([\s\S]+?)(?:-->|\]|$)/i);
+        if (m) {
+            const parsed = parseActionPrompts(m[1]);
+            if (parsed.length) {
+                lastMsg.extra = lastMsg.extra || {};
+                lastMsg.extra.actions = parsed;
+                await c.saveChat();
+                renderActionPrompts();
+                toastr.success('Варианты действий готовы!', '💡 Подсказки');
+                return;
+            }
+        }
+        toastr.warning('Модель ответила не по формату, попробуй ещё раз', '💡 Подсказки');
+    } catch (e) {
+        console.error('[npc_notebook] actions generation error:', e);
+        toastr.error('Не удалось сгенерировать варианты', '💡 Подсказки');
+    }
+}
+
 async function think(manual = false) {
     if (busy) return;
     const s = settings();
@@ -1735,6 +1792,7 @@ async function think(manual = false) {
     setStatus('Модель листает блокнот…');
     // убираем инъекцию на время размышления, чтобы блокнот не дублировался
     ctx().setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+    ctx().setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
 
     try {
         const tpl = ensureSections(s.thinkPrompt);
@@ -2194,7 +2252,7 @@ function wardrobePrompt(st, occasion, exclude = []) {
     if (accents) {
         lines.push(images ? 'Затем по три строки на штрих:' : 'Затем по две строки на штрих:');
         lines.push('ACCENT: духи|макияж|аксессуар|мелочь | название | описание в одном предложении');
-        if (images) lines.push('EN: этот же предмет коротко по-английски, как он выглядит (флакон, помада или палетка, украшение, мелкая вещица)');
+        if (images) lines.push('EN: этот же предмет коротко по-английски для художника: для духов — флакон (perfume bottle); для макияжа — макияж на лице персоны крупным планом (например: close-up beauty portrait of face, natural nose and facial proportions, wearing soft warm eyeshadow and wine-tinted lips, glasses); для аксессуара — украшение или предмет; для мелочи — небольшая вещица');
         lines.push('EFFECT: последствия — кто как отреагирует; для мелочи — когда и как она всплывёт в сцене');
     }
     return lines.filter(Boolean).join('\n') + ']';
@@ -2477,12 +2535,43 @@ async function drawPicture(prompt, refs, orient = 'landscape') {
 
 // предметы рисуем в том же духе, что и образы: иллюстрация, а не фото
 const ITEM_STYLE = 'semi-realistic anime illustration, soft painterly digital art, clean outlines, warm gentle colors, visual novel item art, not a photo';
-function accentsPrompt(a) {
-    const items = (a.accents || []).slice(0, 4);
-    const pos = ['first', 'second', 'third', 'fourth'];
-    return cleanForCommand(`${ITEM_STYLE}, ${items.length} separate items in a row, evenly spaced, each item small and centered in its own equal part of the image with wide empty space between items, nothing overlapping, plain light cream background, ` +
-        items.map((x, i) => `${pos[i]} from the left: ${x.en || x.title}`).join('; ') + ', no people, no text, no captions');
+
+function accentsLayout(n) {
+    return n >= 4 ? { rows: 2, cols: 2 } : { rows: 1, cols: n };
 }
+
+function cleanMakeupEn(en, x, who) {
+    const raw = String(en || '').trim();
+    const person = who || 'beautiful young woman';
+    let details = raw;
+    if (!details || details.length < 5) {
+        details = x?.desc || 'subtle elegant makeup';
+    }
+    return `close-up beauty portrait of ${person}, complete face with natural proportions, well-defined nose, eyes and lips, wearing ${details}, soft studio lighting, looking towards camera`;
+}
+
+function accentEnDesc(x, who) {
+    let en = String(x.en || x.title || '').trim();
+    if (x.kind === 'makeup' || /макияж|makeup|lipstick|тени|помад/i.test(x.kind || x.title)) {
+        return cleanMakeupEn(en, x, who);
+    }
+    return en;
+}
+
+function accentsPrompt(a, layout) {
+    const items = (a.accents || []).slice(0, 4);
+    const L = layout || accentsLayout(items.length);
+    const who = a.appearance || 'young woman';
+    if (L.rows === 2) {
+        const pos = ['top-left cell', 'top-right cell', 'bottom-left cell', 'bottom-right cell'];
+        return cleanForCommand(`${ITEM_STYLE}, sheet arranged as a 2 by 2 grid of 4 equal cells, each cell with its own isolated item or portrait, solid plain light cream background, ` +
+            items.map((x, i) => `${pos[i]}: ${accentEnDesc(x, who)}`).join('; ') + ', no text, no captions');
+    }
+    const pos = ['first', 'second', 'third', 'fourth'];
+    return cleanForCommand(`${ITEM_STYLE}, ${items.length} separate elements in a row, wide spacing, each element small and centered with wide empty space around it, solid plain light cream background, ` +
+        items.map((x, i) => `${pos[i]} from the left: ${accentEnDesc(x, who)}`).join('; ') + ', no text, no captions');
+}
+
 
 // Рисует картинку для текущего выбора (kind: looks | accents); onDone получает адрес картинки или ''
 async function ensurePicture(kind, force, onDone) {
@@ -2498,13 +2587,18 @@ async function ensurePicture(kind, force, onDone) {
     let url = '';
     try {
         let refs = null;
-        if (kind === 'looks' && settings().imageRef) {
+        if ((kind === 'looks' || kind === 'accents') && settings().imageRef) {
             const me = await personaAvatarDataUrl();
-            if (me) refs = { images: [me], note: 'The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.' };
+            if (me) {
+                const note = kind === 'looks'
+                    ? 'The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.'
+                    : 'The input picture is the reference for the character face: keep the same face, hair, eyes, nose and facial features recognizable, showing her with the specified makeup in the portrait cell.';
+                refs = { images: [me], note };
+            }
         }
-        const layout = kind === 'looks' ? looksLayout(Math.min(a.options.length, 4)) : { rows: 1, cols: Math.min((kind === 'gacha' ? a.options : a.accents || []).length, kind === 'gacha' ? 3 : 4) };
-        const orient = kind === 'looks' && layout.rows === 2 ? 'portrait' : 'landscape';
-        url = await drawPicture(kind === 'looks' ? sheetPrompt(a, layout) : kind === 'gacha' ? gachaPicPrompt(a) : accentsPrompt(a), refs, orient);
+        const layout = kind === 'looks' ? looksLayout(Math.min(a.options.length, 4)) : kind === 'accents' ? accentsLayout((a.accents || []).length) : { rows: 1, cols: Math.min(a.options.length, 3) };
+        const orient = (kind === 'looks' || kind === 'accents') && layout.rows === 2 ? 'portrait' : 'landscape';
+        url = await drawPicture(kind === 'looks' ? sheetPrompt(a, layout) : kind === 'gacha' ? gachaPicPrompt(a) : accentsPrompt(a, layout), refs, orient);
         a[field] = url;
         a[field + 'Layout'] = layout;
         a[failField] = false;
@@ -2779,14 +2873,16 @@ function smartCrops(url, n, kind, layout) {
                     let minX = colsOk.indexOf(true), maxX = colsOk.lastIndexOf(true);
                     if (minY < 0 || minX < 0) { out.push(null); continue; }
                     minX += x0; maxX += x0; minY += y0; maxY += y0;
-                    const pad = 0.1;
+                    const pad = 0.08;
                     let w = (maxX - minX) * (1 + pad * 2), h = (maxY - minY) * (1 + pad * 2);
                     const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-                    const target = kind === 'looks' ? (rowsN === 2 ? 2 / 3 : 0.5) : 1; // желаемая форма карточки (ширина / высота)
-                    if (w / h < target) w = Math.min(colW, h * target);   // расширяем, но не за пределы своей части
-                    if (w / h > target) h = Math.min(cellH, w / target);
-                    w = Math.min(w, colW); h = Math.min(h, cellH);
-                    const x = Math.max(x0, Math.min(x1 - w, cx - w / 2)), y = Math.max(y0, Math.min(y1 - h, cy - h / 2));
+                    const target = kind === 'looks' ? (rowsN === 2 ? 2 / 3 : 0.5) : 1;
+                    if (w / h < target) w = Math.min(colW * 0.88, h * target);
+                    if (w / h > target) h = Math.min(cellH * 0.88, w / target);
+                    w = Math.min(w, colW * 0.88); h = Math.min(h, cellH * 0.88);
+                    const safePadX = colW * 0.06, safePadY = cellH * 0.06;
+                    const x = Math.max(x0 + safePadX, Math.min(x1 - safePadX - w, cx - w / 2));
+                    const y = Math.max(y0 + safePadY, Math.min(y1 - safePadY - h, cy - h / 2));
                     out.push({ x: x / W, y: y / H, w: w / W, h: h / H });
                 }
                 out.bg = bg;
@@ -2848,10 +2944,11 @@ function itemSegments(W, H, isFg, n) {
         }
         if (maxY < 0) return null;
         const cx = (r.x0 + r.x1) / 2, cy = (minY + maxY) / 2;
-        // квадрат, если есть место; высокий предмет не режем — рамка просто станет уже
-        const h = Math.min(H, Math.max(r.x1 - r.x0, maxY - minY) * 1.25);
-        const w = Math.min(right - left + 1, Math.max(h, (r.x1 - r.x0) * 1.25));
-        const x = Math.max(left, Math.min(right + 1 - w, cx - w / 2));
+        const padX = Math.round((right - left) * 0.06);
+        const safeLeft = left + padX, safeRight = right - padX;
+        const h = Math.min(H * 0.9, Math.max(r.x1 - r.x0, maxY - minY) * 1.2);
+        const w = Math.min(safeRight - safeLeft, Math.max(h, (r.x1 - r.x0) * 1.15));
+        const x = Math.max(safeLeft, Math.min(safeRight - w, cx - w / 2));
         const y = Math.max(0, Math.min(H - h, cy - h / 2));
         out.push({ x: x / W, y: y / H, w: w / W, h: h / H });
     }
@@ -2859,17 +2956,20 @@ function itemSegments(W, H, isFg, n) {
 }
 
 function applyCrop(el, url, box, imgRatio) {
-    // показываем область box (в долях) так, чтобы она заполнила свою рамку внутри карточки
     if (el.hasClass('nnb-card-img')) {
         let inner = el.children('.nnb-card-crop');
         if (!inner.length) inner = $('<div class="nnb-card-crop"></div>').appendTo(el);
         el = inner;
     }
+    const bw = Math.max(0.01, Math.min(1, box.w));
+    const bh = Math.max(0.01, Math.min(1, box.h));
+    const posX = bw >= 1 ? 50 : Math.max(0, Math.min(1, box.x / (1 - bw))) * 100;
+    const posY = bh >= 1 ? 50 : Math.max(0, Math.min(1, box.y / (1 - bh))) * 100;
     el.css({
         'background-image': `url("${String(url).replace(/"/g, '%22')}")`,
-        'background-size': `${100 / box.w}% ${100 / box.h}%`,
-        'background-position': `${box.w >= 1 ? 50 : (box.x / (1 - box.w)) * 100}% ${box.h >= 1 ? 50 : (box.y / (1 - box.h)) * 100}%`,
-        'aspect-ratio': `${(box.w * imgRatio) / box.h}`,
+        'background-size': `${100 / bw}% ${100 / bh}%`,
+        'background-position': `${posX}% ${posY}%`,
+        'aspect-ratio': `${(bw * imgRatio) / bh}`,
     });
 }
 
@@ -2877,8 +2977,19 @@ function applyCrop(el, url, box, imgRatio) {
 function visualPicker({ kind, items, title, label, onPick, field, failField, a, cardClass }) {
     const box = $('<div class="nnb-visual"></div>');
     const n = Math.min(items.length, kind === 'gacha' ? 3 : 4);
-    const layoutOf = () => a[field + 'Layout'] || { rows: 1, cols: n };
-    const cell = i => { const L = layoutOf(); const r = Math.floor(i / L.cols), c = i % L.cols; return { x: c / L.cols, y: r / L.rows, w: 1 / L.cols, h: 1 / L.rows }; };
+    const layoutOf = () => a[field + 'Layout'] || (kind === 'accents' ? accentsLayout(n) : { rows: 1, cols: n });
+    const cell = i => {
+        const L = layoutOf();
+        const r = Math.floor(i / L.cols), c = i % L.cols;
+        const colW = 1 / L.cols, rowH = 1 / L.rows;
+        const padX = colW * 0.08, padY = rowH * 0.08;
+        return {
+            x: c * colW + padX,
+            y: r * rowH + padY,
+            w: colW - padX * 2,
+            h: rowH - padY * 2
+        };
+    };
     const render = url => {
         box.empty();
         const head = $('<div class="nnb-visual-tools"></div>');
@@ -4104,9 +4215,22 @@ function renderActionPrompts() {
 
     const lastIdx = chat.length - 1;
     const lastMsg = chat[lastIdx];
-    if (!lastMsg || lastMsg.is_user || !Array.isArray(lastMsg.extra?.actions) || !lastMsg.extra.actions.length) return;
+    if (!lastMsg || lastMsg.is_user) return;
 
-    const mesEl = $(`#chat .mes[mesid="${lastIdx}"]`);
+    if (!Array.isArray(lastMsg.extra?.actions) || !lastMsg.extra.actions.length) {
+        if (typeof lastMsg.mes === 'string') {
+            const m = lastMsg.mes.match(/(?:<!--\s*ACTIONS|\[\s*(?:ACTIONS|Варианты действий)|(?:\n|^)\s*ACTIONS)\s*[:：]\s*([\s\S]+?)(?:-->|\]|\n\n|$)/i);
+            if (m) {
+                lastMsg.extra = lastMsg.extra || {};
+                lastMsg.extra.actions = parseActionPrompts(m[1]);
+            }
+        }
+    }
+
+    if (!Array.isArray(lastMsg.extra?.actions) || !lastMsg.extra.actions.length) return;
+
+    let mesEl = $(`#chat .mes[mesid="${lastIdx}"]`);
+    if (!mesEl.length) mesEl = $('#chat .mes').last();
     if (!mesEl.length) return;
 
     const container = $('<div class="nnb-action-prompts"></div>');
@@ -4168,14 +4292,18 @@ async function processReplyTags() {
     const s = settings();
     if (!st || !s.enabled) return false;
     const c = ctx();
-    const id = c.chat.length - 1;
-    const msg = c.chat[id];
-    if (!msg || msg.is_user || typeof msg.mes !== 'string' || !msg.mes.includes('<!--')) return false;
+    const chat = c.chat;
+    if (!chat || !chat.length) return false;
+    const id = chat.length - 1;
+    const msg = chat[id];
+    if (!msg || msg.is_user || typeof msg.mes !== 'string') return false;
 
     let modified = false;
 
-    // 1. Process ACTIONS tags
-    const actMatch = msg.mes.match(/<!--\s*ACTIONS\s*:\s*([\s\S]+?)\s*-->/i);
+    // 1. Process ACTIONS tags (<!--ACTIONS: ...-->, [ACTIONS: ...], or ACTIONS: ...)
+    const actMatch = msg.mes.match(/<!--\s*ACTIONS\s*[:：]\s*([\s\S]+?)\s*-->/i)
+        || msg.mes.match(/\[\s*(?:ACTIONS|Варианты действий)\s*[:：]\s*([\s\S]+?)\s*\]/i)
+        || msg.mes.match(/(?:^|\n)\s*(?:<!--\s*)?ACTIONS\s*[:：]\s*([\s\S]+?)(?:-->|$)/i);
     if (actMatch) {
         const parsed = parseActionPrompts(actMatch[1]);
         if (parsed.length) {
@@ -4183,11 +4311,15 @@ async function processReplyTags() {
             msg.extra.actions = parsed;
             modified = true;
         }
-        msg.mes = msg.mes.replace(/<!--\s*ACTIONS\s*:\s*[\s\S]+?\s*-->/gi, '').trimEnd();
+        msg.mes = msg.mes
+            .replace(/<!--\s*ACTIONS\s*[:：][\s\S]+?\s*-->/gi, '')
+            .replace(/\[\s*(?:ACTIONS|Варианты действий)\s*[:：][\s\S]+?\s*\]/gi, '')
+            .replace(/(?:^|\n)\s*(?:<!--\s*)?ACTIONS\s*[:：][\s\S]+?(?:-->|$)/gi, '')
+            .trimEnd();
     }
 
     // 2. Process time/holiday tags
-    if (st.direction.time) {
+    if (st.direction.time && msg.mes.includes('<!--')) {
         const res = {};
         if (applyReplyTags(st, msg.mes, res)) {
             msg.mes = stripTags(msg.mes);
@@ -5141,11 +5273,20 @@ function placeMesButtons() {
             box.prepend('<div class="mes_button nnb-mes-btn nnb-mes-scene fa-solid fa-image interactable" title="Нарисовать эту сцену" tabindex="0"></div>');
         }
     });
-    $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map').remove();
-    const lastBox = mes.last().find('.mes_buttons').first();
+    $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map, .nnb-mes-actions-btn').remove();
+    const lastMes = mes.last();
+    const lastBox = lastMes.find('.mes_buttons').first();
     if (lastBox.length && mapOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-map fa-solid fa-map interactable" title="Карта: куда пойти" tabindex="0"></div>');
     if (lastBox.length && gachaOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-gacha fa-solid fa-dice interactable" title="Находки: испытать удачу" tabindex="0"></div>');
     if (lastBox.length && st.direction.wardrobe) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-ward fa-solid fa-shirt interactable" title="Гардероб: подобрать образ" tabindex="0"></div>');
+    if (lastBox.length && settings().actionPrompts && !lastMes.hasClass('is_user')) {
+        const actBtn = $('<div class="mes_button nnb-mes-btn nnb-mes-actions-btn fa-solid fa-lightbulb interactable" title="💡 Подсказать варианты действий" tabindex="0"></div>');
+        actBtn.on('click', function(e) {
+            e.stopPropagation();
+            generateActionPromptsNow();
+        });
+        lastBox.prepend(actBtn);
+    }
     renderActionPrompts();
 }
 let mesBtnTimer = null;
