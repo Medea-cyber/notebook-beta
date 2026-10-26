@@ -41,7 +41,7 @@ DROP #номер — задумка больше не подходит
 const INJECT_FF_KEY = 'npc_notebook_ff';
 const FF_MARKER = '[Перемотка:';
 
-const DEFAULT_INJECT = `[Личный блокнот автора. Это твои собственные задумки на будущее сюжета. Не упоминай блокнот и не цитируй его. Вплетай задумки естественно и постепенно, когда момент подходит; не нужно реализовывать всё сразу и не нужно форсировать. Отсчёт «сообщ. назад» — это сообщения чата, а не сюжетное время; в истории могли пройти дни или недели.]
+const DEFAULT_INJECT = `[Личный блокнот автора. Это твои собственные задумки на будущее сюжета. Не упоминай блокнот и не цитируй его. Вплетай задумки естественно и постепенно, когда момент подходит; не нужно реализовывать всё сразу и не нужно форсировать. ВАЖНО: любую задумку, бытовую деталь, жест (например, взгляд на письмо или предмет) или выходку фонового существа обыгрывай НЕ БОЛЕЕ ОДНОГО РАЗА — строго запрещено повторять один и тот же крючок или фоновую деталь в каждом посте! Отсчёт «сообщ. назад» — это сообщения чата, а не сюжетное время; в истории могли пройти дни или недели.]
 {{notes}}`;
 
 const REROLL_PROMPT = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Игроку не понравилась одна из твоих задумок:
@@ -78,7 +78,7 @@ const ARC_MAX = 4;
 
 const ARC_INJECT_HEADER = '[Развитие персонажей. Карточки описывают, какими персонажи были в начале истории. Ниже — как они изменились с тех пор: где это противоречит карточке, верно то, что ниже. Ядро личности, манера речи и привычки сохраняются; изменения проявляются ровно в той мере, какую задаёт стадия.]';
 
-const NPC_INJECT_HEADER = '[Персонажи истории — это канон, держись этих фактов.]';
+const NPC_INJECT_HEADER = '[Персонажи истории и их шкалы отношения к игроку — это канон. ВАЖНОЕ ПРАВИЛО ТЕМПА И ПРИТЯЖЕНИЯ: строго соблюдай указанный у каждого персонажа темп сближения, темперамент и пороги шкалы Романтики. Не форсируй романтику и не переходи к откровенной близости раньше времени, пока шкала Романтики ниже порога темпа персонажа. Притяжение («искра») никогда не описывай как болезненное наваждение или потерю контроля над собой: сдержанные и чуткие персонажи переживают притяжение спокойно — как приятное тепло, интерес, бережный жест или лёгкую тягу, не бросаясь сразу в объятия.]';
 
 const INTRIGUE_INJECT_HEADER = '[Тайны и интриги — секрет автора, игрок правды не знает. Раскрывай постепенно: через намёки, улики, оговорки NPC, слухи (в том числе ложные). Не выдавай правду целиком раньше времени и не форсируй.]';
 
@@ -996,7 +996,16 @@ const defaults = {
     imgApiKey: '',
     imgApiModel: 'gpt-image-2-c',
     imgApiSize: '1536x1024',
+    naiApiKey: '',
+    naiModel: 'nai-diffusion-4-5-full',
+    naiSampler: 'k_euler_ancestral',
+    naiScheduler: 'karras',
+    naiSteps: 28,
+    naiScale: 5.5,
+    naiPrefix: 'very aesthetic, masterpiece, best quality, no text',
+    naiNegative: 'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, negative space, blank page, bad anatomy, bad hands, text, watermark, signature',
     imgOrientation: 'portrait',
+    sceneCameraMode: 'ask',
     imageRef: true,
     showToasts: true,
     hideSpoilers: false,
@@ -1094,8 +1103,12 @@ function store() {
     if (!st.gacha.nextChoiceId) st.gacha.nextChoiceId = 1;
     if (st.direction.map === undefined) st.direction.map = true;
     if (st.direction.livingWorld === undefined) st.direction.livingWorld = true;
-    if (!st.map || typeof st.map !== 'object') st.map = { places: [], current: null, nextId: 1 };
+    if (st.direction.shopMode === undefined) {
+        st.direction.shopMode = !!(st.worldProfile?.job && isShopOwnerJob(st.worldProfile.job)) || (st.wardrobe?.box || []).some(x => x.onCounter);
+    }
+    if (!st.map || typeof st.map !== 'object') st.map = { places: [], current: null, nextId: 1, enteredAt: 0 };
     if (!Array.isArray(st.map.places)) st.map.places = [];
+    if (st.mainCharCard === undefined) st.mainCharCard = null;
     ensureHolidayState(st);
     return st;
 }
@@ -1189,24 +1202,139 @@ function formatRelationships(st, forThink = false) {
     }).join('\n');
 }
 
-function formatNpcs(list, forThink = false) {
-    if (!list.length) return '(пока нет)';
-    const sorted = [...list].sort((a, b) => (!!b.favorite - !!a.favorite) || a.id - b.id);
-    return sorted.map(n => {
-        const favTag = n.favorite ? ' [❤️ ГЛАВНЫЙ ГЕРОЙ / ФАВОРИТ ИГРОКА — ключевая фигура истории и романтического/сюжетного внимания]' : '';
+const PACE_OPTIONS = {
+    slow: { id: 'slow', label: '🐢 Медленный (слоубёрн)', threshold: 70, desc: 'долго присматривается, сближается постепенно и только через глубокое доверие' },
+    medium: { id: 'medium', label: '🚶 Естественный (средний)', threshold: 45, desc: 'сближается естественно по мере роста симпатии, общих моментов и свиданий' },
+    fast: { id: 'fast', label: '⚡ Быстрый (легко увлекается)', threshold: 22, desc: 'быстро загорается симпатией и легко идёт на сближение при взаимности' },
+};
+
+const TEMPERAMENT_OPTIONS = {
+    restrained: { id: 'restrained', label: '🧊 Сдержанный (самоконтроль)', desc: 'отлично владеет собой: даже сильное притяжение ощущает как спокойное приятное тепло или тихую тягу, не теряет голову и не нарушает дистанцию' },
+    warm: { id: 'warm', label: '☀️ Тёплый и чуткий', desc: 'проявляет симпатию и притяжение мягко — через тёплые взгляды, заботу и бережные жесты, чутко ориентируясь на отклик партнёра' },
+    passionate: { id: 'passionate', label: '🔥 Пылкий и порывистый', desc: 'переживает притяжение ярко и эмоционально, но действует в рамках достигнутого уровня близости и доверия' },
+};
+
+function friendshipTierLabel(val) {
+    const v = Number(val) || 0;
+    if (v <= -50) return '⚡ Враги';
+    if (v <= -15) return '🌩 Неприязнь';
+    if (v < 15) return '🤝 Знакомые';
+    if (v < 45) return '🌱 Приятели';
+    if (v < 75) return '💚 Друзья';
+    return '🌟 Близкие друзья';
+}
+
+function romanceTierLabel(val) {
+    const v = Number(val) || 0;
+    if (v < 10) return '⚪ Нет романтики';
+    if (v < 30) return '🌸 Лёгкая симпатия';
+    if (v < 55) return '💓 Влюблённость';
+    if (v < 80) return '💕 Романтическая близость';
+    return '❤️ Глубокая любовь';
+}
+
+function sparkTierLabel(val) {
+    const v = Number(val) || 0;
+    if (v < 20) return '🍃 Спокойно';
+    if (v < 45) return '✨ Приятное тепло';
+    if (v < 70) return '🔥 Заметное притяжение';
+    return '💥 Сильное волнение';
+}
+
+function ensureNpcScales(n, st) {
+    if (!n) return n;
+    const text = `${n.card || ''} ${n.status || ''}`.toLowerCase();
+    if (typeof n.friendship !== 'number' || Number.isNaN(n.friendship)) {
+        if (/враг|ненави|соперни|неприязн/.test(text)) n.friendship = -30;
+        else if (/лучш\S+ подруг|лучш\S+ друг|близк\S+ друг|детств/.test(text)) n.friendship = 65;
+        else if (/друг|подруг|приятел|коллег|сосед/.test(text)) n.friendship = 30;
+        else n.friendship = 10;
+    }
+    if (typeof n.romance !== 'number' || Number.isNaN(n.romance)) {
+        if (/муж|жена|возлюблен|парень|девушка|жених|невеста|встречаются/.test(text)) n.romance = 65;
+        else if (/влюблен|симпати|поклонник|неровно дышит|флирт/.test(text)) n.romance = 25;
+        else n.romance = 0;
+    }
+    if (typeof n.spark !== 'number' || Number.isNaN(n.spark)) {
+        n.spark = n.romance >= 50 ? 25 : 0;
+    }
+    if (!n.pace || !PACE_OPTIONS[n.pace]) {
+        if (/холодн|сдержан|закрыт|строг|недоверчив|серьёзн|осторожн|интроверт/.test(text)) n.pace = 'slow';
+        else if (/дерзк|пылк|любвеобильн|смел|импульсивн|ловелас|кокет/.test(text)) n.pace = 'fast';
+        else n.pace = 'slow'; // По умолчанию бережный темп, чтобы нейросеть не торопила события!
+    }
+    if (!n.temperament || !TEMPERAMENT_OPTIONS[n.temperament]) {
+        if (/холодн|сдержан|спокойн|хладнокров|строг|вежлив|невозмутим/.test(text)) n.temperament = 'restrained';
+        else if (/пылк|страстн|вспыльчив|горяч|импульсивн/.test(text)) n.temperament = 'passionate';
+        else n.temperament = 'warm';
+    }
+    n.friendship = Math.max(-100, Math.min(100, Math.round(n.friendship)));
+    n.romance = Math.max(0, Math.min(100, Math.round(n.romance)));
+    n.spark = Math.max(0, Math.min(100, Math.round(n.spark)));
+    return n;
+}
+
+function ensureMainCharCard(st) {
+    if (!st) return null;
+    const charName = storyNames().char || 'Персонаж';
+    if (!st.mainCharCard || typeof st.mainCharCard !== 'object') {
+        const relHint = st.worldProfile?.charRel || '';
+        st.mainCharCard = {
+            isMainChar: true,
+            name: charName,
+            card: relHint && !st.worldProfile?.freeWorld ? `Основной персонаж истории (${relHint}).` : 'Основной персонаж карточки чата.',
+            status: '',
+            favorite: !st.worldProfile?.freeWorld,
+            locked: false,
+        };
+    }
+    st.mainCharCard.name = charName;
+    ensureNpcScales(st.mainCharCard, st);
+    return st.mainCharCard;
+}
+
+function formatNpcScaleSummary(n) {
+    ensureNpcScales(n);
+    const paceObj = PACE_OPTIONS[n.pace] || PACE_OPTIONS.slow;
+    const tempObj = TEMPERAMENT_OPTIONS[n.temperament] || TEMPERAMENT_OPTIONS.warm;
+    const canAdvanceRomance = n.romance >= paceObj.threshold && n.friendship >= 20;
+    let rule = '';
+    if (!canAdvanceRomance) {
+        rule = `ПОРОГ БЛИЗОСТИ ЕЩЁ НЕ ДОСТИГНУТ (сейчас романтика ${n.romance}/100, а для темпа «${paceObj.label}» нужно минимум ${paceObj.threshold}/100): персонаж держит естественную дистанцию, НЕ переходит к откровенной близости и не форсирует события.`;
+    } else {
+        rule = `Доверие и романтика достаточно высоки (${n.romance}/100) для более близкого и нежного сближения, если к этому располагает сцена.`;
+    }
+    return `Шкалы к {{user}}: Дружба ${n.friendship}/100 (${friendshipTierLabel(n.friendship)}), Романтика ${n.romance}/100 (${romanceTierLabel(n.romance)}), Притяжение в сцене ${n.spark}/100 (${sparkTierLabel(n.spark)}). Темп сближения: ${paceObj.label} (${paceObj.desc}). Темперамент: ${tempObj.label} (${tempObj.desc}). ${rule}`;
+}
+
+function formatNpcs(list, forThink = false, st = store()) {
+    const all = [];
+    if (st) {
+        const mc = ensureMainCharCard(st);
+        if (mc && (!st.worldProfile?.freeWorld || mc.romance > 0 || mc.friendship !== 10 || mc.status)) {
+            all.push(mc);
+        }
+    }
+    const sorted = [...(list || [])].sort((a, b) => (!!b.favorite - !!a.favorite) || a.id - b.id);
+    all.push(...sorted);
+    if (!all.length) return '(пока нет)';
+    return all.map(n => {
+        ensureNpcScales(n, st);
+        const favTag = n.favorite ? ' [❤️ ГЛАВНЫЙ ФАВОРИТ ИГРОКА]' : '';
         let line = `— ${n.name}${favTag}: ${n.card}`;
-        if (forThink && n.locked) line += ' (карточку правил игрок — не меняй её, только NPCSTATE)';
+        if (forThink && n.locked) line += ' (карточку правил игрок — не меняй её, только NPCSTATE и SCALE)';
         if (n.status) line += `\n   Сейчас: ${n.status}`;
+        line += `\n   ${formatNpcScaleSummary(n)}`;
         return line;
     }).join('\n');
 }
 
 function buildNpcSection(st) {
     if (!st?.direction?.npcs) return '';
-    return `Персонажи (NPC) и их связи. Ты ведёшь краткие карточки значимых NPC и динамику отношений между ними — это канон истории.
+    return `Персонажи (NPC), их шкалы отношений и связи. Ты ведёшь краткие карточки значимых героев и следишь за справедливым изменением их шкал отношений к {{user}} — это канон истории.
 
-Текущие карточки:
-${formatNpcs(st.npcs, true)}
+Текущие карточки и шкалы:
+${formatNpcs(st.npcs, true, st)}
 
 Связи и отношения между персонажами:
 ${formatRelationships(st, true)}
@@ -1214,10 +1342,15 @@ ${formatRelationships(st, true)}
 Команды для них (с новой строки, вместе с остальными):
 NPC [Имя]: кто это, внешность, характер, отношение к {{user}} — 1–3 предложения. Для нового NPC или если в истории изменилось что-то постоянное.
 NPCSTATE [Имя]: где он сейчас и что с ним происходит — коротко.
+SCALE [Имя]: дружба=+3 | романтика=+2 | искра=+5 | темп=медленный/средний/быстрый | темперамент=сдержанный/тёплый/пылкий — справедливое обновление шкал персонажа (включая {{char}}) по итогам последних сообщений.
+Правила справедливого расчёта SCALE:
+— Дружба (от -100 до 100) и Романтика (от 0 до 100) растут и падают ПОСТЕПЕННО: обычный приятный разговор даёт +1..+3, глубокая поддержка или удачное свидание +4..+8, ссора или холодность -3..-10. Не повышай романтику, если персонажи просто общались по делу или дружески!
+— Искра / притяжение в сцене (от 0 до 100) показывает текущее эмоциональное и романтическое волнение в моменте: оно может вырасти в романтичной сцене и остыть (например, искра=-10), когда герои заняты бытом или делами.
+— Если для нового персонажа ещё не заданы темп сближения и темперамент, подбери их строго по его характеру (сдержанный интроверт = медленный + сдержанный; открытый романтик = средний + тёплый и т.д.).
 REL [Имя1 ↔ Имя2]: тип | как относятся друг к другу / что между ними — взаимная связь (дружба, роман, соперничество, семейные узы, тайный союз).
 REL [Имя1 → Имя2]: тип | отношение с одной стороны (безответная влюблённость, тайная ревность, подозрение, зависть, долг).
 DROP #R1 — если связь распалась или потеряла сюжетное значение.
-Если у значимого NPC из чата ещё нет карточки — обязательно заведи её. Заводи только NPC, которые реально появились в чате и важны для истории. Не заводи карточки для {{char}} и {{user}}. Отношения между NPC и {{char}}/{{user}} тоже можно фиксировать через REL. Тайные мотивы сюда не пиши — для них есть тайны. Карточки и связи не считаются в лимит новых записей.`;
+Если у значимого NPC из чата ещё нет карточки — обязательно заведи её. Карточки и связи не считаются в лимит новых записей.`;
 }
 
 function formatArcs(st, forThink = false) {
@@ -1348,14 +1481,19 @@ function buildWorldProfileInjection(st) {
 function buildLivingWorldInjection(st) {
     const profBlock = buildWorldProfileInjection(st);
     if (!st || !livingWorldOn(st)) return profBlock;
+    const len = ctx().chat?.length ?? 0;
     const curPlace = mapOn(st) && st.map?.current ? st.map.places.find(p => p.id === st.map.current) : null;
-    const locLine = curPlace
-        ? `Текущая локация: «${curPlace.title}»${curPlace.desc ? ` (${curPlace.desc})` : ''}${curPlace.hooks ? `. Зацепки и крючки этого места: ${curPlace.hooks}` : ''}.\n`
-        : '';
-    const lwBlock = `[Живой мир — окружение рассказывает истории:
-${locLine}Не описывай локации как просто красивое полотно или статичный фон. Мир вокруг живёт своей жизнью и подбрасывает истории:
-— При входе в локацию или смене места сразу вплетай в сцену 2–3 конкретные точки интереса (живые крючки): любопытную деталь или след чужой истории (забытую вещь, необычное объявление, закрытую дверь, странную мелочь), колоритного фонового персонажа за своим занятием или обрывок чужого разговора / микро-сценку поблизости.
-— Пусть у мест чувствуется характер, маленькая тайна, местная байка или странность, которую игрок может исследовать, если захочет обратить на неё внимание.]`;
+    const justEntered = curPlace && (st.map.enteredAt === undefined || len - st.map.enteredAt <= 1);
+    let lwBlock = '';
+    if (curPlace && justEntered) {
+        const locLine = `Текущая локация (герои только что пришли сюда): «${curPlace.title}»${curPlace.desc ? ` (${curPlace.desc})` : ''}${curPlace.hooks ? `. Зацепки и крючки этого места для первого впечатления: ${curPlace.hooks}` : ''}.\n`;
+        lwBlock = `[Живой мир — первое впечатление от локации:
+${locLine}При входе в локацию вплети в сцену 1–2 живые детали или точки интереса из зацепок места, чтобы локация ощущалась живой. После первого упоминания НЕ повторяй эти же зацепки в следующих ответах, если игрок сам не обратит на них внимание.]`;
+    } else if (curPlace) {
+        lwBlock = `[Текущая локация: «${curPlace.title}»${curPlace.desc ? ` (${curPlace.desc})` : ''}. Важное правило ненавязчивости фона: герои уже осмотрелись здесь. Строго ЗАПРЕЩЕНО повторять из поста в пост одни и те же фоновые крючки локации, проделки фоновых существ/животных или постоянные взгляды на одни и те же предметы/письма. Если игрок занят диалогом или романтической сценой, не отвлекай персонажей навязчивыми фоновыми деталями.]`;
+    } else {
+        lwBlock = `[Живой мир: при смене локации давай новому месту 1–2 живые детали для атмосферы, но когда герои уже увлечены разговором или сценой, не перегружай текст повторением одних и тех же фоновых мелочей в каждом посте.]`;
+    }
     return [profBlock, lwBlock].filter(Boolean).join('\n\n');
 }
 
@@ -1379,7 +1517,7 @@ function updateInjection() {
     const s = settings();
     const st = store();
     const showIntrigues = st?.direction?.intrigues && st.intrigues.length;
-    const showNpcs = st?.direction?.npcs && st.npcs.length;
+    const showNpcs = st?.direction?.npcs && (st.npcs.length || st.mainCharCard);
     const showRels = st?.direction?.npcs && (st.relationships || []).length;
     const showArcs = st?.direction?.arcs && (st.arcs.length || st.evolved.length);
     const timeBlock = st && st.direction.time ? [buildTimeInjection(st), s.events ? buildHolidayInjection(st) : ''].filter(Boolean).join('\n\n') : '';
@@ -1396,7 +1534,7 @@ function updateInjection() {
     if (livingBlock) blocks.push(livingBlock);
     if (wardBlock) blocks.push(wardBlock);
     if (linesBlock) blocks.push(linesBlock);
-    if (showNpcs) blocks.push(NPC_INJECT_HEADER + '\n' + formatNpcs(st.npcs));
+    if (showNpcs) blocks.push(NPC_INJECT_HEADER + '\n' + formatNpcs(st.npcs, false, st));
     if (showRels) blocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
     if (showArcs) blocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
     if (st.notes.length) blocks.push(fillTemplate(s.injectPrompt, st.notes));
@@ -1594,7 +1732,13 @@ function parseAndApply(raw) {
         }
         const mh = line.match(/^HERE\s*[:：—–-]\s*(.+)$/i);
         if (mh) {
-            if (st.direction.map) { const pl = findPlace(st, mh[1].split('|')[0]); if (pl) st.map.current = pl.id; }
+            if (st.direction.map) {
+                const pl = findPlace(st, mh[1].split('|')[0]);
+                if (pl && st.map.current !== pl.id) {
+                    st.map.current = pl.id;
+                    st.map.enteredAt = len;
+                }
+            }
             continue;
         }
         if (/^OUTFIT\s*_?\s*DONE\b/i.test(line)) {
@@ -1693,10 +1837,57 @@ function parseAndApply(raw) {
 
         m = line.match(/^NPCSTATE(?=[\s\[:：])\s*[:：]?\s*\[?([^\]:：—–\n]{1,60}?)\]?\s*(?:[:：]|\s[—–-]\s)\s*(.+)$/i);
         if (m) {
-            const n = npcsOn && findNpc(st, m[1]);
+            const targetName = m[1].trim();
+            const mc = ensureMainCharCard(st);
+            const n = npcsOn && (findNpc(st, targetName) || (mc && normName(mc.name) === normName(targetName) ? mc : null));
             if (n) {
                 n.status = m[2].trim();
                 res.npcUpd++;
+            }
+            continue;
+        }
+
+        m = line.match(/^(?:SCALE|RELSCALE)(?=[\s\[:：])\s*[:：]?\s*\[?([^\]:：—–\n]{1,60}?)\]?\s*(?:[:：]|\s[—–-]\s)\s*(.+)$/i);
+        if (m) {
+            if (npcsOn) {
+                const targetName = m[1].trim();
+                const mc = ensureMainCharCard(st);
+                let n = findNpc(st, targetName) || (mc && normName(mc.name) === normName(targetName) ? mc : null);
+                if (n) {
+                    ensureNpcScales(n, st);
+                    const rawSc = m[2].trim();
+                    const parseDeltaOrAbs = (regex, curVal, minV, maxV, maxDelta) => {
+                        const sm = rawSc.match(regex);
+                        if (!sm) return curVal;
+                        const sign = sm[1];
+                        const num = Number(sm[2]);
+                        if (Number.isNaN(num)) return curVal;
+                        if (sign === '+' || sign === '-') {
+                            const d = Math.max(-maxDelta, Math.min(maxDelta, sign === '-' ? -num : num));
+                            return Math.max(minV, Math.min(maxV, curVal + d));
+                        }
+                        const d = Math.max(-maxDelta, Math.min(maxDelta, num - curVal));
+                        return Math.max(minV, Math.min(maxV, curVal + d));
+                    };
+                    n.friendship = parseDeltaOrAbs(/дружб[аы]\s*[=:]?\s*([+-]?)\s*(\d+)/i, n.friendship, -100, 100, 10);
+                    n.romance = parseDeltaOrAbs(/романтик[аи]\s*[=:]?\s*([+-]?)\s*(\d+)/i, n.romance, 0, 100, 8);
+                    n.spark = parseDeltaOrAbs(/(?:искр[аы]|притяжени[ея]|волнени[ея])\s*[=:]?\s*([+-]?)\s*(\d+)/i, n.spark, 0, 100, 20);
+                    const pm = rawSc.match(/темп\s*[=:]\s*([а-яa-z]+)/i);
+                    if (pm && !n.locked) {
+                        const pv = pm[1].toLowerCase();
+                        if (/медл|slow/.test(pv)) n.pace = 'slow';
+                        else if (/быстр|fast/.test(pv)) n.pace = 'fast';
+                        else if (/сред|естеств|medium/.test(pv)) n.pace = 'medium';
+                    }
+                    const tm = rawSc.match(/темперамент\s*[=:]\s*([а-яa-z]+)/i);
+                    if (tm && !n.locked) {
+                        const tv = tm[1].toLowerCase();
+                        if (/сдерж|холод|restrained/.test(tv)) n.temperament = 'restrained';
+                        else if (/пылк|страст|passionate/.test(tv)) n.temperament = 'passionate';
+                        else if (/тепл|тёпл|чутк|warm/.test(tv)) n.temperament = 'warm';
+                    }
+                    res.npcUpd++;
+                }
             }
             continue;
         }
@@ -2361,7 +2552,12 @@ function ensureCounterPrice(x, st) {
     }
 }
 
+function shopModeOn(st) {
+    return !!st?.direction?.shopMode;
+}
+
 function shopCounterItems(st) {
+    if (!shopModeOn(st)) return [];
     return (st?.wardrobe?.box || []).filter(x => !!x.onCounter);
 }
 
@@ -2428,29 +2624,28 @@ function wardrobeInjection(st) {
         out.push(`[${user} сейчас выбирает, что надеть${a.occasion ? ` (${a.occasion})` : ''}. Не описывай, во что ${user} одет(а), — это решится выбором.]`);
     } else if (a?.status === 'worn') {
         const look = a.look;
-        const effects = look.effects
-            ? `Скрытые последствия этого выбора (игрок их не знает): ${look.effects}. Покажи их в сцене через взгляды, поведение и реплики персонажей, когда они увидят наряд — естественно, без цифр и объявлений, и не намекай, что реакции были известны заранее.`
-            : 'Персонажи реагируют на него в своём характере — кому-то понравится, кому-то нет.';
-        let text = `[Наряд ${user}${a.occasion ? ` (${a.occasion})` : ''}: «${look.title}» — ${String(look.desc || '').replace(/[.\s]+$/, '')}. ${effects}`;
+        const wornAge = Math.max(0, (ctx().chat?.length ?? 0) - (a.at || 0));
         const acList = Array.isArray(a.selectedAccents) && a.selectedAccents.length ? a.selectedAccents : (a.accent ? [a.accent] : []);
-        acList.forEach(ac => {
-            const k = ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory;
-            text += `\nШтрих к образу (${k.name}): «${ac.title}»${ac.desc ? ` — ${String(ac.desc).replace(/[.\s]+$/, '')}` : ''}${ac.origin ? ` (${ac.origin})` : ''}.`;
-            if (ac.effects) text += ` Скрытые последствия: ${ac.effects}.`;
-            if (ac.kind === 'perfume') {
-                const before = st.wardrobe.history.filter(h => h.accent?.title && h.accent.title.toLowerCase() === ac.title.toLowerCase()).pop();
-                text += before ? ` Этот аромат уже был на ${user}${before.occasion ? ` (${before.occasion})` : ''} — кто-то может вспомнить тот вечер.` : ' Аромат замечают не сразу — когда подходят ближе.';
-            }
-            if (ac.kind === 'stone') text += ' Камень даёт лёгкий флёр атмосферы — едва уловимо, можно списать на совпадение.';
-            if (ac.kind === 'makeup') text += ' Макияж замечают, когда смотрят в лицо, — особенно вблизи и при хорошем свете.';
-            if (ac.kind === 'pocket') text += ` Эта мелочь лежит в сумочке или кармане ${user}: найди в сцене естественный момент, когда она пригодится, выпадет или окажется кстати — не в первой же реплике.`;
-            if (/подар/i.test(ac.origin || '')) text += ' Если даритель рядом, он заметит, что его подарок надет.';
-        });
-        out.push(text + ']');
+        if (wornAge <= 2) {
+            const effects = look.effects
+                ? `Скрытые последствия этого выбора (покажи один раз при встрече, не повторяя в каждом посте): ${look.effects}.`
+                : 'Персонажи могут заметить обновку в начале встречи.';
+            let text = `[Наряд ${user}${a.occasion ? ` (${a.occasion})` : ''}: «${look.title}» — ${String(look.desc || '').replace(/[.\s]+$/, '')}. ${effects}`;
+            acList.forEach(ac => {
+                const k = ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory;
+                text += `\nШтрих к образу (${k.name}): «${ac.title}»${ac.desc ? ` — ${String(ac.desc).replace(/[.\s]+$/, '')}` : ''}${ac.origin ? ` (${ac.origin})` : ''}.`;
+                if (ac.effects) text += ` Скрытые последствия: ${ac.effects}.`;
+                if (ac.kind === 'perfume') text += ' Аромат ощущается только вблизи.';
+            });
+            out.push(text + ']');
+        } else {
+            const acNames = acList.map(ac => `«${ac.title}»`).join(', ');
+            out.push(`[Сейчас на ${user} надето: «${look.title}» (${String(look.desc || '').replace(/[.\s]+$/, '')})${acNames ? `, штрихи: ${acNames}` : ''}. Наряд уже был замечен ранее — просто учитывай его как факт внешности, НЕ акцентируй на нём и на мелких предметах внимание в каждом посте.]`);
+        }
     }
     const equipped = personalBoxItems(st).filter(x => (st.wardrobe.equipped || []).includes(x.id));
     if (equipped.length) {
-        out.push(`[У ${user} сейчас с собой/наготове (личные вещи): ${equipped.map(x => `«${x.title}»${x.desc ? ` (${x.desc})` : ''}${x.origin ? ` [${x.origin}]` : ''}`).join('; ')}. Персонажи могут обратить на это внимание, а предмет можно пустить в ход.]`);
+        out.push(`[У ${user} с собой в сумке/кармане: ${equipped.map(x => `«${x.title}»`).join(', ')}. НЕ упоминай эти вещи в каждом посте без повода — вспоминай о них только тогда, когда ${user} сама достаёт их или ситуация прямо этого требует.]`);
     }
     const counter = shopCounterItems(st);
     if (counter.length) {
@@ -2640,6 +2835,7 @@ function imageCommand() {
 function wantImages() {
     const s = settings();
     if (!s.wardrobeImages) return false;
+    if (s.imageSource === 'novelai') return true;
     if (s.imageSource === 'openai-images') return !!(s.imgApiBase && s.imgApiKey && s.imgApiModel);
     if (s.imageSource) return !!ctx().ConnectionManagerRequestService?.sendRequest;
     return !!imageCommand();
@@ -2736,6 +2932,7 @@ function withTimeout(promise, ms, what) {
 function imageSourceName() {
     const id = settings().imageSource;
     if (!id) return 'генерацию картинок Таверны';
+    if (id === 'novelai') return `NovelAI (${settings().naiModel || 'nai-diffusion-4-5-full'})`;
     if (id === 'openai-images') return `картинки OpenAI (${settings().imgApiModel})`;
     const p = connectionProfiles().find(x => x.id === id);
     return p ? `профиль «${p.name}»` : 'удалённый профиль';
@@ -2855,6 +3052,232 @@ async function drawViaImagesApi(prompt, refs, size) {
     return storeImage(await imagesResult(res));
 }
 
+// ---------- картинки через NovelAI (V4.5 / V4 / V3 / V5) ----------
+function uint8ToBase64(u8) {
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < u8.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, u8.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+}
+
+async function unpackZipFirstFile(u8) {
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    if (u8.byteLength < 30 || dv.getUint32(0, true) !== 0x04034b50) {
+        throw new Error('Ответ NovelAI не является ZIP-архивом');
+    }
+    let compression = dv.getUint16(8, true);
+    let crc32 = dv.getUint32(14, true);
+    let compSize = dv.getUint32(18, true);
+    let uncompSize = dv.getUint32(22, true);
+    const nameLen = dv.getUint16(26, true);
+    const extraLen = dv.getUint16(28, true);
+    const dataStart = 30 + nameLen + extraLen;
+
+    // Если размер в локальном заголовке 0 (потоковый ZIP), читаем точные размеры из Central Directory (PK\x01\x02)
+    if (compSize === 0 || uncompSize === 0) {
+        for (let i = u8.byteLength - 22; i >= dataStart; i--) {
+            if (dv.getUint32(i, true) === 0x02014b50) {
+                compression = dv.getUint16(i + 10, true);
+                crc32 = dv.getUint32(i + 16, true);
+                compSize = dv.getUint32(i + 20, true);
+                uncompSize = dv.getUint32(i + 24, true);
+                break;
+            }
+        }
+    }
+    const compressedSlice = compSize > 0
+        ? u8.subarray(dataStart, dataStart + compSize)
+        : u8.subarray(dataStart);
+
+    if (compression === 0) {
+        return compressedSlice;
+    }
+    if (compression === 8 && typeof DecompressionStream === 'function') {
+        try {
+            const ds = new DecompressionStream('deflate-raw');
+            const writer = ds.writable.getWriter();
+            writer.write(compressedSlice);
+            writer.close();
+            return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+        } catch (e) {
+            // Универсальная обёртка в GZIP-конверт (работает во всех браузерах и WebView)
+            const gz = new Uint8Array(10 + compressedSlice.byteLength + 8);
+            gz.set([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03], 0);
+            gz.set(compressedSlice, 10);
+            const gdv = new DataView(gz.buffer);
+            gdv.setUint32(10 + compressedSlice.byteLength, crc32, true);
+            gdv.setUint32(10 + compressedSlice.byteLength + 4, uncompSize, true);
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            writer.write(gz);
+            writer.close();
+            return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+        }
+    }
+    throw new Error('Неподдерживаемый метод сжатия ZIP: ' + compression);
+}
+
+async function parseNovelAiResponse(res) {
+    if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        let msg = errText.slice(0, 220);
+        try {
+            const j = JSON.parse(errText);
+            if (j?.message) msg = j.message;
+        } catch (e) { /* ignore */ }
+        if (res.status === 401) throw new Error('NovelAI вернул 401 Unauthorized — проверь ключ (Persistent API Token pst-…)');
+        if (res.status === 402) throw new Error('NovelAI: недостаточно Anlas или неактивна подписка (402)');
+        throw new Error(`NovelAI ответил ${res.status}: ${msg}`);
+    }
+    const buf = await res.arrayBuffer();
+    const u8 = new Uint8Array(buf);
+    if (!u8.byteLength) throw new Error('NovelAI вернул пустой ответ');
+
+    // 1. ZIP archive (PK\x03\x04)
+    if (u8.byteLength >= 4 && u8[0] === 0x50 && u8[1] === 0x4b && u8[2] === 0x03 && u8[3] === 0x04) {
+        const pngBytes = await unpackZipFirstFile(u8);
+        return `data:image/png;base64,${uint8ToBase64(pngBytes)}`;
+    }
+    // 2. Raw PNG (\x89PNG)
+    if (u8.byteLength >= 4 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4e && u8[3] === 0x47) {
+        return `data:image/png;base64,${uint8ToBase64(u8)}`;
+    }
+    // 3. Base64 text or JSON (например от встроенного эндпоинта Таверны /api/novelai/generate-image)
+    const text = new TextDecoder('utf-8').decode(u8).trim();
+    if (text.startsWith('data:image/')) return text;
+    if (/^[A-Za-z0-9+/=\r\n]+$/.test(text) && text.length > 200) {
+        return `data:image/png;base64,${text.replace(/\s+/g, '')}`;
+    }
+    try {
+        const json = JSON.parse(text);
+        if (typeof json === 'string' && json.length > 200) {
+            return json.startsWith('data:') ? json : `data:image/png;base64,${json}`;
+        }
+        const extracted = extractImage(json);
+        if (extracted) return extracted;
+    } catch (e) { /* ignore */ }
+    throw new Error('Не удалось распознать картинку в ответе NovelAI');
+}
+
+async function drawViaNovelAi(prompt, orient = 'portrait') {
+    const s = settings();
+    const model = String(s.naiModel || 'nai-diffusion-4-5-full').trim();
+    const sampler = String(s.naiSampler || 'k_euler_ancestral').trim();
+    const scheduler = String(s.naiScheduler || 'karras').trim();
+    const steps = Math.max(1, Math.min(50, Number(s.naiSteps) || 28));
+    const scale = Math.max(1, Math.min(20, Number(s.naiScale) || 5.5));
+    const prefix = String(s.naiPrefix ?? 'very aesthetic, masterpiece, best quality, no text').trim();
+    let negPrompt = String(s.naiNegative ?? defaults.naiNegative).trim();
+    if (/NOT looking at viewer/i.test(prompt) && !/looking at viewer/i.test(negPrompt)) {
+        negPrompt = `looking at viewer, looking at camera, eye contact with viewer, ${negPrompt}`;
+    }
+
+    // Стандартные разрешения Opus Free (0 Anlas до 28 шагов)
+    let width = 832, height = 1216;
+    if (orient === 'landscape') { width = 1216; height = 832; }
+    else if (orient === 'square') { width = 1024; height = 1024; }
+
+    const cleanPrompt = String(prompt || '').replace(/\s+/g, ' ').trim();
+    const fullPrompt = [prefix, cleanPrompt].filter(Boolean).join(', ');
+    const seed = Math.floor(Math.random() * 4294967295);
+    const isV4Plus = /nai-diffusion-[45]/i.test(model);
+    const isV5 = /nai-diffusion-5/i.test(model);
+
+    const token = String(s.naiApiKey || '').trim();
+
+    // Если указан ключ pst-... в настройках плагина — идём напрямую (или через /proxy/) к image.novelai.net
+    if (token) {
+        const params = {
+            params_version: isV5 ? 4 : 3,
+            width,
+            height,
+            scale,
+            sampler,
+            steps,
+            seed,
+            n_samples: 1,
+            ucPreset: 0,
+            qualityToggle: true,
+            sm: false,
+            sm_dyn: false,
+            dynamic_thresholding: false,
+            controlnet_strength: 1,
+            legacy: false,
+            add_original_image: true,
+            cfg_rescale: 0,
+            noise_schedule: scheduler,
+            legacy_v3_extend: false,
+            uncond_scale: 1,
+            negative_prompt: negPrompt,
+            prompt: fullPrompt,
+            reference_image_multiple: [],
+            reference_information_extracted_multiple: [],
+            reference_strength_multiple: [],
+            extra_noise_seed: seed,
+        };
+        if (isV4Plus) {
+            params.v4_prompt = {
+                use_coords: false,
+                use_order: true,
+                caption: { base_caption: fullPrompt, char_captions: [] },
+            };
+            params.v4_negative_prompt = {
+                use_coords: false,
+                use_order: false,
+                caption: { base_caption: negPrompt, char_captions: [] },
+            };
+        }
+        const body = {
+            input: fullPrompt,
+            model,
+            action: 'generate',
+            parameters: params,
+        };
+        const res = await withTimeout(
+            imagesFetch('https://image.novelai.net/ai/generate-image', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    Accept: '*/*',
+                },
+                body: JSON.stringify(body),
+            }),
+            90000,
+            'NovelAI рисунок'
+        );
+        const dataUrl = await parseNovelAiResponse(res);
+        return storeImage(dataUrl);
+    }
+
+    // Если поле ключа пустое — пробуем встроенный эндпоинт SillyTavern /api/novelai/generate-image (ключ из Таверны)
+    const stRes = await withTimeout(
+        fetch('/api/novelai/generate-image', {
+            method: 'POST',
+            headers: ctx().getRequestHeaders(),
+            body: JSON.stringify({
+                prompt: fullPrompt,
+                model,
+                sampler,
+                scheduler,
+                steps,
+                scale,
+                width,
+                height,
+                negative_prompt: negPrompt,
+                seed,
+                n_samples: 1,
+            }),
+        }),
+        90000,
+        'NovelAI через Таверну'
+    );
+    const dataUrl = await parseNovelAiResponse(stRes);
+    return storeImage(dataUrl);
+}
+
 function cleanForCommand(t) {
     return String(t || '').replace(/[|{}\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -2889,9 +3312,10 @@ const activeOf = (kind, st = store()) => (kind === 'gacha' ? st?.gacha?.active :
 // orient: 'portrait' | 'landscape' — размер для сайта картинок и подсказка в тексте для остальных
 async function drawPicture(prompt, refs, orient = 'landscape') {
     const src = settings().imageSource;
-    const size = orient === 'portrait' ? '1024x1536' : '1536x1024';
+    if (src === 'novelai') return drawViaNovelAi(prompt, orient);
+    const size = orient === 'portrait' ? '1024x1536' : orient === 'square' ? '1024x1024' : '1536x1024';
     if (src === 'openai-images') return drawViaImagesApi(prompt, refs, size);
-    prompt = `${prompt}, ${orient === 'portrait' ? 'vertical portrait image, 2:3' : 'wide landscape image, 3:2'}`;
+    prompt = `${prompt}, ${orient === 'portrait' ? 'vertical portrait image, 2:3' : orient === 'square' ? 'square image, 1:1' : 'wide landscape image, 3:2'}`;
     if (src) return drawViaProfile(prompt, refs, src);
     const c = ctx();
     const cmd = imageCommand();
@@ -3000,32 +3424,80 @@ function flushPicture(kind, url) {
 // ---------- 🎬 Картинка сцены ----------
 function canDrawScene() {
     const s = settings();
+    if (s.imageSource === 'novelai') return true;
     if (s.imageSource === 'openai-images') return !!(s.imgApiBase && s.imgApiKey && s.imgApiModel);
     if (s.imageSource) return !!ctx().ConnectionManagerRequestService?.sendRequest;
     return !!imageCommand();
 }
 
-function scenePromptRequest(st, mesId) {
+function scenePromptRequest(st, mesId, povMode = false) {
     const names = storyNames();
     const msg = Number.isInteger(mesId) ? ctx().chat?.[mesId] : null;
     const moment = msg?.mes ? `Нарисовать нужно момент из этого сообщения (${msg.is_user ? names.user : (msg.name || names.char)}): «${String(msg.mes).replace(/<[^>]+>/g, '').slice(0, 1500)}»` : '';
     const a = st.wardrobe?.active;
-    const outfit = a?.status === 'worn' ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
-    const lastAppearance = st.wardrobe?.history?.length ? '' : '';
+    const outfit = (!povMode && a?.status === 'worn') ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
+    const lastAppearance = (!povMode && st.wardrobe?.appearance) ? `Внешность ${names.user}: ${st.wardrobe.appearance}.` : '';
+    const cameraInstruction = povMode
+        ? `ВАЖНО — РАКУРС ОТ ПЕРВОГО ЛИЦА (POV): картинка должна быть строго глазами ${names.user} (first-person POV). Саму ${names.user} (её лицо, голову и фигуру) в кадре НЕ описывай и НЕ включай в CAST (максимум — её рука на переднем плане, если это уместно). Покажи сцену и собеседника (${names.char} или NPC) так, как их видит перед собой ${names.user}.`
+        : `ВАЖНО — ЕСТЕСТВЕННЫЙ ВЗГЛЯД (НЕ В КАМЕРУ): это кадр со стороны (third-person cinematic shot). Если в сцене два или более персонажей, они должны смотреть ДРУГ НА ДРУГА (mutual eye contact between characters) или на то, чем заняты в сцене. Строго ЗАПРЕЩЕНО описывать, что персонажи позируют или смотрят в камеру / на зрителя! В конце английского описания обязательно добавь: "characters looking at each other, candid scene, NOT looking at viewer, NOT looking at camera".`;
     return [
         '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник художника: опиши картинку того, что происходит в сцене прямо сейчас (по последним сообщениям чата).',
         moment,
         st.time?.date ? `Время в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; место: ${placeLine(st)}` : ''}.` : '',
         outfit,
         lastAppearance,
+        cameraInstruction,
         'Ответь ровно двумя строками, без пояснений:',
-        `CAST: кто в кадре — имена через запятую, как в чате (${[names.user, ...names.chars, ...(st.npcs || []).slice(0, 8).map(n => n.name)].join(', ')})`,
-        'SCENE: один абзац по-английски для генератора картинок: место и обстановка, время суток и свет, кто в кадре и как выглядит (внешность, одежда), позы, выражения лиц, настроение, ракурс. Это одна иллюстрация, без текста и подписей.]',
+        `CAST: кто виден в кадре — имена через запятую (${povMode ? [...names.chars, ...(st.npcs || []).slice(0, 8).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 8).map(n => n.name)].join(', ')})`,
+        'SCENE: один абзац по-английски для генератора картинок: место и обстановка, время суток и свет, кто в кадре и как выглядит (внешность, одежда), позы, куда направлен взгляд персонажей, выражения лиц, настроение, ракурс. Это одна иллюстрация, без текста и подписей.]',
     ].filter(Boolean).join('\n');
 }
 
+async function askSceneCameraMode() {
+    const mode = settings().sceneCameraMode || 'ask';
+    if (mode === 'third') return false;
+    if (mode === 'pov') return true;
+    return new Promise(resolve => {
+        const el = $('<div class="nnb-pop"><h3>🎬 Как нарисовать сцену?</h3></div>');
+        el.append('<div class="nnb-pop-sub">Выбери ракурс для этой иллюстрации (или задай постоянный вариант в настройках «🎨 Картинки»):</div>');
+        let settled = false;
+        const finish = val => {
+            if (settled) return;
+            settled = true;
+            closePopupOf(el);
+            resolve(val);
+        };
+        const grid = $('<div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;"></div>');
+        const thirdBtn = $(`
+            <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
+                <i class="fa-solid fa-user-group" style="font-size:1.3em; color:var(--SmartThemeQuoteColor, #8b78c4);"></i>
+                <div>
+                    <div style="font-weight:700;">👥 Оба персонажа в кадре (взгляд со стороны)</div>
+                    <div style="font-size:0.84em; opacity:0.8;">Кинематографичный кадр: твоя героиня и собеседник вместе, смотрят друг на друга (не в камеру)</div>
+                </div>
+            </div>
+        `).on('click', () => finish(false));
+
+        const povBtn = $(`
+            <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
+                <i class="fa-solid fa-eye" style="font-size:1.3em; color:var(--SmartThemeQuoteColor, #8b78c4);"></i>
+                <div>
+                    <div style="font-weight:700;">👁 Вид от первого лица (глазами моей героини)</div>
+                    <div style="font-size:0.84em; opacity:0.8;">Твою персону не рисуют — сцена и собеседник показаны прямо от твоего лица (POV)</div>
+                </div>
+            </div>
+        `).on('click', () => finish(true));
+
+        grid.append(thirdBtn, povBtn);
+        el.append(grid);
+        openPopup(el).then(() => {
+            if (!settled) { settled = true; resolve(null); }
+        });
+    });
+}
+
 let sceneDrawing = false;
-async function drawScene(popupEl, mesId) {
+async function drawScene(popupEl, mesId, povMode = false) {
     if (sceneDrawing) return toastr.info('Сцена уже рисуется', '🎬 Сцена');
     if (!canDrawScene()) return toastr.warning('Не выбрано, чем рисовать: настрой «Чем рисовать» в настройках блокнота.', '🎬 Сцена', { timeOut: 8000 });
     const st = store();
@@ -3037,7 +3509,7 @@ async function drawScene(popupEl, mesId) {
         // 1) описание сцены текстовой моделью
         let desc = '';
         let cast = [];
-        const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st, mesId)));
+        const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st, mesId, povMode)));
         for (const line of answerLines(raw || '')) {
             let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
             if (m) { cast = m[1].split(/[,;]/).map(x => x.trim().toLowerCase().replace(/ё/g, 'е')).filter(Boolean); continue; }
@@ -3045,7 +3517,7 @@ async function drawScene(popupEl, mesId) {
             if (m) desc = m[1].trim().replace(/\]$/, '');
         }
         if (!desc) throw new Error('модель не описала сцену — попробуй ещё раз');
-        // 2) образцы: аватар персоны и аватары тех, кто в кадре
+        // 2) образцы: аватар персоны (только если НЕ вид от первого лица!) и аватары тех, кто в кадре
         say('🎨 Рисую сцену…');
         const names = storyNames();
         const norm = x => String(x || '').toLowerCase().replace(/ё/g, 'е');
@@ -3053,7 +3525,7 @@ async function drawScene(popupEl, mesId) {
         const images = [];
         const who = [];
         if (settings().imageRef) {
-            if (inFrame(names.user)) {
+            if (!povMode && inFrame(names.user)) {
                 const me = await personaAvatarDataUrl();
                 if (me) { images.push(me); who.push(names.user); }
             }
@@ -3068,12 +3540,18 @@ async function drawScene(popupEl, mesId) {
                 if (img) { images.push(img); who.push(npc.name); }
             }
         }
-        const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description.` } : null;
-        const prompt = cleanForCommand(`${desc} Single illustration, no text, no captions.`);
-        console.log('[npc_notebook] drawScene: drawing picture...');
+        const gazeNote = povMode
+            ? `First-person POV perspective seen through ${names.user}'s eyes; ${names.user} is NOT in the frame.`
+            : `Candid cinematic third-person scene: characters are looking at each other or at the action in the scene, NEVER looking into the camera or at the viewer.`;
+        const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description. ${gazeNote}` } : null;
+        const cameraSuffix = povMode
+            ? `first-person POV view through ${names.user}'s eyes, ${names.user} not visible in frame, single illustration, no text, no captions.`
+            : `candid cinematic scene, characters looking at each other, interacting naturally, NOT looking at viewer, NOT looking at camera, single illustration, no text, no captions.`;
+        const prompt = cleanForCommand(`${desc}. ${cameraSuffix}`);
+        console.log('[npc_notebook] drawScene: drawing picture (pov=' + povMode + ')...');
         const url = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
         if (!Array.isArray(st.scenes)) st.scenes = [];
-        st.scenes.push({ url, at: ctx().chat.length, date: st.time?.date || '', desc });
+        st.scenes.push({ url, at: ctx().chat.length, date: st.time?.date || '', desc, pov: povMode });
         if (st.scenes.length > 100) st.scenes.shift();
         await ctx().saveMetadata();
         renderPanel();
@@ -3171,10 +3649,12 @@ async function showAlbum() {
 async function showScenePopup(mesId) {
     if (!Number.isInteger(mesId)) mesId = undefined;
     if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится в посте сама', '🎬 Сцена');
-    const note = toastr.info('Рисую сцену… Нажми на уведомление, чтобы скрыть.', '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
+    const povMode = await askSceneCameraMode();
+    if (povMode === null) return;
+    const note = toastr.info(povMode ? 'Рисую сцену от первого лица (POV)… Нажми на уведомление, чтобы скрыть.' : 'Рисую сцену (оба в кадре)… Нажми на уведомление, чтобы скрыть.', '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
     let url = '';
     try {
-        url = await drawScene(null, mesId);
+        url = await drawScene(null, mesId, povMode);
     } catch (e) {
         console.error('[npc_notebook] showScenePopup error:', e);
     } finally {
@@ -3399,14 +3879,35 @@ function visualPicker({ kind, items, title, label, onPick, field, failField, a, 
             grid.append(card);
         });
         box.append(grid);
-        // карусель: по одной карточке на экран, листаем пальцем; точки внизу показывают, где мы
+        // карусель: по одной карточке на экран, листаем пальцем или кнопками ◀ ▶; точки внизу показывают, где мы
         if (url && items.length > 1) {
-            const dots = $('<div class="nnb-dots"></div>');
-            items.forEach((_, i) => dots.append($('<span tabindex="0"></span>').on('click', () => { const el = grid[0]; el.scrollTo?.({ left: i * el.clientWidth, behavior: 'smooth' }); })));
-            const mark = () => { const el = grid[0]; const i = el.clientWidth ? Math.round(el.scrollLeft / el.clientWidth) : 0; dots.children().each((j, d) => $(d).toggleClass('active', j === i)); };
+            const navWrap = $('<div style="display:flex; align-items:center; justify-content:center; gap:12px; margin:8px 0 4px;"></div>');
+            const prevBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.85em;"><i class="fa-solid fa-chevron-left"></i></div>');
+            const nextBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.85em;"><i class="fa-solid fa-chevron-right"></i></div>');
+            const dots = $('<div class="nnb-dots" style="margin:0;"></div>');
+            const goToIdx = idx => {
+                const el = grid[0];
+                if (!el) return;
+                const clamped = Math.max(0, Math.min(items.length - 1, idx));
+                el.scrollTo?.({ left: clamped * el.clientWidth, behavior: 'smooth' });
+            };
+            const curIdx = () => {
+                const el = grid[0];
+                return (el && el.clientWidth) ? Math.round(el.scrollLeft / el.clientWidth) : 0;
+            };
+            prevBtn.on('click', e => { e.stopPropagation(); goToIdx(curIdx() - 1); });
+            nextBtn.on('click', e => { e.stopPropagation(); goToIdx(curIdx() + 1); });
+            items.forEach((_, i) => dots.append($('<span tabindex="0"></span>').on('click', () => goToIdx(i))));
+            const mark = () => {
+                const i = curIdx();
+                dots.children().each((j, d) => $(d).toggleClass('active', j === i));
+                prevBtn.css('opacity', i <= 0 ? 0.35 : 1);
+                nextBtn.css('opacity', i >= items.length - 1 ? 0.35 : 1);
+            };
             grid.on('scroll', mark);
             mark();
-            box.append(dots);
+            navWrap.append(prevBtn, dots, nextBtn);
+            box.append(navWrap);
         }
         if (url && imgs.length && typeof Image === 'function') {
             const probe = new Image();
@@ -3681,7 +4182,7 @@ function renderReadyAccentsBlock(st, onRefresh) {
                 card.append(findThumb(x, '58px').css('flex-shrink', '0'));
             }
             const info = $('<div style="flex:1; min-width:0;"></div>');
-            info.append($('<div style="font-weight:600; font-size:0.92em; line-height:1.25;"></div>').text(`${(ACCENT_KINDS[x.kind] || ACCENT_KINDS.accessory).icon} ${x.title}${active ? ' · ✓ надето' : ''}`));
+            info.append($('<div style="font-weight:600; font-size:0.91em; line-height:1.25;"></div>').text(`${x.title}${active ? ' ✓' : ''}`));
             if (x.desc) info.append($('<div class="nnb-npc-status" style="font-size:0.8em; margin-top:2px;"></div>').text(x.desc));
             card.append(info);
             card.on('click', async () => {
@@ -3695,8 +4196,8 @@ function renderReadyAccentsBlock(st, onRefresh) {
         return sec;
     };
 
-    wrap.append(buildAccentGrid('🌸 Готовые штрихи: Духи', perfumes, 'Духов пока нет.', '_uiOpenPerfumes'));
-    wrap.append(buildAccentGrid('💍 Готовые штрихи: Аксессуары и украшения', accessories, 'Аксессуаров пока нет.', '_uiOpenAccessories'));
+    wrap.append(buildAccentGrid('🌸 Духи', perfumes, 'Духов пока нет.', '_uiOpenPerfumes'));
+    wrap.append(buildAccentGrid('💍 Аксессуары и украшения', accessories, 'Аксессуаров пока нет.', '_uiOpenAccessories'));
     return wrap;
 }
 
@@ -3732,6 +4233,20 @@ function renderActiveWornBanner(st, onRefresh) {
         body.append($('<div class="nnb-npc-status" style="margin-top:4px; color:var(--SmartThemeQuoteColor, #e0c068);"></div>').text(`Штрихи образа: ${acStr}`));
     }
     const curBtns = $('<div class="nnb-pop-row" style="margin-top:8px; gap:6px; flex-wrap:wrap;"></div>');
+    if (Array.isArray(a.options) && a.options.length > 1) {
+        curBtns.append($('<div class="menu_button nnb-btn-primary" style="padding:3px 9px; font-size:0.85em;" title="Вернуться к 5 сгенерированным нарядам, чтобы добрать понравившиеся в шкаф"><i class="fa-solid fa-arrow-left"></i> Назад к 5 нарядам</div>').on('click', async () => {
+            a.status = 'choosing';
+            await commit();
+            closeBook();
+            await showWardrobePopup();
+        }));
+    }
+    if (Array.isArray(a.accents) && a.accents.length > 0) {
+        curBtns.append($('<div class="menu_button" style="padding:3px 9px; font-size:0.85em;" title="Открыть выбор сгенерированных штрихов к этому образу"><i class="fa-solid fa-wand-magic-sparkles"></i> К новым штрихам</div>').on('click', async () => {
+            closeBook();
+            await showAccentPopup();
+        }));
+    }
     curBtns.append($('<div class="menu_button" style="padding:3px 8px; font-size:0.85em;"><i class="fa-solid fa-masks-theater"></i> Сцена прошла (итог)</div>').on('click', () => runReveal()));
     curBtns.append($('<div class="menu_button" style="padding:3px 8px; font-size:0.85em;"><i class="fa-solid fa-xmark"></i> Снять наряд</div>').on('click', async () => {
         st.wardrobe.active = null;
@@ -3933,13 +4448,88 @@ async function chooseOutfit(i, customText, extraSaveIndices = []) {
     await checkPendingTravel();
 }
 
-async function chooseAccent(accent) {
+async function attachAccentCropsFromActive(a) {
+    if (!a?.accentImage || !Array.isArray(a.accents) || !a.accents.length) return;
+    const n = Math.min(a.accents.length, 4);
+    const L = a.accentImageLayout || accentsLayout(n);
+    let crops = [];
+    try {
+        crops = await smartCrops(a.accentImage, n, 'accents', L);
+    } catch (e) { crops = []; }
+    for (let idx = 0; idx < a.accents.length; idx++) {
+        if (idx >= n) break;
+        const r = Math.floor(idx / L.cols), c = idx % L.cols;
+        const colW = 1 / L.cols, rowH = 1 / L.rows;
+        const fallback = { x: c * colW + colW * 0.08, y: r * rowH + rowH * 0.08, w: colW * 0.84, h: rowH * 0.84 };
+        a.accents[idx].image = a.accentImage;
+        a.accents[idx].imageLayout = L;
+        a.accents[idx].crop = crops[idx] || fallback;
+    }
+}
+
+function saveAccentToBox(st, ac) {
+    if (!st?.wardrobe || !ac?.title) return null;
+    if (!Array.isArray(st.wardrobe.box)) st.wardrobe.box = [];
+    if (!st.wardrobe.nextItemId) st.wardrobe.nextItemId = 1;
+    const existing = st.wardrobe.box.find(x => !x.onCounter && x.title.toLowerCase() === ac.title.toLowerCase());
+    if (existing) {
+        if (ac.desc) existing.desc = ac.desc;
+        if (ac.en) existing.en = ac.en;
+        if (ac.effects) existing.effects = ac.effects;
+        if (ac.image) existing.image = ac.image;
+        if (ac.crop) existing.crop = ac.crop;
+        if (ac.imageLayout) existing.imageLayout = ac.imageLayout;
+        return existing;
+    }
+    const item = {
+        id: st.wardrobe.nextItemId++,
+        kind: ac.kind === 'perfume' ? 'perfume' : 'accessory',
+        title: ac.title.trim(),
+        desc: ac.desc || '',
+        en: ac.en || '',
+        effects: ac.effects || '',
+        origin: ac.origin || 'штрих к образу',
+        image: ac.image || '',
+        crop: ac.crop || null,
+        imageLayout: ac.imageLayout || null,
+        onCounter: false,
+        at: ctx().chat?.length ?? 0,
+    };
+    st.wardrobe.box.push(item);
+    return item;
+}
+
+async function chooseAccent(accent, extraWearList = [], saveToClosetList = []) {
     const st = store();
     const a = st?.wardrobe.active;
     if (!a || a.status !== 'worn') return;
-    a.accent = accent || null;
+    await attachAccentCropsFromActive(a);
+
+    const wearAll = [];
+    if (accent) wearAll.push(accent);
+    (extraWearList || []).forEach(ac => {
+        if (ac && !wearAll.some(x => x.title.toLowerCase() === ac.title.toLowerCase())) {
+            wearAll.push(ac);
+        }
+    });
+
+    const saveAll = [...wearAll];
+    (saveToClosetList || []).forEach(ac => {
+        if (ac && !saveAll.some(x => x.title.toLowerCase() === ac.title.toLowerCase())) {
+            saveAll.push(ac);
+        }
+    });
+    saveAll.forEach(ac => {
+        if (!ac.fromBox && ac.kind !== 'makeup') {
+            saveAccentToBox(st, ac);
+        }
+    });
+
+    a.selectedAccents = wearAll;
+    a.accent = wearAll[0] || null;
     await commit();
-    toastr.success(`Образ «${escapeHtml(a.look.title)}»${accent ? ` + ${escapeHtml(accent.title)}` : ''}. Последствия узнаешь по ходу сцены.`, '👗 Гардероб', { escapeHtml: false });
+    const wornNames = wearAll.map(x => `«${escapeHtml(x.title)}»`).join(', ');
+    toastr.success(`Образ «${escapeHtml(a.look.title)}»${wornNames ? ` + ${wornNames}` : ''}${saveAll.length ? ` (сохранено штрихов в шкаф: ${saveAll.filter(x => x.kind !== 'makeup').length})` : ''}.`, '👗 Гардероб', { escapeHtml: false });
     await checkPendingTravel();
 }
 
@@ -3949,33 +4539,254 @@ async function showAccentPopup() {
     if (!a || a.status !== 'worn') return;
     const accents = a.accents || [];
     const visual = wantImages() && accents.length > 0;
-    const el = $(`<div class="nnb-pop${visual ? ' nnb-pop-visual' : ''}"><h3>✨ Добавить штрих?</h3></div>`);
-    el.append($('<div class="nnb-pop-sub"></div>').text(`К образу «${a.look.title}»`));
     const icon = k => (ACCENT_KINDS[k] || ACCENT_KINDS.accessory).icon;
-    const pickAccent = async i => { closePopupOf(el); await chooseAccent(accents[i]); };
-    const card = (title, desc, sub, fn) => {
-        const c = $('<div class="nnb-look" tabindex="0"><div class="nnb-look-title"></div><div class="nnb-look-desc"></div></div>');
-        c.find('.nnb-look-title').text(title);
-        c.find('.nnb-look-desc').text([desc, sub].filter(Boolean).join(' · '));
-        c.on('click', async () => { closePopupOf(el); await fn(); });
-        return c;
-    };
-    if (visual) {
-        el.append(visualPicker({ kind: 'accents', items: accents, title: x => x.title, label: x => (ACCENT_KINDS[x.kind] || ACCENT_KINDS.accessory).name, onPick: pickAccent, field: 'accentImage', failField: 'accentImageFailed', a }));
-    } else {
-        accents.forEach((ac, i) => el.append(card(`${icon(ac.kind)} ${ac.title}`, ac.desc, '', () => chooseAccent(accents[i]))));
+
+    const wearSet = new Set();
+    const saveSet = new Set();
+    const boxWearSet = new Set();
+    let currentSlide = 0;
+
+    if (accents.length) {
+        wearSet.add(0);
+        saveSet.add(0);
     }
+
+    const el = $(`<div class="nnb-pop${visual ? ' nnb-pop-visual' : ''}"></div>`);
+
+    // Верхняя шапка с кнопкой «⬅ Назад к нарядам»
+    const topHead = $('<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;"></div>');
+    const backToLooksBtn = $('<div class="menu_button" style="padding:5px 12px; font-weight:600;" title="Вернуться к выбору из 5 нарядов, чтобы добрать понравившиеся образы в шкаф"><i class="fa-solid fa-arrow-left"></i> Назад к нарядам</div>');
+    backToLooksBtn.on('click', async () => {
+        closePopupOf(el);
+        a.status = 'choosing';
+        await commit();
+        await showWardrobePopup();
+    });
+    const headTitle = $('<h3 style="margin:0; flex:1; text-align:center;">✨ Штрихи к образу</h3>');
+    const saveAllAccBtn = $('<div class="menu_button" style="padding:5px 10px; font-size:0.84em;"><i class="fa-solid fa-check-double"></i> Все в шкаф</div>');
+    topHead.append(backToLooksBtn, headTitle, accents.length ? saveAllAccBtn : $('<span></span>'));
+    el.append(topHead);
+
+    el.append($('<div class="nnb-pop-sub"></div>').text(`К образу «${a.look.title}» — можно надеть сразу несколько штрихов (например духи + украшение), а остальные отметить галочкой «☑️ В шкаф», чтобы убрать в коллекцию:`));
+
+    // Навигация карусели (по 1 карточке на экран)
+    const carouselNav = $('<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin:4px 0; padding:6px 10px; border-radius:10px; background:color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 10%, transparent);"></div>');
+    const prevBtn = $('<div class="menu_button" style="padding:5px 12px; font-weight:600;"><i class="fa-solid fa-chevron-left"></i> Предыдущий</div>');
+    const slideInfo = $('<div style="font-weight:700; font-size:0.95em; text-align:center;"></div>');
+    const nextBtn = $('<div class="menu_button" style="padding:5px 12px; font-weight:600;">Следующий <i class="fa-solid fa-chevron-right"></i></div>');
+    carouselNav.append(prevBtn, slideInfo, nextBtn);
+    if (accents.length > 1) el.append(carouselNav);
+
+    const cardsHost = $('<div></div>');
+    el.append(cardsHost);
+
+    const dotsRow = $('<div class="nnb-dots" style="margin:6px 0;"></div>');
+    if (accents.length > 1) el.append(dotsRow);
+
+    const confirmBtn = $('<div class="menu_button nnb-btn-primary" style="padding:8px 14px;"></div>');
+    const noneBtn = $('<div class="menu_button" style="padding:8px 12px;"><i class="fa-solid fa-xmark"></i> Без штрихов</div>');
+
+    const n = Math.min(accents.length, 4);
+    const layoutOf = () => a.accentImageLayout || accentsLayout(n);
+    const cellOf = i => {
+        const L = layoutOf();
+        const r = Math.floor(i / L.cols), c = i % L.cols;
+        const colW = 1 / L.cols, rowH = 1 / L.rows;
+        const padX = colW * 0.08, padY = rowH * 0.08;
+        return { x: c * colW + padX, y: r * rowH + padY, w: colW - padX * 2, h: rowH - padY * 2 };
+    };
+
+    const updateAccentsUI = () => {
+        if (accents.length > 1) {
+            slideInfo.text(`Штрих ${currentSlide + 1} из ${accents.length}`);
+            prevBtn.css({ opacity: currentSlide <= 0 ? 0.4 : 1, pointerEvents: currentSlide <= 0 ? 'none' : 'auto' });
+            nextBtn.css({ opacity: currentSlide >= accents.length - 1 ? 0.4 : 1, pointerEvents: currentSlide >= accents.length - 1 ? 'none' : 'auto' });
+            dotsRow.children().each((j, d) => $(d).toggleClass('active', j === currentSlide));
+        }
+
+        cardsHost.find('.nnb-accent-slide').each(function (idx) {
+            const cardEl = $(this);
+            cardEl.toggle(idx === currentSlide);
+            const isWear = wearSet.has(idx);
+            const isSave = saveSet.has(idx);
+            cardEl.css({
+                'border-color': isWear ? 'var(--SmartThemeQuoteColor, #8b78c4)' : isSave ? 'color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 60%, transparent)' : 'var(--SmartThemeBorderColor)',
+                'border-width': isWear ? '2px' : '1px',
+            });
+            cardEl.find('.nnb-acc-save-cb').prop('checked', isSave);
+            cardEl.find('.nnb-acc-save-label').text(isSave ? 'В шкаф (отмечено)' : 'Убрать в шкаф');
+            cardEl.find('.nnb-acc-save-pill').css({
+                'border-color': isSave ? 'var(--SmartThemeQuoteColor, #8b78c4)' : 'var(--SmartThemeBorderColor)',
+                'background': isSave ? 'color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 22%, transparent)' : 'transparent',
+            });
+
+            const wBtn = cardEl.find('.nnb-acc-wear-btn');
+            if (isWear) {
+                wBtn.addClass('nnb-btn-primary').html('<i class="fa-solid fa-check"></i> Надеть сейчас (выбрано)');
+            } else {
+                wBtn.removeClass('nnb-btn-primary').html('<i class="fa-solid fa-sparkles"></i> Надеть сейчас');
+            }
+        });
+
+        const totalWear = wearSet.size + boxWearSet.size;
+        const totalSave = new Set([...wearSet, ...saveSet]).size;
+        confirmBtn.html(`<i class="fa-solid fa-check"></i> Применить (надеть: ${totalWear}, в шкаф: ${totalSave})`);
+    };
+
+    const renderAccentSlides = url => {
+        cardsHost.empty();
+        dotsRow.empty();
+        const hasUrl = !!url;
+        const imgs = [];
+
+        accents.forEach((ac, i) => {
+            const kObj = ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory;
+            const card = $('<div class="nnb-look nnb-accent-slide" style="display:flex; flex-direction:column; gap:8px; padding:12px; border-radius:12px; cursor:pointer;"></div>');
+
+            // Верхняя панель карточки: галочка «☑️ Убрать в шкаф» + кнопка «✨ Надеть сейчас»
+            const topBar = $('<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;"></div>');
+            const savePill = $(`
+                <label class="nnb-acc-save-pill" style="display:inline-flex; align-items:center; gap:7px; padding:5px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); cursor:pointer; user-select:none; font-size:0.86em;">
+                    <input type="checkbox" class="nnb-acc-save-cb" style="width:17px !important; height:17px !important; margin:0 !important; cursor:pointer; accent-color:var(--SmartThemeQuoteColor, #8b78c4); display:inline-block !important; opacity:1 !important; appearance:auto !important; -webkit-appearance:checkbox !important;">
+                    <span class="nnb-acc-save-label">Убрать в шкаф</span>
+                </label>
+            `);
+            savePill.on('click', e => e.stopPropagation());
+            savePill.find('.nnb-acc-save-cb').on('change', function (e) {
+                e.stopPropagation();
+                if ($(this).prop('checked')) saveSet.add(i);
+                else saveSet.delete(i);
+                updateAccentsUI();
+            });
+
+            const wearBtn = $('<div class="menu_button nnb-acc-wear-btn" style="padding:5px 12px; font-size:0.86em; margin:0;"></div>');
+            wearBtn.on('click', e => {
+                e.stopPropagation();
+                if (wearSet.has(i)) wearSet.delete(i);
+                else { wearSet.add(i); saveSet.add(i); }
+                updateAccentsUI();
+            });
+
+            topBar.append(savePill, wearBtn);
+            card.append(topBar);
+
+            if (hasUrl && i < n) {
+                const img = $('<div class="nnb-card-img" style="border-radius:10px; overflow:hidden; width:100%; aspect-ratio:1/1; max-height:320px; margin:2px auto;"></div>');
+                applyCrop(img, url, cellOf(i), layoutOf().rows === 2 ? 2 / 3 : 1.5);
+                card.append(img);
+                imgs.push(img);
+            }
+
+            card.append($('<div style="font-size:0.78em; text-transform:uppercase; opacity:0.7; letter-spacing:0.06em;"></div>').text(`${kObj.icon} ${kObj.name}`));
+            card.append($('<div class="nnb-look-title" style="font-size:1.05em;"></div>').text(`«${ac.title}»`));
+            if (ac.desc) card.append($('<div class="nnb-look-desc"></div>').text(ac.desc));
+
+            // Поддержка свайпа пальцем влево/вправо
+            let tStartX = null;
+            card.on('touchstart', e => { tStartX = e.originalEvent?.touches?.[0]?.clientX ?? null; });
+            card.on('touchend', e => {
+                if (tStartX === null) return;
+                const dx = (e.originalEvent?.changedTouches?.[0]?.clientX ?? tStartX) - tStartX;
+                tStartX = null;
+                if (dx > 40 && currentSlide > 0) { currentSlide--; updateAccentsUI(); }
+                else if (dx < -40 && currentSlide < accents.length - 1) { currentSlide++; updateAccentsUI(); }
+            });
+
+            card.on('click', () => {
+                if (saveSet.has(i)) saveSet.delete(i);
+                else saveSet.add(i);
+                updateAccentsUI();
+            });
+
+            cardsHost.append(card);
+            dotsRow.append($('<span tabindex="0"></span>').on('click', () => { currentSlide = i; updateAccentsUI(); }));
+        });
+
+        updateAccentsUI();
+
+        if (hasUrl && imgs.length && typeof Image === 'function') {
+            const probe = new Image();
+            probe.onload = async () => {
+                const ratio = probe.naturalWidth / probe.naturalHeight || 1.5;
+                const crops = await smartCrops(url, n, 'accents', layoutOf());
+                imgs.forEach((elImg, idx) => {
+                    applyCrop(elImg, url, crops[idx] || cellOf(idx), ratio);
+                    if (crops.bg) elImg.css('background-color', crops.bg);
+                });
+            };
+            probe.src = url;
+        }
+    };
+
+    prevBtn.on('click', () => { if (currentSlide > 0) { currentSlide--; updateAccentsUI(); } });
+    nextBtn.on('click', () => { if (currentSlide < accents.length - 1) { currentSlide++; updateAccentsUI(); } });
+    saveAllAccBtn.on('click', () => {
+        if (saveSet.size === accents.length) saveSet.clear();
+        else accents.forEach((_, idx) => saveSet.add(idx));
+        updateAccentsUI();
+    });
+
+    if (visual && !a.accentImage && !a.accentImageFailed) {
+        cardsHost.html('<div class="nnb-pop-sub nnb-wait" style="padding:20px; text-align:center;">🎨 Рисую штрихи…</div>');
+        ensurePicture('accents', false, url => renderAccentSlides(url || ''));
+    } else if (accents.length) {
+        renderAccentSlides(visual ? (a.accentImage || '') : '');
+    }
+
     const fresh = wearableBox(st).filter(x => !accents.some(ac => ac.title.toLowerCase() === x.title.toLowerCase()));
     if (fresh.length) {
-        el.append('<div class="nnb-pop-sub nnb-box-head">🎁 Из шкатулки</div>');
+        el.append('<div class="nnb-pop-sub nnb-box-head" style="margin-top:6px;">🎁 Или добавь из своих готовых штрихов / шкатулки (можно несколько):</div>');
         const boxRow = $('<div class="nnb-chips-row"></div>');
-        fresh.forEach(x => boxRow.append($('<div class="menu_button nnb-look-chip" tabindex="0"></div>').text(`${icon(x.kind)} ${x.title}`).attr('title', x.origin || '')
-            .on('click', async () => { closePopupOf(el); await chooseAccent({ kind: x.kind === 'find' ? 'pocket' : x.kind, title: x.title, desc: x.desc, origin: x.origin, effects: '', fromBox: true }); })));
+        fresh.forEach(x => {
+            const ch = $('<div class="nnb-travel-chip" tabindex="0"></div>').text(`${icon(x.kind)} ${x.title}`).attr('title', x.origin || x.desc || '');
+            ch.on('click', () => {
+                if (boxWearSet.has(x)) {
+                    boxWearSet.delete(x);
+                    ch.removeClass('active');
+                } else {
+                    boxWearSet.add(x);
+                    ch.addClass('active');
+                }
+                updateAccentsUI();
+            });
+            boxRow.append(ch);
+        });
         el.append(boxRow);
     }
-    const none = $('<div class="menu_button"><i class="fa-solid fa-xmark"></i> Без штриха</div>');
-    none.on('click', async () => { closePopupOf(el); await chooseAccent(null); });
-    el.append($(`<div class="nnb-pop-row${visual ? ' nnb-pop-links' : ''}"></div>`).append(none));
+
+    confirmBtn.on('click', async () => {
+        closePopupOf(el);
+        const wornFromNew = [...wearSet].map(idx => accents[idx]).filter(Boolean);
+        const wornFromBox = [...boxWearSet].map(x => ({
+            id: x.id,
+            kind: x.kind === 'find' ? 'pocket' : x.kind,
+            title: x.title,
+            desc: x.desc,
+            origin: x.origin,
+            image: x.image || '',
+            crop: x.crop || null,
+            effects: '',
+            fromBox: true,
+        }));
+        const allWear = [...wornFromNew, ...wornFromBox];
+        const allSave = [...saveSet].map(idx => accents[idx]).filter(Boolean);
+        await chooseAccent(allWear[0] || null, allWear.slice(1), allSave);
+    });
+
+    noneBtn.on('click', async () => {
+        closePopupOf(el);
+        const allSave = [...saveSet].map(idx => accents[idx]).filter(Boolean);
+        await chooseAccent(null, [], allSave);
+    });
+
+    const bottomBackBtn = $('<div class="menu_button" style="padding:8px 12px;"><i class="fa-solid fa-arrow-left"></i> Назад к нарядам</div>').on('click', async () => {
+        closePopupOf(el);
+        a.status = 'choosing';
+        await commit();
+        await showWardrobePopup();
+    });
+
+    el.append($('<div class="nnb-pop-row" style="margin-top:10px; gap:8px; flex-wrap:wrap;"></div>').append(bottomBackBtn, confirmBtn, noneBtn));
     if (!(await openPopup(el, visual))) await chooseAccent(null);
     if (st?.map?.pendingTravel) await chooseAccent(null);
 }
@@ -4519,85 +5330,300 @@ async function showWardrobePopup() {
     const st = store();
     const a = st?.wardrobe.active;
     if (!a || a.status !== 'choosing') return;
-    const selected = new Set();
+    const selected = new Set([0]);
     let wearIndex = 0;
+    let carouselMode = true; // Всегда показываем по 1 карточке на экран с удобным перелистыванием!
+    let currentSlide = 0;
 
     const visual = wantImages();
     const el = $(`<div class="nnb-pop${visual ? ' nnb-pop-visual' : ''}"><h3>👗 Выбери образы (можно несколько!)</h3></div>`);
     if (a.occasion) el.append($('<div class="nnb-pop-sub"></div>').text(`Повод: ${a.occasion}`));
-    el.append('<div class="nnb-pop-sub">Отметь галочками все понравившиеся варианты — они сохранятся в твой 👗 Шкаф! Нажми «👕 Надеть сейчас» на одном из них или кнопку подтверждения внизу:</div>');
+    el.append('<div class="nnb-pop-sub">Нажатие на карточку <b>не закрывает окно</b> — спокойно рассмотри все 5 вариантов, отметь галочками <b>«☑️ В шкаф»</b> все понравившиеся наряды и нажми кнопку подтверждения внизу:</div>');
 
-    const cards = $('<div class="nnb-looks"></div>');
-    const confirmBtn = $('<div class="menu_button nnb-btn-primary"><i class="fa-solid fa-check"></i> Надеть и сохранить выбранные (1)</div>');
-    const saveOnlyBtn = $('<div class="menu_button"><i class="fa-solid fa-box-archive"></i> Только сохранить в шкаф</div>');
+    // Верхняя панель управления выбором и видом
+    const topToolbar = $('<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0;"></div>');
+    const leftTools = $('<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>');
+    const selectAllBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.85em;"><i class="fa-solid fa-check-double"></i> Отметить все 5 в шкаф</div>');
+    leftTools.append(selectAllBtn);
 
-    const updateSelectionUI = () => {
-        cards.find('.nnb-look').each(function (idx) {
-            const isSel = selected.has(idx);
-            const isWear = wearIndex === idx;
-            $(this).css('border-color', isWear ? 'var(--SmartThemeQuoteColor, #8b78c4)' : isSel ? 'rgba(139, 120, 196, 0.55)' : '');
-            $(this).find('.nnb-look-cb').prop('checked', isSel);
-            $(this).find('.nnb-wear-badge').text(isWear ? '👕 Надеть сейчас + в шкаф' : isSel ? '📥 Сохранить в шкаф' : 'Нажми, чтобы отметить');
-        });
-        const count = Math.max(1, selected.size);
-        confirmBtn.html(`<i class="fa-solid fa-shirt"></i> Надеть «${escapeHtml(a.options[wearIndex]?.title || '')}» ${selected.size > 1 ? `и сохранить все (${selected.size}) в шкаф` : '(+ в шкаф)'}`);
+    const rightTools = $('<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>');
+    const viewModeBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.85em;" title="Переключить вид: все 5 сразу или по одному крупно"></div>');
+    const redrawBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.85em;" title="Перерисовать картинку образов"><i class="fa-solid fa-palette"></i> Перерисовать</div>');
+    const fullImgBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.85em;" title="Открыть общий лист образов во весь экран"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Весь лист</div>');
+    if (visual) {
+        rightTools.append(redrawBtn, fullImgBtn);
+    }
+    topToolbar.append(leftTools, rightTools);
+    el.append(topToolbar);
+
+    // Навигация для режима «По одному (карусель)»
+    const carouselNav = $('<div style="display:none; align-items:center; justify-content:space-between; gap:8px; margin:4px 0; padding:6px 10px; border-radius:10px; background:color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 10%, transparent);"></div>');
+    const prevSlideBtn = $('<div class="menu_button" style="padding:5px 12px; font-weight:600;"><i class="fa-solid fa-chevron-left"></i> Предыдущий</div>');
+    const slideIndicator = $('<div style="font-weight:700; font-size:0.95em; text-align:center;"></div>');
+    const nextSlideBtn = $('<div class="menu_button" style="padding:5px 12px; font-weight:600;">Следующий <i class="fa-solid fa-chevron-right"></i></div>');
+    carouselNav.append(prevSlideBtn, slideIndicator, nextSlideBtn);
+    el.append(carouselNav);
+
+    const cardsHost = $('<div class="nnb-looks-host"></div>');
+    el.append(cardsHost);
+
+    const confirmBtn = $('<div class="menu_button nnb-btn-primary" style="padding:8px 14px; font-size:0.95em;"></div>');
+    const saveOnlyBtn = $('<div class="menu_button" style="padding:8px 12px;"></div>');
+    const saveAllQuickBtn = $('<div class="menu_button" style="padding:8px 12px;"><i class="fa-solid fa-layer-group"></i> Сохранить все 5 в шкаф</div>');
+
+    const n = Math.min(a.options.length, 5);
+    const layoutOf = () => a.imageLayout || looksLayout(n);
+    const cellOf = i => {
+        const L = layoutOf();
+        const r = Math.floor(i / L.cols), c = i % L.cols;
+        const colW = 1 / L.cols, rowH = 1 / L.rows;
+        const padX = colW * 0.08, padY = rowH * 0.08;
+        return {
+            x: c * colW + padX,
+            y: r * rowH + padY,
+            w: colW - padX * 2,
+            h: rowH - padY * 2,
+        };
     };
 
-    selected.add(0);
+    const updateSelectionUI = () => {
+        const allSelected = selected.size === a.options.length;
+        selectAllBtn.html(allSelected
+            ? '<i class="fa-solid fa-square-minus"></i> Снять отметки (кроме надеваемого)'
+            : `<i class="fa-solid fa-check-double"></i> Отметить все ${a.options.length} в шкаф`);
 
-    a.options.forEach((o, i) => {
-        const card = $('<div class="nnb-look" tabindex="0"></div>');
-        const topRow = $('<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;"></div>');
-        const titleLabel = $('<label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; flex:1;"><input type="checkbox" class="nnb-look-cb"><span class="nnb-look-title"></span></label>');
-        titleLabel.find('.nnb-look-title').text(`${i + 1}. ${o.title}${o.category ? ` (${o.category})` : ''}`);
-        const badge = $('<span class="nnb-wear-badge" style="font-size:0.8em; opacity:0.85; cursor:pointer; padding:2px 8px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor);"></span>');
-        badge.on('click', (e) => {
-            e.stopPropagation();
-            selected.add(i);
-            wearIndex = i;
-            updateSelectionUI();
+        viewModeBtn.html(carouselMode
+            ? '<i class="fa-solid fa-table-cells-large"></i> Показать все 5 сразу'
+            : '<i class="fa-solid fa-maximize"></i> Листать по одному крупно');
+        fullImgBtn.toggle(!!a.image);
+
+        if (carouselMode) {
+            carouselNav.css('display', 'flex');
+            slideIndicator.text(`Наряд ${currentSlide + 1} из ${a.options.length}`);
+            prevSlideBtn.css({ opacity: currentSlide <= 0 ? 0.4 : 1, pointerEvents: currentSlide <= 0 ? 'none' : 'auto' });
+            nextSlideBtn.css({ opacity: currentSlide >= a.options.length - 1 ? 0.4 : 1, pointerEvents: currentSlide >= a.options.length - 1 ? 'none' : 'auto' });
+        } else {
+            carouselNav.hide();
+        }
+
+        cardsHost.find('.nnb-look-unified').each(function (idx) {
+            const cardEl = $(this);
+            const isSel = selected.has(idx);
+            const isWear = wearIndex === idx;
+
+            if (carouselMode) {
+                cardEl.toggle(idx === currentSlide);
+            } else {
+                cardEl.show();
+            }
+
+            cardEl.css({
+                'border-color': isWear
+                    ? 'var(--SmartThemeQuoteColor, #8b78c4)'
+                    : isSel
+                        ? 'color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 65%, transparent)'
+                        : 'var(--SmartThemeBorderColor)',
+                'border-width': isWear ? '2px' : '1px',
+                'background': isWear
+                    ? 'color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 14%, transparent)'
+                    : isSel
+                        ? 'color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 6%, transparent)'
+                        : 'color-mix(in srgb, var(--SmartThemeBodyColor, #888) 4%, transparent)',
+            });
+
+            const cbInput = cardEl.find('.nnb-look-cb');
+            cbInput.prop('checked', isSel);
+
+            const cbPill = cardEl.find('.nnb-look-check-pill');
+            cbPill.css({
+                'border-color': isSel ? 'var(--SmartThemeQuoteColor, #8b78c4)' : 'var(--SmartThemeBorderColor)',
+                'background': isSel ? 'color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 24%, transparent)' : 'transparent',
+                'font-weight': isSel ? '700' : '500',
+            });
+            cardEl.find('.nnb-look-cb-label').text(isSel ? 'В шкаф (отмечено)' : 'Сохранить в шкаф');
+
+            const wearBtn = cardEl.find('.nnb-look-wear-btn');
+            if (isWear) {
+                wearBtn.addClass('nnb-btn-primary').html('<i class="fa-solid fa-shirt"></i> Выбран, чтобы надеть');
+            } else {
+                wearBtn.removeClass('nnb-btn-primary').html('<i class="fa-solid fa-shirt"></i> Надеть этот');
+            }
         });
-        topRow.append(titleLabel, badge);
-        const descDiv = $('<div class="nnb-look-desc" style="margin-top:4px;"></div>').text(o.desc);
-        card.append(topRow, descDiv);
 
-        card.on('click', (e) => {
-            if ($(e.target).is('input')) {
-                if (titleLabel.find('input').prop('checked')) {
+        const saveCount = new Set([wearIndex, ...selected]).size;
+        confirmBtn.html(`<i class="fa-solid fa-shirt"></i> Надеть «${escapeHtml(a.options[wearIndex]?.title || '')}» и сохранить в шкаф (${saveCount})`);
+        saveOnlyBtn.html(`<i class="fa-solid fa-box-archive"></i> Только сохранить отмеченные в шкаф (${selected.size || 1})`);
+    };
+
+    const renderCards = (url) => {
+        cardsHost.empty();
+        const hasUrl = !!url;
+        const grid = $('<div></div>');
+        const applyGridStyle = () => {
+            if (carouselMode) {
+                grid.css({
+                    display: 'block',
+                });
+            } else if (hasUrl) {
+                grid.css({
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                    gap: '12px',
+                    alignItems: 'stretch',
+                });
+            } else {
+                grid.css({
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                });
+            }
+        };
+        applyGridStyle();
+
+        const imgs = [];
+        a.options.forEach((o, i) => {
+            const card = $('<div class="nnb-look nnb-look-unified" tabindex="0" style="display:flex; flex-direction:column; justify-content:space-between; gap:8px; padding:10px; border-radius:12px; cursor:pointer;"></div>');
+
+            // 1. Верхняя панель карточки: заметная галочка «☑️ Сохранить в шкаф» + кнопка «👕 Надеть этот»
+            const topBar = $('<div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;"></div>');
+
+            const checkPill = $(`
+                <label class="nnb-look-check-pill" style="display:inline-flex; align-items:center; gap:7px; padding:5px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); cursor:pointer; user-select:none; font-size:0.86em; transition:all 0.15s ease;">
+                    <input type="checkbox" class="nnb-look-cb" style="width:17px !important; height:17px !important; margin:0 !important; cursor:pointer; accent-color:var(--SmartThemeQuoteColor, #8b78c4); display:inline-block !important; opacity:1 !important; appearance:auto !important; -webkit-appearance:checkbox !important;">
+                    <span class="nnb-look-cb-label">Сохранить в шкаф</span>
+                </label>
+            `);
+
+            checkPill.on('click', e => {
+                e.stopPropagation();
+            });
+            checkPill.find('.nnb-look-cb').on('change', function (e) {
+                e.stopPropagation();
+                if ($(this).prop('checked')) {
                     selected.add(i);
-                    if (selected.size === 1) wearIndex = i;
                 } else {
                     selected.delete(i);
-                    if (wearIndex === i && selected.size) wearIndex = [...selected][0];
                 }
                 updateSelectionUI();
-                return;
-            }
-            if (selected.has(i) && wearIndex !== i) {
+            });
+
+            const wearBtn = $('<div class="menu_button nnb-look-wear-btn" style="padding:4px 10px; font-size:0.83em; margin:0; white-space:nowrap;"></div>');
+            wearBtn.on('click', e => {
+                e.stopPropagation();
                 wearIndex = i;
-            } else if (selected.has(i) && selected.size > 1) {
-                selected.delete(i);
-                if (wearIndex === i) wearIndex = [...selected][0];
-            } else {
                 selected.add(i);
-                wearIndex = i;
+                updateSelectionUI();
+            });
+
+            topBar.append(checkPill, wearBtn);
+            card.append(topBar);
+
+            // 2. Картинка образа (если есть)
+            if (hasUrl && i < n) {
+                const img = $('<div class="nnb-card-img" style="border-radius:8px; overflow:hidden; width:100%; aspect-ratio:1/2; max-height:380px; margin:2px 0;"></div>');
+                applyCrop(img, url, cellOf(i), layoutOf().rows === 2 ? 2 / 3 : 1.5);
+                card.append(img);
+                imgs.push(img);
             }
-            updateSelectionUI();
+
+            // 3. Название, категория и описание
+            const body = $('<div style="flex:1; display:flex; flex-direction:column; gap:4px;"></div>');
+            const catBadge = o.category ? ` · ${o.category}` : '';
+            body.append($('<div class="nnb-look-title" style="font-size:0.98em; line-height:1.3;"></div>').text(`${i + 1}. «${o.title}»${catBadge}`));
+            if (o.desc) {
+                body.append($('<div class="nnb-look-desc" style="font-size:0.86em; line-height:1.38; opacity:0.88;"></div>').text(o.desc));
+            }
+            card.append(body);
+
+            // Поддержка свайпа пальцем влево/вправо по карточке образа
+            let tStartX = null;
+            card.on('touchstart', e => { tStartX = e.originalEvent?.touches?.[0]?.clientX ?? null; });
+            card.on('touchend', e => {
+                if (tStartX === null) return;
+                const dx = (e.originalEvent?.changedTouches?.[0]?.clientX ?? tStartX) - tStartX;
+                tStartX = null;
+                if (dx > 40 && currentSlide > 0) { currentSlide--; updateSelectionUI(); }
+                else if (dx < -40 && currentSlide < a.options.length - 1) { currentSlide++; updateSelectionUI(); }
+            });
+
+            // Клик по самой карточке ТОЛЬКО переключает галочку «В шкаф» (и НЕ закрывает окно!)
+            card.on('click', () => {
+                if (selected.has(i)) {
+                    if (selected.size > 1) selected.delete(i);
+                } else {
+                    selected.add(i);
+                    wearIndex = i;
+                }
+                updateSelectionUI();
+            });
+
+            grid.append(card);
         });
-        cards.append(card);
+
+        cardsHost.append(grid);
+        updateSelectionUI();
+
+        if (hasUrl && imgs.length && typeof Image === 'function') {
+            const probe = new Image();
+            probe.onload = async () => {
+                const ratio = probe.naturalWidth / probe.naturalHeight || 1.5;
+                const crops = await smartCrops(url, n, 'looks', layoutOf());
+                imgs.forEach((elImg, idx) => {
+                    applyCrop(elImg, url, crops[idx] || cellOf(idx), ratio);
+                    if (crops.bg) elImg.css('background-color', crops.bg);
+                });
+            };
+            probe.src = url;
+        }
+    };
+
+    selectAllBtn.on('click', () => {
+        if (selected.size === a.options.length) {
+            selected.clear();
+            selected.add(wearIndex);
+        } else {
+            a.options.forEach((_, idx) => selected.add(idx));
+        }
+        updateSelectionUI();
     });
 
-    if (visual) {
-        const pickVisual = async i => {
-            selected.add(i);
-            wearIndex = i;
-            closePopupOf(el);
-            await chooseOutfit(wearIndex, null, [...selected]);
-        };
-        el.append(visualPicker({ kind: 'looks', items: a.options, title: o => o.title, onPick: pickVisual, field: 'image', failField: 'imageFailed', a }));
+    viewModeBtn.on('click', () => {
+        carouselMode = !carouselMode;
+        currentSlide = wearIndex;
+        renderCards(a.image || '');
+    });
+
+    prevSlideBtn.on('click', () => {
+        if (currentSlide > 0) {
+            currentSlide--;
+            updateSelectionUI();
+        }
+    });
+    nextSlideBtn.on('click', () => {
+        if (currentSlide < a.options.length - 1) {
+            currentSlide++;
+            updateSelectionUI();
+        }
+    });
+
+    redrawBtn.on('click', () => {
+        cardsHost.html('<div class="nnb-pop-sub nnb-wait" style="padding:20px; text-align:center;">🎨 Рисую образы через ' + escapeHtml(imageSourceName()) + '…</div>');
+        ensurePicture('looks', !drawingKind.looks, url => {
+            renderCards(url || '');
+        });
+    });
+
+    fullImgBtn.on('click', () => {
+        if (a.image) window.open(a.image, '_blank');
+    });
+
+    if (visual && !a.image && !a.imageFailed) {
+        cardsHost.html('<div class="nnb-pop-sub nnb-wait" style="padding:20px; text-align:center;">🎨 Рисую образы через ' + escapeHtml(imageSourceName()) + '…</div>');
+        ensurePicture('looks', false, url => renderCards(url || ''));
+    } else {
+        renderCards(visual ? (a.image || '') : '');
     }
-    el.append(cards);
-    updateSelectionUI();
 
     confirmBtn.on('click', async () => {
         closePopupOf(el);
@@ -4611,11 +5637,20 @@ async function showWardrobePopup() {
         st.wardrobe.active = null;
         await commit();
         closePopupOf(el);
-        toastr.success(`Сохранено в шкаф: ${toSave.length} обр.`, '👗 Гардероб');
+        toastr.success(`Сохранено в шкаф: ${toSave.length} обр. (без смены текущего наряда)`, '👗 Гардероб');
+        await checkPendingTravel();
+    });
+    saveAllQuickBtn.on('click', async () => {
+        await attachLookCropsFromActive(a);
+        a.options.forEach(opt => addLookToCloset(st, opt, normalizeClosetCat(opt.category || a.occasion)));
+        st.wardrobe.active = null;
+        await commit();
+        closePopupOf(el);
+        toastr.success(`Все ${a.options.length} образов сохранены в шкаф!`, '👗 Гардероб');
         await checkPendingTravel();
     });
 
-    const actRow = $('<div class="nnb-pop-row" style="margin-top:10px; flex-wrap:wrap; gap:8px;"></div>').append(confirmBtn, saveOnlyBtn);
+    const actRow = $('<div class="nnb-pop-row" style="margin-top:12px; flex-wrap:wrap; gap:8px;"></div>').append(confirmBtn, saveOnlyBtn, saveAllQuickBtn);
     el.append(actRow);
 
     const row = $(`<div class="nnb-pop-row${visual ? ' nnb-pop-links' : ''}" style="margin-top:8px;"></div>`);
@@ -4644,7 +5679,7 @@ async function showWardrobePopup() {
         row.append(cancelTravel);
     }
     el.append(row);
-    if (!(await openPopup(el, visual))) toastr.info('Образы готовы — выбери в блокноте, вкладка «Гардероб»', '👗 Гардероб');
+    if (!(await openPopup(el, true))) toastr.info('Образы готовы — выбери в блокноте, вкладка «Гардероб»', '👗 Гардероб');
 }
 
 function revealCard(entry) {
@@ -4703,31 +5738,59 @@ function buildMapSection(st) {
 MAP: название | что это за место | 2–3 конкретных крючка и зацепки этого места через точку с запятой (необычная деталь, колоритный завсегдатай, слух или микро-ситуация) — если в чате появилось новое место, куда можно сходить, и его ещё нет на карте.
 HERE: название — если герои сейчас в месте с карты.`;
 }
-function mapSeedPrompt(st) {
+function isGenericPlaceHint(text) {
+    const s = String(text || '').trim().toLowerCase();
+    if (!s) return false;
+    if (/^(како[еяй]-?нибудь|что-?нибудь|любо[ейя]|незнаком|интересн|новое место|куда-?нибудь)/i.test(s)) return true;
+    const genericWords = [
+        'достопримечательность', 'туристическое место', 'бар', 'паб', 'кафе', 'кофейня', 'ресторан', 'пекарня',
+        'кондитерская', 'парк', 'сквер', 'сад', 'музей', 'галерея', 'театр', 'кинотеатр', 'библиотека',
+        'книжный', 'книжный магазин', 'рынок', 'блошиный рынок', 'ярмарка', 'лавка', 'антикварная лавка',
+        'магазин', 'торговый центр', 'клуб', 'ночной клуб', 'пляж', 'набережная', 'смотровая площадка',
+        'храм', 'церковь', 'собор', 'замок', 'руины', 'лес', 'озеро', 'отель', 'гостиница', 'спа', 'спортзал',
+    ];
+    return genericWords.includes(s) || (s.split(/\s+/).length <= 3 && genericWords.some(w => s === w || s.endsWith(' ' + w) || s.startsWith(w + ' ')));
+}
+
+function mapSeedPrompt(st, customHint = '') {
     const names = storyNames();
     const t = st.time;
     const when = [t.date ? `${formatDate(t.date)}, ${season(t.date).name}` : '', placeLine(st)].filter(Boolean).join('; ');
     const known = st.map.places.map(p => p.title);
+    const hintInstruction = customHint
+        ? `Игрок просит придумать место по запросу/категории: «${customHint}». НЕ записывай запрос буквально как «${customHint}» — придумай конкретное, атмосферное, правдоподобное название и описание такого места для этого города/мира (например, если игрок написал «бар» или «достопримечательность» — придумай конкретный колоритный бар или конкретную достопримечательность со своим именем и характером). Предложи 1 такое место (или 2–3, если игрок попросил несколько).`
+        : `Предложи ${known.length ? 4 : 5} мест поблизости, куда ${names.user} и другие персонажи могут пойти в этой истории. Места разные по настроению: уютные, людные, тайные, деловые, на природе. Учитывай город или мир, жанр, где живут и работают герои и что уже упоминалось в чате. Реальные места — только если они правда есть в этом городе, иначе придумай правдоподобные.`;
     return [
         '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и рисуешь карту мест для этой истории.',
         when ? `Когда и где: ${when}.` : '',
         buildDirection(st),
-        `Предложи ${known.length ? 4 : 5} мест поблизости, куда ${names.user} и другие персонажи могут пойти в этой истории. Места разные по настроению: уютные, людные, тайные, деловые, на природе. Учитывай город или мир, жанр, где живут и работают герои и что уже упоминалось в чате. Реальные места — только если они правда есть в этом городе, иначе придумай правдоподобные. В КАЖДОЕ место сразу заложи 2–3 конкретных крючка (точки интереса, необычные детали, местные слухи, странности или колоритных завсегдатаев), за которые интересно зацепиться в игре.`,
+        hintInstruction,
+        'В КАЖДОЕ место сразу заложи 2–3 конкретных крючка (точки интереса, необычные детали, местные слухи, странности или колоритных завсегдатаев), за которые интересно зацепиться в игре.',
         known.length ? `Уже на карте (не повторяй): ${known.join(', ')}.` : '',
         'Формат, без пояснений:',
-        'MAP: название | одно предложение, что это за место | крючок 1; крючок 2; крючок 3',
+        'MAP: конкретное название места | одно предложение, что это за место | крючок 1; крючок 2; крючок 3',
     ].filter(Boolean).join('\n') + ']';
 }
-async function seedMap() {
-    const added = await withBusy('🗺 Модель набрасывает карту…', async st => {
-        const raw = await quietGenerate(mapSeedPrompt(st));
+
+async function seedMap(customHint = '') {
+    let hint = typeof customHint === 'string' ? customHint.trim() : '';
+    const st0 = store();
+    if (!hint && st0?.map?.places?.length) {
+        const asked = await askText('Какое место добавить? Можешь написать просто тип места («достопримечательность», «бар», «книжный», «туристическое место») — модель сама придумает ему название и описание! Или оставь поле пустым, чтобы модель предложила 4 разных места вокруг.');
+        if (asked === null) return [];
+        hint = asked.trim();
+    }
+    const statusMsg = hint ? `🗺 Модель придумывает место («${hint}»)…` : '🗺 Модель набрасывает карту…';
+    const added = await withBusy(statusMsg, async st => {
+        const raw = await quietGenerate(mapSeedPrompt(st, hint));
         st.lastRaw = String(raw ?? '');
         const out = [];
         for (const line of String(raw || '').replace(/\*\*/g, '').split(/\r?\n/)) {
             const m = line.match(/^\s*MAP\s*[:：—–-]\s*(.+)$/i);
-            if (m) { const pl = addPlace(st, m[1], 'start'); if (pl) out.push(pl); }
+            if (m) { const pl = addPlace(st, m[1], hint ? 'user' : 'start'); if (pl) out.push(pl); }
         }
         if (!out.length) toastr.warning('Модель не прислала места по формату — загляни в «Последний ответ модели»', '🗺 Карта');
+        else if (hint) toastr.success(`Добавлено на карту: ${out.map(p => `«${escapeHtml(p.title)}»`).join(', ')}`, '🗺 Карта', { escapeHtml: false });
         return out;
     });
     return added || [];
@@ -4757,6 +5820,7 @@ async function finalizeTravel(pl, { skipDays = 0, companion = '' } = {}) {
     if (pl.id) {
         pl.visits = (pl.visits || 0) + 1;
         st.map.current = pl.id;
+        st.map.enteredAt = ctx().chat?.length ?? 0;
     }
     await ctx().saveMetadata();
     updateInjection();
@@ -4820,7 +5884,14 @@ async function openTravelModal(place, customText) {
     if (busy) return toastr.info('Модель уже занята — подожди пару секунд', 'Блокнот рассказчика');
 
     let pl = place;
-    if (!pl && customText) pl = findPlace(st, customText) || addPlace(st, customText, 'user') || { title: customText.trim(), desc: '' };
+    if (!pl && customText) {
+        pl = findPlace(st, customText);
+        if (!pl && isGenericPlaceHint(customText)) {
+            const gen = await seedMap(customText);
+            pl = gen[0] || null;
+        }
+        if (!pl) pl = addPlace(st, customText, 'user') || { title: customText.trim(), desc: '' };
+    }
     if (!pl?.title) return;
 
     const el = $('<div class="nnb-pop nnb-travel-pop"></div>');
@@ -4994,7 +6065,7 @@ function placeRow(st, pl, onGo, tools) {
     const row = $('<div class="nnb-note nnb-place"><div class="nnb-place-main"><div class="nnb-npc-text"></div><div class="nnb-npc-status"></div></div></div>');
     const here = st.map.current === pl.id;
     if (here) row.addClass('nnb-place-here');
-    row.find('.nnb-npc-text').text(`${here ? '📍' : pl.origin === 'story' ? '✨' : pl.origin === 'user' ? '✏️' : '•'} ${pl.title}`);
+    row.find('.nnb-npc-text').text(`${here ? '📍 ' : ''}${pl.title}`);
     const meta = [pl.desc, here ? 'вы здесь' : pl.visits ? `уже бывали: ${pl.visits}×` : ''].filter(Boolean).join(' · ');
     if (meta) row.find('.nnb-npc-status').first().text(meta); else row.find('.nnb-npc-status').first().remove();
     row.find('.nnb-place-main').css('cursor', 'pointer').on('click', () => onGo(pl));
@@ -5055,10 +6126,18 @@ function renderMap(st) {
     btns.append($('<div class="menu_button"><i class="fa-solid fa-map"></i> Куда пойти?</div>').on('click', () => { closeBook(); showMapPopup(); }));
     btns.append($(`<div class="menu_button"><i class="fa-solid fa-wand-magic-sparkles"></i> ${m.places.length ? 'Ещё мест' : 'Набросать карту'}</div>`).on('click', () => seedMap()));
     btns.append($('<div class="menu_button"><i class="fa-solid fa-plus"></i> Добавить место</div>').on('click', async () => {
-        const t = await askText('Название места');
+        const t = await askText('Название места или просто идея («достопримечательность», «бар», «уютная кофейня» — если напишешь общую идею, модель сама придумает название и описание!)');
         if (!t || !t.trim()) return;
-        const d = await askText('Что это за место? (краткая надпись, можно оставить пустым)');
+        if (isGenericPlaceHint(t.trim())) {
+            await seedMap(t.trim());
+            return;
+        }
+        const d = await askText('Что это за место? (краткая подпись — или оставь пустым, чтобы модель додумала описание сама)');
         if (d === null) return;
+        if (!d.trim()) {
+            await seedMap(t.trim());
+            return;
+        }
         addPlace(st, `${t.trim()} | ${d.trim()}`, 'user');
         await commit();
     }));
@@ -5193,6 +6272,32 @@ async function sellCounterItemNow(x, inScene = false) {
     }
 }
 
+async function nextShopCustomer() {
+    const st = store();
+    if (!st) return toastr.warning('Сначала открой чат', '🏪 Лавка');
+    if (busy) return toastr.info('Модель уже занята — подожди пару секунд', '🏪 Лавка');
+    const customWish = await askText('Кто заглянет в лавку? (Оставь поле пустым — нейросеть сама придумает колоритного покупателя со своей историей, или напиши пожелание: например «богатый коллекционер», «странный незнакомец с вещью на продажу», «знакомый NPC»)');
+    if (customWish === null) return;
+
+    const names = storyNames();
+    const counter = shopCounterItems(st);
+    counter.forEach(x => ensureCounterPrice(x, st));
+    const counterDesc = counter.length
+        ? `Сейчас на витрине выставлены на продажу: ${counter.map(x => `«${x.title}» (цена на ценнике: ${formatMoney(x.sellPrice, st)}${x.desc ? `, ${x.desc}` : ''}${x.hook ? `; история вещи: ${x.hook}` : ''})`).join('; ')}.`
+        : `На витрине сейчас пусто или товары ещё выкладываются — покупатель может спросить редкую вещь на заказ, принести необычную диковинку на оценку/продажу для ${names.user} или завязать интригующий разговор.`;
+    const wishLine = customWish.trim() ? ` Пожелание игрока к этому визитёру: ${customWish.trim()}.` : '';
+
+    const text = `${FF_MARKER} Звенит колокольчик над дверью лавки ${names.user} — заходит следующий посетитель.${wishLine} ${counterDesc} Опиши живую, атмосферную сцену: кто именно вошёл (внешность, манера держаться, любопытная деталь), как он осматривается у прилавка, чем интересуется из товаров на витрине (или с каким необычным предложением/запросом пришёл к ${names.user}) и с какой реплики начинается ваш диалог. Не завершай сделку сразу за один пост — дай ${names.user} поговорить с покупателем, поторговаться или обсудить диковинку! Пиши как обычный ответ.]`;
+
+    ctx().setExtensionPrompt(INJECT_FF_KEY, text, POS_IN_CHAT, 0, false, 0);
+    ffPending = true;
+    closeBook();
+    toastr.info('Звенит колокольчик над дверью — в лавку заходит покупатель…', '🛎 Следующий покупатель', { timeOut: 5000 });
+    const send = $('#send_but');
+    if (send.length) send.trigger('click');
+    else if (typeof ctx().generate === 'function') ctx().generate('normal');
+}
+
 function showFind(x) {
     const st = store();
     const r = x.rarity ? rarityOf(x.rarity) : null;
@@ -5279,10 +6384,10 @@ function showFind(x) {
         });
         acts.append(reclaimBtn);
     } else {
-        const toCounterBtn = $('<div class="menu_button"><i class="fa-solid fa-store"></i> На прилавок (на продажу)</div>').on('click', async () => {
+        const toCounterBtn = shopModeOn(st) ? $('<div class="menu_button"><i class="fa-solid fa-store"></i> На прилавок (на продажу)</div>').on('click', async () => {
             closePopupOf(el);
             await toggleItemOnCounter(x);
-        });
+        }) : null;
         const eqBtn = $(`<div class="menu_button"><i class="fa-solid fa-briefcase"></i> ${isEquipped ? 'Убрать в шкатулку' : 'Взять с собой'}</div>`);
         eqBtn.on('click', async () => {
             closePopupOf(el);
@@ -5300,7 +6405,7 @@ function showFind(x) {
             if (act === null) return;
             await applyItemInScene(x, act.trim());
         });
-        acts.append(toCounterBtn, eqBtn, giftBtn, applyBtn);
+        if (toCounterBtn) acts.append(toCounterBtn); acts.append(eqBtn, giftBtn, applyBtn);
     }
 
     el.append(acts);
@@ -5416,7 +6521,8 @@ function renderBox(st) {
         root.append(det);
     }
 
-    // 3. 🏪 Прилавок лавки (товары на продажу посетителям)
+    // 3. 🏪 Прилавок лавки (только когда включён режим хозяйки лавки / продавца!)
+    if (shopModeOn(st)) {
     const counterList = shopCounterItems(st);
     const shopDet = $('<details open class="nnb-section"><summary></summary></details>');
     shopDet.find('summary').text(`🏪 Прилавок лавки — на продажу (${counterList.length})`);
@@ -5431,7 +6537,7 @@ function renderBox(st) {
         const profit = Math.max(0, x.sellPrice - base);
         const row = $('<div class="nnb-note nnb-box-item"><div class="nnb-box-main"><div class="nnb-npc-text"></div><div class="nnb-npc-status"></div></div><div class="nnb-actions"></div></div>');
         if (x.rarity) row.addClass(`nnb-rar nnb-rar-${x.rarity}`);
-        row.find('.nnb-npc-text').text(`🏪 ${x.title}${r ? ` ${r.stars}` : ''} · 🏷 ${formatMoney(x.sellPrice, st)}`);
+        row.find('.nnb-npc-text').text(`${x.title}${r ? ` ${r.stars}` : ''} · ${formatMoney(x.sellPrice, st)}`);
         const statusParts = [
             x.buyPrice ? `закупка: ${formatMoney(x.buyPrice, st)} (прибыль +${formatMoney(profit, st)})` : `чистая прибыль +${formatMoney(x.sellPrice, st)}`,
             x.desc,
@@ -5484,8 +6590,12 @@ function renderBox(st) {
         await commit();
         toastr.success(`Товар «${escapeHtml(item.title)}» выставлен по цене ${escapeHtml(formatMoney(item.sellPrice, st))}!`, '🏪 Прилавок лавки', { escapeHtml: false });
     });
-    shopDet.append(addShopItemBtn);
+    const shopBtnsRow = $('<div class="nnb-buttons" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;"></div>');
+    const nextCustBtn = $('<div class="menu_button nnb-btn-primary"><i class="fa-solid fa-bell-concierge"></i> Следующий покупатель</div>').on('click', () => nextShopCustomer());
+    shopBtnsRow.append(nextCustBtn, addShopItemBtn);
+    shopDet.append(shopBtnsRow);
     root.append(shopDet);
+    }
 
     // 4. 🎁 Личная шкатулка (личные вещи, не для продажи)
     const personalList = personalBoxItems(st);
@@ -5496,7 +6606,7 @@ function renderBox(st) {
         const row = $('<div class="nnb-note nnb-box-item"><div class="nnb-box-main"><div class="nnb-npc-text"></div><div class="nnb-npc-status"></div></div><div class="nnb-actions"><i class="fa-solid fa-pen" title="Изменить"></i><i class="fa-solid fa-trash" title="Убрать из шкатулки"></i></div></div>');
         if (x.rarity) row.addClass(`nnb-rar nnb-rar-${x.rarity}`);
         const r = x.rarity ? rarityOf(x.rarity) : null;
-        row.find('.nnb-npc-text').text(`${(ACCENT_KINDS[x.kind] || ACCENT_KINDS.find).icon} ${x.title}${r ? ` ${r.stars}` : ''}`);
+        row.find('.nnb-npc-text').text(`${x.title}${r ? ` ${r.stars}` : ''}`);
         if (x.origin || x.desc) row.find('.nnb-npc-status').text([x.desc, x.origin].filter(Boolean).join(' · ')); else row.find('.nnb-npc-status').remove();
         if (x.image) row.prepend(findThumb(x, '64px'));
         row.find('.nnb-box-main, .nnb-find-thumb').css('cursor', 'pointer').on('click', () => showFind(x));
@@ -5514,21 +6624,20 @@ function renderBox(st) {
         } else if (x.giftedTo) {
             row.find('.nnb-meta, .nnb-npc-status').prepend(`<span class="nnb-item-badge nnb-badge-gifted">🎁 у ${escapeHtml(x.giftedTo)}</span> `);
         }
-        const quickCounter = $('<i class="fa-solid fa-store" title="Выставить на прилавок лавки (с авто-наценкой)"></i>').on('click', async (e) => {
-            e.stopPropagation();
-            await toggleItemOnCounter(x);
-        });
         const quickAct = $('<i class="fa-solid fa-wand-magic-sparkles" title="Применить в сцене"></i>').on('click', async (e) => {
             e.stopPropagation();
             const act = await askText(`Как применить «${x.title}» в сцене? Оставь пустым — модель решит сама.`);
             if (act === null) return;
             await applyItemInScene(x, act.trim());
         });
-        const quickGift = $('<i class="fa-solid fa-gift" title="Подарить персонажу"></i>').on('click', async (e) => {
-            e.stopPropagation();
-            await promptGiftItem(x);
-        });
-        row.find('.nnb-actions').prepend(quickGift).prepend(quickAct).prepend(quickCounter);
+        row.find('.nnb-actions').prepend(quickAct);
+        if (shopModeOn(st)) {
+            const quickCounter = $('<i class="fa-solid fa-store" title="Выставить на прилавок лавки (с авто-наценкой)"></i>').on('click', async (e) => {
+                e.stopPropagation();
+                await toggleItemOnCounter(x);
+            });
+            row.find('.nnb-actions').prepend(quickCounter);
+        }
         row.find('.fa-trash').on('click', async () => {
             w.box = w.box.filter(y => y !== x);
             w.equipped = (w.equipped || []).filter(id => id !== x.id);
@@ -5716,30 +6825,30 @@ function ensureActionStyles() {
             max-width: 100% !important;
             box-sizing: border-box !important;
             clear: both !important;
-            margin: 14px 0 6px 0 !important;
-            padding: 10px 14px !important;
-            border-radius: 12px !important;
-            border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 28%, transparent) !important;
-            background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 8%, transparent) !important;
+            margin: 10px 0 2px 0 !important;
+            padding: 8px 0 0 0 !important;
+            border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #666) 45%, transparent) !important;
+            background: transparent !important;
             overflow: visible !important;
         }
         #chat .mes .nnb-action-prompts-head,
         .nnb-action-prompts-head {
-            font-size: 0.85em !important;
-            font-weight: 600 !important;
-            opacity: 0.85 !important;
+            font-size: 0.8em !important;
+            font-weight: 500 !important;
+            opacity: 0.72 !important;
             display: flex !important;
             align-items: center !important;
+            justify-content: space-between !important;
             gap: 6px !important;
-            color: var(--SmartThemeQuoteColor, #8b78c4) !important;
-            margin-bottom: 8px !important;
+            color: var(--SmartThemeBodyColor, inherit) !important;
+            margin-bottom: 6px !important;
         }
         #chat .mes .nnb-action-chips,
         #chat .nnb-action-chips,
         .nnb-action-chips {
             display: flex !important;
             flex-direction: column !important;
-            gap: 8px !important;
+            gap: 5px !important;
             width: 100% !important;
             box-sizing: border-box !important;
         }
@@ -5749,14 +6858,14 @@ function ensureActionStyles() {
             display: block !important;
             width: 100% !important;
             box-sizing: border-box !important;
-            padding: 10px 14px !important;
-            border-radius: 10px !important;
-            border: 1px solid var(--SmartThemeBorderColor) !important;
-            background: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 8%, transparent) !important;
+            padding: 7px 11px !important;
+            border-radius: 8px !important;
+            border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #666) 60%, transparent) !important;
+            background: color-mix(in srgb, var(--SmartThemeBodyColor, #fff) 4%, transparent) !important;
             color: var(--SmartThemeBodyColor, inherit) !important;
-            font-size: 0.92em !important;
+            font-size: 0.88em !important;
             cursor: pointer !important;
-            line-height: 1.4 !important;
+            line-height: 1.35 !important;
             white-space: normal !important;
             word-break: normal !important;
             overflow-wrap: break-word !important;
@@ -5766,20 +6875,10 @@ function ensureActionStyles() {
         }
         .nnb-action-chip:hover {
             border-color: var(--SmartThemeQuoteColor, #8b78c4) !important;
-            background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 14%, transparent) !important;
+            background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 12%, transparent) !important;
         }
         .nnb-action-chip:active {
             transform: translateY(1px) !important;
-        }
-        .nnb-action-custom {
-            display: flex !important;
-            align-items: center !important;
-            gap: 8px !important;
-            border-style: dashed !important;
-            opacity: 0.8 !important;
-        }
-        .nnb-action-custom:hover {
-            opacity: 1 !important;
         }
     `;
     document.head.appendChild(style);
@@ -5816,76 +6915,36 @@ function renderActionPrompts() {
     if (!mesEl.length) return;
 
     const container = $('<div class="nnb-action-prompts"></div>');
-    container.css({
-        'display': 'block',
-        'width': '100%',
-        'max-width': '100%',
-        'box-sizing': 'border-box',
-        'clear': 'both',
-        'margin': '14px 0 6px 0',
-        'padding': '10px 14px'
+    const head = $('<div class="nnb-action-prompts-head"><span>Варианты хода</span></div>');
+    const headCtrls = $('<div style="display:flex; align-items:center; gap:10px;"></div>');
+    const disableAllBtn = $('<span title="Полностью выключить варианты хода (включить обратно можно в меню палочки или в блокноте)" style="cursor:pointer; font-size:0.92em; opacity:0.75; text-decoration:underline;">Выключить</span>').on('click', function (e) {
+        e.stopPropagation();
+        settings().actionPrompts = false;
+        $('#nnb_action_prompts, #nnb_book_action_prompts').prop('checked', false);
+        saveSettings();
+        updateInjection();
+        placeMesButtons();
+        $('.nnb-action-prompts').remove();
+        toastr.info('Варианты хода выключены. Включить обратно можно в меню палочки (🪄) или в настройках блокнота.', '💡 Варианты хода');
     });
-
-    const head = $('<div class="nnb-action-prompts-head"><i class="fa-solid fa-lightbulb"></i> Что сделать дальше:</div>');
+    const hideBtn = $('<span title="Скрыть только под этим сообщением" style="cursor:pointer; padding:0 4px; opacity:0.65;">✕</span>').on('click', function (e) {
+        e.stopPropagation();
+        container.remove();
+    });
+    headCtrls.append(disableAllBtn, hideBtn);
+    head.append(headCtrls);
     container.append(head);
 
     const list = $('<div class="nnb-action-chips"></div>');
-    list.css({
-        'display': 'flex',
-        'flex-direction': 'column',
-        'gap': '8px',
-        'width': '100%',
-        'box-sizing': 'border-box'
-    });
-
     lastMsg.extra.actions.forEach((actText) => {
         const chip = $('<div class="nnb-action-chip" tabindex="0"></div>').text(actText);
-        chip.css({
-            'display': 'block',
-            'width': '100%',
-            'box-sizing': 'border-box',
-            'padding': '10px 14px',
-            'border-radius': '10px',
-            'white-space': 'normal',
-            'word-break': 'normal',
-            'overflow-wrap': 'break-word',
-            'text-align': 'left',
-            'line-height': '1.4',
-            'cursor': 'pointer'
-        });
-        chip.attr('title', 'Нажми, чтобы выбрать этот вариант');
-
+        chip.attr('title', 'Нажми, чтобы подставить в поле ввода');
         chip.on('click', function(e) {
             e.stopPropagation();
             chooseActionPrompt(actText, false);
         });
-
         list.append(chip);
     });
-
-    const customChip = $('<div class="nnb-action-chip nnb-action-custom" tabindex="0"><i class="fa-solid fa-pen"></i> <span>Свой вариант</span></div>');
-    customChip.css({
-        'display': 'flex',
-        'flex-direction': 'row',
-        'align-items': 'center',
-        'gap': '10px',
-        'width': '100%',
-        'box-sizing': 'border-box',
-        'padding': '10px 14px',
-        'border-radius': '10px',
-        'white-space': 'normal',
-        'cursor': 'pointer'
-    });
-    customChip.attr('title', 'Написать свой вариант действия');
-    customChip.on('click', function(e) {
-        e.stopPropagation();
-        const textarea = $('#send_textarea');
-        textarea.focus();
-        try {
-            textarea[0]?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-        } catch (err) { /* ignore */ }
-    });
-    list.append(customChip);
 
     container.append(list);
 
@@ -6852,6 +7911,7 @@ async function openWorldCreator(forceEditor = false) {
         st.direction.npcs = true;
         st.direction.wardrobe = true;
         st.direction.livingWorld = true;
+        st.direction.shopMode = isShopOwnerJob(cfg.job);
         st.time.date = cfg.date;
         st.time.country = cfg.countryCode;
         st.time.countryName = cfg.countryName;
@@ -6924,6 +7984,32 @@ const PANEL_HTML = `
         <summary>🎨 Картинки</summary>
         <label class="checkbox_label"><input type="checkbox" id="nnb_ward_img"> Рисовать образы в гардеробе</label>
         <select class="text_pole" id="nnb_img_src" title="Чем рисовать"></select>
+        <div id="nnb_nai_api" style="display:none; margin:4px 0 6px 0;">
+          <input type="password" class="text_pole" id="nnb_nai_key" placeholder="Ключ NovelAI (pst-…) — или пусто, если ключ уже в Таверне" autocomplete="off">
+          <select class="text_pole" id="nnb_nai_model" title="Модель NovelAI" style="margin-top:4px;">
+            <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full (рекомендуется)</option>
+            <option value="nai-diffusion-4-5-curated">NovelAI V4.5 Curated</option>
+            <option value="nai-diffusion-4-full">NovelAI V4 Full</option>
+            <option value="nai-diffusion-4-curated-preview">NovelAI V4 Curated</option>
+            <option value="nai-diffusion-3">NovelAI Anime V3</option>
+            <option value="nai-diffusion-furry-3">NovelAI Furry V3</option>
+            <option value="nai-diffusion-5-full">NovelAI V5 Full</option>
+            <option value="nai-diffusion-5-curated">NovelAI V5 Curated</option>
+          </select>
+          <details style="margin-top:4px;">
+            <summary>Настройки NovelAI (сэмплер, теги стиля, негатив)</summary>
+            <select class="text_pole" id="nnb_nai_sampler" title="Сэмплер NovelAI" style="margin-top:4px;">
+              <option value="k_euler_ancestral">Euler Ancestral (рекомендуется)</option>
+              <option value="k_euler">Euler</option>
+              <option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
+              <option value="k_dpmpp_2m">DPM++ 2M</option>
+              <option value="k_dpmpp_2m_sde">DPM++ 2M SDE</option>
+              <option value="ddim_v3">DDIM</option>
+            </select>
+            <input type="text" class="text_pole" id="nnb_nai_prefix" placeholder="Теги стиля/качества в начало промпта" style="margin-top:4px;">
+            <textarea class="text_pole" id="nnb_nai_neg" rows="2" placeholder="Негативный промпт (uc)" style="margin-top:4px;"></textarea>
+          </details>
+        </div>
         <div id="nnb_img_api" style="display:none">
           <input type="password" class="text_pole" id="nnb_img_key" placeholder="Ключ (sk-…)" autocomplete="off">
           <details>
@@ -6935,6 +8021,11 @@ const PANEL_HTML = `
         <select class="text_pole" id="nnb_img_orient" title="Формат сцен и образов">
           <option value="portrait">Вертикальные картинки</option>
           <option value="landscape">Горизонтальные картинки</option>
+        </select>
+        <select class="text_pole" id="nnb_scene_cam" title="Ракурс для картинок сцен (🎬)" style="margin-top:4px;">
+          <option value="ask">Ракурс сцен (🎬): спрашивать при нажатии</option>
+          <option value="third">Ракурс сцен (🎬): оба персонажа в кадре (со стороны)</option>
+          <option value="pov">Ракурс сцен (🎬): от первого лица (глазами героини, без неё)</option>
         </select>
         <label class="checkbox_label"><input type="checkbox" id="nnb_img_ref"> Аватар персоны как образец лица</label>
       </details>
@@ -7018,6 +8109,8 @@ const BOOK_HTML = `
         <label class="checkbox_label"><input type="checkbox" id="nnb_gacha_on"> 🎰 Находки и случаи (гача)</label>
         <label class="checkbox_label"><input type="checkbox" id="nnb_map_on"> 🗺 Карта</label>
         <label class="checkbox_label"><input type="checkbox" id="nnb_living_world_on"> 🌍 Живой мир (истории и точки интереса)</label>
+        <label class="checkbox_label"><input type="checkbox" id="nnb_shop_mode_on"> 🏪 Режим хозяйки лавки (прилавок и покупатели)</label>
+        <label class="checkbox_label"><input type="checkbox" id="nnb_book_action_prompts"> 💡 Заготовленные варианты хода в конце сообщений</label>
       </div>
       <div class="nnb-buttons">
         <div class="menu_button" id="nnb_clear"><i class="fa-solid fa-broom"></i> Очистить блокнот</div>
@@ -7230,6 +8323,8 @@ function renderDirection() {
     $('#nnb_gacha_on').prop('checked', !!st?.direction.gacha).prop('disabled', !enabled);
     $('#nnb_map_on').prop('checked', !!st?.direction.map).prop('disabled', !enabled);
     $('#nnb_living_world_on').prop('checked', st ? st.direction.livingWorld !== false : false).prop('disabled', !enabled);
+    $('#nnb_shop_mode_on').prop('checked', !!st?.direction?.shopMode).prop('disabled', !enabled);
+    $('#nnb_book_action_prompts').prop('checked', !!settings().actionPrompts);
     const worldHost = $('#nnb_world_card_host').empty();
     if (st?.worldProfile) {
         worldHost.append(buildCharacterAndWardrobeView(st, { inPopup: false }));
@@ -7369,107 +8464,290 @@ async function promptNpcAvatar(n) {
     await openPopup(el);
 }
 
-function renderNpcs(st) {
-    const root = $('#nnb_npc_list').empty();
-    if (!st.direction.npcs) return;
-    const det = $('<details open class="nnb-section"><summary></summary></details>');
-    det.find('summary').text(`👥 NPC (${st.npcs.length})`);
-    root.append(det);
-    if (!st.npcs.length) {
-        det.append('<div class="nnb-empty">Пока нет. Модель заведёт карточки при размышлении, или добавь сама.</div>');
-    }
-    const sortedNpcs = [...st.npcs].sort((a, b) => (!!b.favorite - !!a.favorite) || a.id - b.id);
-    for (const n of sortedNpcs) {
-        const row = $(`
-          <div class="nnb-note nnb-npc">
-            <div class="nnb-npc-header" style="display:flex; flex-direction:row; align-items:flex-start; gap:10px;">
-              <div class="nnb-npc-details" style="flex:1; min-width:0;">
-                <div class="nnb-meta"></div>
-                <div class="nnb-npc-text"></div>
-                <div class="nnb-npc-status"></div>
-              </div>
-            </div>
-            <div class="nnb-actions">
-              <i class="fa-solid fa-heart nnb-npc-fav-btn" title="Сделать главным героем / фаворитом"></i>
-              <i class="fa-solid nnb-lock"></i>
-              <i class="fa-solid fa-image nnb-npc-avatar-btn" title="Внешность (картинка-референс)"></i>
-              <i class="fa-solid fa-pen" title="Изменить карточку"></i>
-              <i class="fa-solid fa-comment-dots" title="Изменить состояние"></i>
-              <i class="fa-solid fa-trash" title="Удалить"></i>
-            </div>
-          </div>`);
+async function openNpcCardPopup(n) {
+    const st = store();
+    if (!st || !n) return;
+    ensureNpcScales(n, st);
+
+    const el = $('<div class="nnb-pop"></div>');
+    const renderModalContent = () => {
+        el.empty();
+        ensureNpcScales(n, st);
+        const topRow = $('<div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;"></div>');
         if (n.avatar) {
-            const av = $('<img class="nnb-npc-avatar" alt="">').attr('src', n.avatar).attr('title', `Внешность ${n.name} (нажми, чтобы изменить)`);
-            av.css({
-                'width': '46px',
-                'height': '46px',
-                'border-radius': '10px',
-                'object-fit': 'cover',
-                'flex-shrink': '0',
-                'cursor': 'pointer',
-                'border': '1.5px solid var(--SmartThemeQuoteColor, #8b78c4)',
-                'margin-top': '2px'
-            });
-            av.on('click', () => promptNpcAvatar(n));
-            row.find('.nnb-npc-header').prepend(av);
+            const av = $('<img alt="" style="width:68px; height:68px; border-radius:12px; object-fit:cover; border:2px solid var(--SmartThemeQuoteColor, #8b78c4); cursor:pointer; flex-shrink:0;">')
+                .attr('src', n.avatar)
+                .attr('title', 'Нажми, чтобы изменить картинку-референс внешности')
+                .on('click', async () => {
+                    closePopupOf(el);
+                    await promptNpcAvatar(n);
+                });
+            topRow.append(av);
+        } else {
+            const avPlaceholder = $('<div style="width:60px; height:60px; border-radius:12px; border:1px dashed var(--SmartThemeBorderColor); display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; opacity:0.75;" title="Задать картинку-референс внешности"><i class="fa-solid fa-image" style="font-size:1.3em;"></i></div>')
+                .on('click', async () => {
+                    closePopupOf(el);
+                    await promptNpcAvatar(n);
+                });
+            topRow.append(avPlaceholder);
         }
-        row.find('.nnb-npc-fav-btn')
-            .css(n.favorite ? { color: '#ff6b8b', opacity: 1 } : { opacity: 0.45 })
-            .attr('title', n.favorite ? 'Убрать из главных героев / фаворитов' : '❤️ Сделать главным героем / романтическим фаворитом (повышенный приоритет в сюжете, поездках и гардеробе)')
-            .on('click', async () => {
-                n.favorite = !n.favorite;
+
+        const titleCol = $('<div style="flex:1; min-width:180px;"></div>');
+        titleCol.append($('<h3 style="margin:0; text-align:left;"></h3>').text(`${n.favorite ? '❤️ ' : ''}${n.name}${n.isMainChar ? ' (основной персонаж)' : ''}`));
+        if (n.status) {
+            titleCol.append($('<div class="nnb-npc-status" style="margin-top:3px;"></div>').text(`Сейчас: ${n.status}`));
+        } else {
+            titleCol.append('<div class="nnb-npc-status" style="margin-top:3px; opacity:0.6;">Статус сейчас не указан</div>');
+        }
+        topRow.append(titleCol);
+
+        const quickTopBtns = $('<div style="display:flex; gap:6px; flex-wrap:wrap;"></div>');
+        const favBtn = $(`<div class="menu_button" style="padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-heart" style="color:${n.favorite ? '#ff6b8b' : 'inherit'};"></i> ${n.favorite ? 'Фаворит' : 'В фавориты'}</div>`).on('click', async () => {
+            n.favorite = !n.favorite;
+            await commit();
+            renderModalContent();
+        });
+        const lockBtn = $(`<div class="menu_button" style="padding:4px 10px; font-size:0.84em;" title="Защитить карточку и темп от автоматических изменений нейросети"><i class="fa-solid ${n.locked ? 'fa-lock' : 'fa-lock-open'}"></i></div>`).on('click', async () => {
+            n.locked = !n.locked;
+            await commit();
+            renderModalContent();
+        });
+        quickTopBtns.append(favBtn, lockBtn);
+        topRow.append(quickTopBtns);
+        el.append(topRow);
+
+        // 1. Полное описание карточки (открывается именно здесь, при клике на героя!)
+        const cardSec = $('<div class="nnb-note" style="margin:8px 0; padding:10px 12px;"></div>');
+        const cardHead = $('<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;"><b>📋 Описание и характер</b></div>');
+        const editCardBtn = $('<span style="cursor:pointer; font-size:0.85em; opacity:0.8;"><i class="fa-solid fa-pen"></i> Изменить</span>').on('click', async () => {
+            if (!n.isMainChar) {
+                const newName = await askText('Имя персонажа', n.name);
+                if (newName === null) return;
+                if (newName.trim()) n.name = newName.trim();
+            }
+            const newCard = await askText(`Описание: ${n.name}`, n.card);
+            if (newCard === null) return;
+            if (newCard.trim()) n.card = newCard.trim();
+            n.locked = true;
+            await commit();
+            renderModalContent();
+        });
+        const editStatusBtn = $('<span style="cursor:pointer; font-size:0.85em; opacity:0.8; margin-left:10px;"><i class="fa-solid fa-comment-dots"></i> Статус</span>').on('click', async () => {
+            const stText = await askText(`Что сейчас происходит с ${n.name}?`, n.status || '');
+            if (stText === null) return;
+            n.status = stText.trim();
+            await commit();
+            renderModalContent();
+        });
+        cardHead.append($('<div></div>').append(editCardBtn, editStatusBtn));
+        cardSec.append(cardHead);
+        cardSec.append($('<div class="nnb-npc-text" style="line-height:1.45;"></div>').text(n.card || 'Описание пока не заполнено.'));
+        el.append(cardSec);
+
+        // 2. Шкалы отношений и притяжения (в духе Sims) + Темп сближения и темперамент
+        const scalesBox = $('<div class="nnb-note" style="margin:6px 0; padding:10px 12px; border:1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 40%, transparent);"></div>');
+        scalesBox.append('<div style="font-weight:700; margin-bottom:6px;">💞 Шкалы отношения к твоей героине и темп сближения</div>');
+        scalesBox.append('<div class="nnb-npc-status" style="margin-bottom:8px; font-size:0.82em;">Модель обязана сверяться с этими шкалами: она не полезет в близкие отношения раньше порога темпа и будет отыгрывать притяжение спокойно или пылко согласно темпераменту.</div>');
+
+        const buildSliderRow = (label, minV, maxV, getV, setV, tierFn, barColor) => {
+            const wrap = $('<div style="margin:6px 0;"></div>');
+            const head = $('<div style="display:flex; justify-content:space-between; font-size:0.88em; margin-bottom:2px;"></div>');
+            const titleSpan = $('<span></span>').text(label);
+            const valSpan = $('<span style="font-weight:700;"></span>').text(`${tierFn(getV())} (${getV()})`);
+            head.append(titleSpan, valSpan);
+            const slider = $(`<input type="range" min="${minV}" max="${maxV}" step="1" style="width:100%; accent-color:${barColor}; cursor:pointer;">`).val(getV());
+            slider.on('input change', async function () {
+                const v = Number($(this).val()) || 0;
+                setV(v);
+                valSpan.text(`${tierFn(v)} (${v})`);
                 await commit();
-                toastr.info(n.favorite ? `❤️ «${escapeHtml(n.name)}» теперь главный герой / фаворит истории!` : `«${escapeHtml(n.name)}» больше не отмечен как главный фаворит`, '👥 Герои', { escapeHtml: false });
             });
-        row.find('.nnb-npc-avatar-btn')
-            .css(n.avatar ? { color: 'var(--SmartThemeQuoteColor, #8b78c4)' } : {})
-            .attr('title', n.avatar ? 'Изменить/удалить референс внешности' : 'Задать референс внешности (картинку)')
-            .on('click', () => promptNpcAvatar(n));
-        if (n.favorite) row.css('border-color', '#ff6b8b');
-        row.find('.nnb-meta').text((n.favorite ? '❤️ ' : '') + n.name + (n.favorite ? ' · Фаворит' : '') + (n.locked ? ' · правлено вручную' : '') + (n.avatar ? ' · 🖼 реф' : ''));
-        row.find('.nnb-npc-text').text(n.card);
-        if (n.status) row.find('.nnb-npc-status').text('Сейчас: ' + n.status);
-        else row.find('.nnb-npc-status').remove();
-        const rels = (st.relationships || []).filter(r => normName(r.a) === normName(n.name) || normName(r.b) === normName(n.name));
-        if (rels.length) {
-            const relTexts = rels.map(r => {
-                const other = normName(r.a) === normName(n.name) ? r.b : r.a;
-                const arr = r.arrow === '→' ? (normName(r.a) === normName(n.name) ? '→' : '←') : '↔';
-                return `${arr} ${other}${r.type ? ` (${r.type})` : ''}`;
-            });
-            row.append($('<div class="nnb-npc-status nnb-rel-chips"></div>').text('Связи: ' + relTexts.join(' · ')));
-        }
-        const gifts = (st.wardrobe?.box || []).filter(x => normName(x.giftedTo) === normName(n.name));
-        if (gifts.length) {
-            row.append($('<div class="nnb-npc-status nnb-gift-chips"></div>').text('🎁 Подарки от игрока: ' + gifts.map(g => `«${g.title}»`).join(', ')));
-        }
-        row.find('.nnb-lock')
-            .addClass(n.locked ? 'fa-lock' : 'fa-lock-open')
-            .attr('title', n.locked ? 'Карточка защищена от модели (нажми, чтобы снять)' : 'Защитить карточку от изменений модели')
-            .on('click', async () => { n.locked = !n.locked; await commit(); });
-        row.find('.fa-pen').on('click', async () => {
-            const name = await askText('Имя NPC', n.name);
-            if (name === null) return;
-            const t = await askText(`Карточка: ${name || n.name}`, n.card);
-            if (t === null) return;
-            if (name.trim()) n.name = name.trim();
-            if (t.trim()) n.card = t.trim();
+            wrap.append(head, slider);
+            return wrap;
+        };
+
+        scalesBox.append(buildSliderRow('🤝 Дружба и доверие (-100…+100)', -100, 100, () => n.friendship, v => { n.friendship = v; }, friendshipTierLabel, '#56b881'));
+        scalesBox.append(buildSliderRow('💗 Романтика и влюблённость (0…100)', 0, 100, () => n.romance, v => { n.romance = v; }, romanceTierLabel, '#ff6b8b'));
+        scalesBox.append(buildSliderRow('✨ Притяжение / искра в сцене (0…100)', 0, 100, () => n.spark, v => { n.spark = v; }, sparkTierLabel, '#e8a838'));
+
+        // Выбор темпа сближения и темперамента
+        const selectsRow = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:8px; margin-top:8px;"></div>');
+
+        const paceCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">Темп сближения персонажа:</div></div>');
+        const paceSel = $('<select class="text_pole" style="width:100%; margin:0;"></select>');
+        Object.values(PACE_OPTIONS).forEach(p => paceSel.append($('<option></option>').val(p.id).text(`${p.label} (порог ${p.threshold}+)`)));
+        paceSel.val(n.pace || 'slow').on('change', async function () {
+            n.pace = String($(this).val() || 'slow');
             n.locked = true;
             await commit();
         });
-        row.find('.fa-comment-dots').on('click', async () => {
-            const t = await askText(`Что с ${n.name} сейчас`, n.status);
-            if (t === null) return;
-            n.status = t.trim();
+        paceCol.append(paceSel);
+
+        const tempCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">Как переносит волнение и притяжение:</div></div>');
+        const tempSel = $('<select class="text_pole" style="width:100%; margin:0;"></select>');
+        Object.values(TEMPERAMENT_OPTIONS).forEach(t => tempSel.append($('<option></option>').val(t.id).text(t.label)));
+        tempSel.val(n.temperament || 'warm').on('change', async function () {
+            n.temperament = String($(this).val() || 'warm');
+            n.locked = true;
             await commit();
         });
-        row.find('.fa-trash').on('click', async () => {
-            if (!confirm(`Удалить карточку «${n.name}»?`)) return;
-            st.npcs = st.npcs.filter(x => x.id !== n.id);
+        tempCol.append(tempSel);
+
+        selectsRow.append(paceCol, tempCol);
+        scalesBox.append(selectsRow);
+        el.append(scalesBox);
+
+        // 3. Связи с другими персонажами и подарки
+        const rels = (st.relationships || []).filter(r => normName(r.a) === normName(n.name) || normName(r.b) === normName(n.name));
+        const gifts = (st.wardrobe?.box || []).filter(x => normName(x.giftedTo) === normName(n.name));
+        const relBox = $('<div class="nnb-note" style="margin:6px 0; padding:10px 12px;"></div>');
+        relBox.append('<div style="font-weight:700; margin-bottom:4px;">🔗 Связи и подарки</div>');
+        if (gifts.length) {
+            relBox.append($('<div class="nnb-npc-status nnb-gift-chips" style="margin-bottom:6px;"></div>').text('🎁 Подарки от тебя: ' + gifts.map(g => `«${g.title}»`).join(', ')));
+        }
+        if (!rels.length) {
+            relBox.append('<div class="nnb-npc-status" style="opacity:0.7;">Зафиксированных связей с другими героями пока нет.</div>');
+        } else {
+            rels.forEach(r => {
+                const arrow = r.arrow || '↔';
+                const rLine = $('<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 40%, transparent); font-size:0.9em;"></div>');
+                rLine.append($('<span></span>').text(`${r.a} ${arrow} ${r.b}${r.type ? ` [${r.type}]` : ''}${r.desc ? ` — ${r.desc}` : ''}`));
+                const delR = $('<i class="fa-solid fa-trash" style="cursor:pointer; opacity:0.65;" title="Удалить связь"></i>').on('click', async () => {
+                    st.relationships = st.relationships.filter(x => x.id !== r.id);
+                    await commit();
+                    renderModalContent();
+                });
+                rLine.append(delR);
+                relBox.append(rLine);
+            });
+        }
+        const addRelHere = $('<div class="menu_button" style="margin-top:6px; padding:4px 10px; font-size:0.84em; display:inline-flex; width:auto;"><i class="fa-solid fa-plus"></i> Добавить связь для ' + escapeHtml(n.name) + '</div>').on('click', async () => {
+            const other = await askText(`С кем связан(а) ${n.name}? (Имя персонажа)`);
+            if (!other || !other.trim()) return;
+            const tp = await askText('Тип связи (дружба, роман, соперничество, коллеги, родство)', 'дружба');
+            if (tp === null) return;
+            const ds = await askText('Кратко: суть их отношений');
+            if (ds === null) return;
+            st.relationships.push({ id: st.nextRelId++, a: n.name, b: other.trim(), arrow: '↔', type: tp.trim(), desc: ds.trim(), locked: true, at: ctx().chat.length });
             await commit();
+            renderModalContent();
         });
+        relBox.append(addRelHere);
+        el.append(relBox);
+    };
+
+    renderModalContent();
+    await openPopup(el, true);
+}
+
+function renderNpcs(st) {
+    const root = $('#nnb_npc_list').empty();
+    if (!st.direction.npcs) return;
+    const mc = ensureMainCharCard(st);
+    const det = $('<details open class="nnb-section"><summary></summary></details>');
+    det.find('summary').text(`👥 Герои и связи (${st.npcs.length + (mc ? 1 : 0)})`);
+    root.append(det);
+    det.append('<div class="nnb-npc-status" style="margin-bottom:6px;">Нажми на любого героя, чтобы открыть его полную карточку, описание и настроить шкалы дружбы, романтики и темпа сближения.</div>');
+
+    const sortedNpcs = [...st.npcs].sort((a, b) => (!!b.favorite - !!a.favorite) || a.id - b.id);
+    const allHeroes = mc ? [mc, ...sortedNpcs] : sortedNpcs;
+
+    for (const n of allHeroes) {
+        ensureNpcScales(n, st);
+        const row = $(`
+          <div class="nnb-note nnb-npc" style="cursor:pointer; padding:8px 10px; transition:border-color 0.15s;">
+            <div class="nnb-npc-header" style="display:flex; flex-direction:row; align-items:center; gap:10px;">
+              <div class="nnb-npc-details" style="flex:1; min-width:0;">
+                <div class="nnb-meta" style="font-size:0.95em; font-weight:700; opacity:0.95; color:var(--SmartThemeBodyColor, inherit);"></div>
+                <div class="nnb-npc-status nnb-npc-scales-line" style="font-size:0.82em; margin-top:2px;"></div>
+                <div class="nnb-npc-status nnb-npc-cur-status" style="font-size:0.83em; margin-top:2px;"></div>
+              </div>
+              <div class="nnb-actions" style="flex-shrink:0;">
+                <i class="fa-solid fa-heart nnb-npc-fav-btn" title="Сделать главным героем / фаворитом"></i>
+                <i class="fa-solid fa-image nnb-npc-avatar-btn" title="Картинка-референс внешности"></i>
+              </div>
+            </div>
+          </div>`);
+
+        if (n.avatar) {
+            const av = $('<img class="nnb-npc-avatar" alt="">').attr('src', n.avatar).attr('title', `Внешность ${n.name}`);
+            av.css({
+                'width': '42px',
+                'height': '42px',
+                'border-radius': '10px',
+                'object-fit': 'cover',
+                'flex-shrink': '0',
+                'border': '1.5px solid var(--SmartThemeQuoteColor, #8b78c4)',
+            });
+            av.on('click', e => { e.stopPropagation(); promptNpcAvatar(n); });
+            row.find('.nnb-npc-header').prepend(av);
+        } else {
+            const avIcon = $('<div style="width:38px; height:38px; border-radius:10px; border:1px dashed var(--SmartThemeBorderColor); display:flex; align-items:center; justify-content:center; flex-shrink:0; opacity:0.65;" title="Задать референс внешности"><i class="fa-solid fa-user"></i></div>');
+            row.find('.nnb-npc-header').prepend(avIcon);
+        }
+
+        if (!n.isMainChar) {
+            const delBtn = $('<i class="fa-solid fa-trash" title="Удалить карточку"></i>').on('click', async e => {
+                e.stopPropagation();
+                if (!confirm(`Удалить карточку «${n.name}»?`)) return;
+                st.npcs = st.npcs.filter(x => x.id !== n.id);
+                await commit();
+            });
+            row.find('.nnb-actions').append(delBtn);
+        }
+
+        row.find('.nnb-npc-fav-btn')
+            .css(n.favorite ? { color: '#ff6b8b', opacity: 1 } : { opacity: 0.45 })
+            .on('click', async e => {
+                e.stopPropagation();
+                n.favorite = !n.favorite;
+                await commit();
+                toastr.info(n.favorite ? `❤️ «${escapeHtml(n.name)}» теперь фаворит истории!` : `«${escapeHtml(n.name)}» убран из фаворитов`, '👥 Герои', { escapeHtml: false });
+            });
+
+        row.find('.nnb-npc-avatar-btn')
+            .css(n.avatar ? { color: 'var(--SmartThemeQuoteColor, #8b78c4)' } : {})
+            .on('click', e => {
+                e.stopPropagation();
+                promptNpcAvatar(n);
+            });
+
+        if (n.favorite) row.css('border-color', '#ff6b8b');
+        row.find('.nnb-meta').text((n.favorite ? '❤️ ' : '') + n.name + (n.isMainChar ? ' · Карточка чата' : ''));
+
+        // Компактная строка шкал (Дружба + Романтика + Искра + Темп)
+        const scaleParts = [
+            `${friendshipTierLabel(n.friendship)} (${n.friendship > 0 ? '+' : ''}${n.friendship})`,
+            n.romance > 0 ? `${romanceTierLabel(n.romance)} (${n.romance}%)` : '',
+            n.spark >= 20 ? `${sparkTierLabel(n.spark)} (${n.spark}%)` : '',
+            (PACE_OPTIONS[n.pace] || PACE_OPTIONS.slow).label.split(' ')[0],
+        ].filter(Boolean);
+        row.find('.nnb-npc-scales-line').text(scaleParts.join(' · '));
+
+        // Компактная строка статуса + связей (вместо отдельного громоздкого блока!)
+        const rels = (st.relationships || []).filter(r => normName(r.a) === normName(n.name) || normName(r.b) === normName(n.name));
+        const relStr = rels.map(r => {
+            const other = normName(r.a) === normName(n.name) ? r.b : r.a;
+            const arr = r.arrow === '→' ? (normName(r.a) === normName(n.name) ? '→' : '←') : '↔';
+            return `${arr} ${other}${r.type ? ` (${r.type})` : ''}`;
+        }).join(' · ');
+        const gifts = (st.wardrobe?.box || []).filter(x => normName(x.giftedTo) === normName(n.name));
+        const giftStr = gifts.length ? `🎁 ${gifts.map(g => g.title).join(', ')}` : '';
+
+        const statusAndRels = [
+            n.status ? `Сейчас: ${n.status}` : '',
+            relStr ? `Связи: ${relStr}` : '',
+            giftStr,
+        ].filter(Boolean).join('  |  ');
+
+        if (statusAndRels) row.find('.nnb-npc-cur-status').text(statusAndRels);
+        else row.find('.nnb-npc-cur-status').remove();
+
+        row.on('click', () => openNpcCardPopup(n));
         det.append(row);
     }
+
+    const btnsRow = $('<div class="nnb-buttons" style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap;"></div>');
     const add = $('<div class="menu_button"><i class="fa-solid fa-user-plus"></i> Добавить NPC</div>');
     add.on('click', async () => {
         const name = await askText('Имя NPC');
@@ -7477,72 +8755,13 @@ function renderNpcs(st) {
         if (findNpc(st, name)) return toastr.warning('Такой NPC уже есть', 'Блокнот рассказчика');
         const card = await askText(`Кто такой ${name.trim()}? Внешность, характер, отношение к твоему персонажу`);
         if (!card || !card.trim()) return;
-        st.npcs.push({ id: st.nextNpcId++, name: name.trim(), card: card.trim(), status: '', locked: true, at: ctx().chat.length });
+        const newNpc = { id: st.nextNpcId++, name: name.trim(), card: card.trim(), status: '', locked: true, at: ctx().chat.length };
+        ensureNpcScales(newNpc, st);
+        st.npcs.push(newNpc);
         await commit();
+        openNpcCardPopup(newNpc);
     });
-    det.append(add);
-
-    // --- Матрица отношений между персонажами ---
-    if (!st.relationships) st.relationships = [];
-    const relDet = $('<details open class="nnb-section"><summary></summary></details>');
-    relDet.find('summary').text(`💞 Отношения и связи (${st.relationships.length})`);
-    if (!st.relationships.length) {
-        relDet.append('<div class="nnb-empty">Пока нет зафиксированных связей. Модель запишет их при размышлении, или добавь вручную.</div>');
-    }
-    for (const r of st.relationships) {
-        const row = $(`
-          <div class="nnb-note nnb-rel">
-            <div class="nnb-meta">
-              <span class="nnb-rel-who"></span>
-              <span class="nnb-rel-type"></span>
-              <span class="nnb-rel-lock-tag"></span>
-            </div>
-            <div class="nnb-npc-text"></div>
-            <div class="nnb-actions">
-              <i class="fa-solid nnb-lock"></i>
-              <i class="fa-solid fa-arrows-rotate" title="Сменить направление (взаимно ↔ / односторонне →)"></i>
-              <i class="fa-solid fa-pen" title="Изменить связь"></i>
-              <i class="fa-solid fa-trash" title="Удалить"></i>
-            </div>
-          </div>`);
-        const arrow = r.arrow || '↔';
-        row.find('.nnb-rel-who').text(`${r.a} ${arrow} ${r.b}`);
-        row.find('.nnb-rel-type').text(r.type ? `[${r.type}]` : '');
-        if (r.locked) row.find('.nnb-rel-lock-tag').text(' · защищено');
-        row.find('.nnb-npc-text').text(r.desc || '');
-        row.find('.nnb-lock')
-            .addClass(r.locked ? 'fa-lock' : 'fa-lock-open')
-            .attr('title', r.locked ? 'Связь защищена от модели (нажми, чтобы снять)' : 'Защитить связь от изменений модели')
-            .on('click', async () => { r.locked = !r.locked; await commit(); });
-        row.find('.fa-arrows-rotate').on('click', async () => {
-            r.arrow = r.arrow === '→' ? '↔' : '→';
-            await commit();
-        });
-        row.find('.fa-pen').on('click', async () => {
-            const who = await askText('Персонажи (например «Лилия ↔ Кайлар» или «Марк → София»)', `${r.a} ${r.arrow || '↔'} ${r.b}`);
-            if (who === null) return;
-            const tp = await askText('Тип связи (дружба, роман, соперничество, родство, подозрение)', r.type || '');
-            if (tp === null) return;
-            const ds = await askText('Суть отношений / что между ними', r.desc || '');
-            if (ds === null) return;
-            const wm = who.match(/^(.+?)\s*(↔|<->|->|→|\+)\s*(.+)$/);
-            if (wm) {
-                r.a = wm[1].trim();
-                r.arrow = (wm[2] === '->' || wm[2] === '→') ? '→' : '↔';
-                r.b = wm[3].trim();
-            }
-            r.type = tp.trim();
-            r.desc = ds.trim();
-            r.locked = true;
-            await commit();
-        });
-        row.find('.fa-trash').on('click', async () => {
-            st.relationships = st.relationships.filter(x => x.id !== r.id);
-            await commit();
-        });
-        relDet.append(row);
-    }
-    const addRel = $('<div class="menu_button"><i class="fa-solid fa-heart-circle-plus"></i> Добавить связь</div>');
+    const addRel = $('<div class="menu_button"><i class="fa-solid fa-heart-circle-plus"></i> Добавить связь между героями</div>');
     addRel.on('click', async () => {
         const who = await askText('Персонажи (например «Лилия ↔ Кайлар» или «Марк → София»)');
         if (!who || !who.trim()) return;
@@ -7558,8 +8777,8 @@ function renderNpcs(st) {
         st.relationships.push({ id: st.nextRelId++, a, b, arrow, type: tp.trim(), desc: ds.trim(), locked: true, at: ctx().chat.length });
         await commit();
     });
-    relDet.append(addRel);
-    root.append(relDet);
+    btnsRow.append(add, addRel);
+    det.append(btnsRow);
 }
 
 function renderArcs(st) {
@@ -8088,9 +9307,9 @@ function renderChronicleAndMedals(st, det) {
                 imgWrap.append(mainImgFrame);
 
                 if (page.images.length > 1) {
-                    const thumbsRow = $('<div style="display:flex; justify-content:center; gap:6px; margin-top:6px; flex-wrap:wrap;"></div>');
+                    const thumbsRow = $('<div style="display:flex; justify-content:center; gap:6px; margin-top:6px; overflow-x:auto; padding-bottom:2px;"></div>');
                     page.images.forEach((im, iIdx) => {
-                        const th = $('<div style="width:44px; height:44px; border-radius:6px; background-size:cover; background-position:center; cursor:pointer; border:2px solid transparent;"></div>')
+                        const th = $('<div style="width:40px; height:40px; flex-shrink:0; border-radius:6px; background-size:cover; background-position:center; cursor:pointer; border:2px solid transparent;"></div>')
                             .css('background-image', `url("${String(im.url).replace(/"/g, '%22')}")`);
                         if (iIdx === curImgIdx) th.css('border-color', 'var(--SmartThemeQuoteColor, #e0c068)');
                         th.on('click', () => {
@@ -8113,7 +9332,7 @@ function renderChronicleAndMedals(st, det) {
                 const entriesBox = $('<div style="display:flex; flex-direction:column; gap:8px;"></div>');
                 page.entries.forEach(e => {
                     const entryRow = $('<div class="nnb-note" style="margin:0; display:flex; justify-content:space-between; align-items:flex-start; gap:10px; background:color-mix(in srgb, var(--SmartThemeBlurTintColor, #000) 35%, transparent);"></div>');
-                    const textDiv = $('<div class="nnb-npc-text" style="flex:1; line-height:1.45; font-size:0.96em;"></div>').text(`✒️ ${e.text}`);
+                    const textDiv = $('<div class="nnb-npc-text" style="flex:1; line-height:1.45; font-size:0.95em;"></div>').text(e.text);
                     const acts = $('<div class="nnb-actions" style="flex-shrink:0;"></div>');
                     const editIcon = $('<i class="fa-solid fa-pen" title="Изменить запись"></i>').on('click', async () => {
                         const newText = await askText('Запись в дневнике', e.text);
@@ -8262,11 +9481,13 @@ function fillImageSources() {
     if (!sel.length) return;
     const cur = settings().imageSource || '';
     sel.empty().append($('<option value=""></option>').text('Генерация картинок Таверны (Image Generation)'));
+    sel.append($('<option value="novelai"></option>').text('Картинки NovelAI (V4.5 / V4 / V3 — по ключу pst-… или через Таверну)'));
     for (const p of connectionProfiles()) sel.append($('<option></option>').val(p.id).text(`Профиль: ${p.name}`));
     sel.append($('<option value="openai-images"></option>').text('Картинки OpenAI по ключу (gpt-image)'));
-    if (cur && cur !== 'openai-images' && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
+    if (cur && cur !== 'openai-images' && cur !== 'novelai' && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
     sel.val(cur);
     $('#nnb_img_api').toggle(cur === 'openai-images');
+    $('#nnb_nai_api').toggle(cur === 'novelai');
 }
 
 // 🎬 и 👗 у сообщений: сцена — на каждом сообщении, гардероб — у последнего
@@ -8281,9 +9502,10 @@ function placeMesButtons() {
             box.prepend('<div class="mes_button nnb-mes-btn nnb-mes-scene fa-solid fa-image interactable" title="Нарисовать эту сцену" tabindex="0"></div>');
         }
     });
-    $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map, .nnb-mes-actions-btn').remove();
+    $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map, .nnb-mes-customer, .nnb-mes-actions-btn').remove();
     const lastMes = mes.last();
     const lastBox = lastMes.find('.mes_buttons').first();
+    if (lastBox.length && shopModeOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-customer fa-solid fa-bell-concierge interactable" title="Лавка: следующий покупатель" tabindex="0"></div>');
     if (lastBox.length && mapOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-map fa-solid fa-map interactable" title="Карта: куда пойти" tabindex="0"></div>');
     if (lastBox.length && gachaOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-gacha fa-solid fa-dice interactable" title="Находки: испытать удачу" tabindex="0"></div>');
     if (lastBox.length && st.direction.wardrobe) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-ward fa-solid fa-shirt interactable" title="Гардероб: подобрать образ" tabindex="0"></div>');
@@ -8339,6 +9561,7 @@ function addMenuItems() {
             .find('span').text(text).end().on('click', fn);
         menu.append(item('nnb_menu_book', 'fa-book-open', 'Блокнот рассказчика', () => openBook()));
         menu.append(item('nnb_menu_world', 'fa-earth-americas', 'Мир и карточка героини', () => openWorldOverviewOrCreator()));
+        menu.append(item('nnb_menu_customer', 'fa-bell-concierge', 'Лавка: следующий покупатель', () => nextShopCustomer()));
         menu.append(item('nnb_menu_ff', 'fa-forward', 'Дальше: следующее событие', fastForward));
         menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена: нарисовать', () => showScenePopup()));
         menu.append(item('nnb_menu_map', 'fa-map', 'Карта: куда пойти', () => showMapPopup()));
@@ -8349,7 +9572,17 @@ function addMenuItems() {
             if (st && !st.direction.wardrobe) return toastr.info('Гардероб выключен в этом чате — включи его в блокноте, вкладка «Сюжет»', 'Блокнот рассказчика');
             startWardrobe();
         }));
+        menu.append(item('nnb_menu_actprompts', 'fa-lightbulb', 'Варианты хода: вкл / выкл', () => {
+            settings().actionPrompts = !settings().actionPrompts;
+            $('#nnb_action_prompts, #nnb_book_action_prompts').prop('checked', settings().actionPrompts);
+            saveSettings();
+            updateInjection();
+            placeMesButtons();
+            renderActionPrompts();
+            toastr.info(settings().actionPrompts ? '💡 Варианты хода включены!' : '🚫 Варианты хода выключены', 'Блокнот рассказчика');
+        }));
     }
+    $('#nnb_menu_customer').toggle(!!shopModeOn(store()));
     cleanEnglishExtensionsMenu();
     if (!menu.data('nnbObserverAttached')) {
         menu.data('nnbObserverAttached', true);
@@ -8397,6 +9630,10 @@ jQuery(async () => {
         e.stopPropagation();
         startGacha();
     });
+    $(document).on('click', '.nnb-mes-customer', function (e) {
+        e.stopPropagation();
+        nextShopCustomer();
+    });
     try {
         const chatEl = document.getElementById('chat');
         if (chatEl) new MutationObserver(placeMesButtonsSoon).observe(chatEl, { childList: true });
@@ -8405,18 +9642,37 @@ jQuery(async () => {
     bind('nnb_img_ref', 'imageRef', 'checkbox');
     bind('nnb_accents', 'accents', 'checkbox');
     bind('nnb_action_prompts', 'actionPrompts', 'checkbox');
-    $('#nnb_action_prompts').on('change', renderActionPrompts);
+    $('#nnb_action_prompts').on('change', () => {
+        $('#nnb_book_action_prompts').prop('checked', !!settings().actionPrompts);
+        placeMesButtons();
+        renderActionPrompts();
+    });
+    $('#nnb_book_action_prompts').on('change', function () {
+        settings().actionPrompts = $(this).prop('checked');
+        $('#nnb_action_prompts').prop('checked', settings().actionPrompts);
+        saveSettings();
+        updateInjection();
+        placeMesButtons();
+        renderActionPrompts();
+    });
     fillImageSources();
     $('.npc-notebook-settings .inline-drawer-toggle').on('click', fillImageSources);
     $('#nnb_img_src').on('change', function () {
         settings().imageSource = String($(this).val() || '');
         saveSettings();
         $('#nnb_img_api').toggle(settings().imageSource === 'openai-images');
+        $('#nnb_nai_api').toggle(settings().imageSource === 'novelai');
     });
+    bind('nnb_nai_key', 'naiApiKey');
+    bind('nnb_nai_model', 'naiModel');
+    bind('nnb_nai_sampler', 'naiSampler');
+    bind('nnb_nai_prefix', 'naiPrefix');
+    bind('nnb_nai_neg', 'naiNegative');
     bind('nnb_img_base', 'imgApiBase');
     bind('nnb_img_key', 'imgApiKey');
     bind('nnb_img_model', 'imgApiModel');
     bind('nnb_img_orient', 'imgOrientation');
+    bind('nnb_scene_cam', 'sceneCameraMode');
     $('#nnb_ff_on').on('change', placeFfButton);
     bind('nnb_interval', 'interval', 'number');
     bind('nnb_depth', 'depth', 'number');
@@ -8493,6 +9749,15 @@ jQuery(async () => {
         const st = store();
         if (!st) return;
         st.direction.livingWorld = $(this).prop('checked');
+        saveDirectionSoon();
+        updateInjection();
+        renderPanel();
+    });
+    $('#nnb_shop_mode_on').on('change', function () {
+        const st = store();
+        if (!st) return;
+        st.direction.shopMode = $(this).prop('checked');
+        placeMesButtons();
         saveDirectionSoon();
         updateInjection();
         renderPanel();
