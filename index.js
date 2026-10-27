@@ -1735,10 +1735,22 @@ let ownRequest = false;
 let ownPrompt = '';
 let ffPending = false;
 
+function stripActionTags(text) {
+    return String(text ?? '')
+        .replace(/<(think|thinking|reasoning)>[\s\S]*?<\/(think|thinking|reasoning)>/gi, '')
+        .replace(/<!--\s*ACTIONS\s*[:：][\s\S]*?-->/gi, '')
+        .replace(/\[\s*(?:ACTIONS|Варианты действий|Варианты хода)\s*[:：][\s\S]*?\]/gi, '')
+        .replace(/(?:^|\n)\s*(?:<!--\s*)?(?:ACTIONS|Варианты действий|Варианты хода)\s*[:：][\s\S]*$/gi, '')
+        .trim();
+}
+
 async function quietGenerateOnce(prompt) {
-    const fn = ctx().generateQuietPrompt;
+    const c = ctx();
+    const fn = c.generateQuietPrompt;
     ownRequest = true;
     ownPrompt = String(prompt || '');
+    // Временно отключаем инъекцию вариантов хода, чтобы она не попадала в дневник, гардероб и другие фоновые генерации
+    c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
     try {
         if (fn.length === 0) {
             return await fn({ quietPrompt: prompt });
@@ -1747,6 +1759,11 @@ async function quietGenerateOnce(prompt) {
     } finally {
         ownRequest = false;
         ownPrompt = '';
+        const s = settings();
+        const st = store();
+        if (s.enabled && s.actionPrompts && st && !busy) {
+            c.setExtensionPrompt(ACTION_INJECT_KEY, buildActionPromptsInjection(), POS_IN_CHAT, 0, false, Number(s.role) || 0);
+        }
     }
 }
 
@@ -1790,7 +1807,7 @@ function normalizeSpaces(t) {
 }
 
 async function quietGenerate(prompt) {
-    return normalizeSpaces(await quietGenerateRetry(prompt));
+    return stripActionTags(normalizeSpaces(await quietGenerateRetry(prompt)));
 }
 
 // При ошибке лимита (429) ждём и пробуем ещё раз
@@ -8202,49 +8219,203 @@ async function openTrendsModal() {
     await openPopup(el, true);
 }
 
-// ===================== 📓 Личный дневник НПС (по запросу) =====================
-async function openNpcDiaryPopup(n) {
+// ===================== 📓 Личный дневник НПС (по запросу, с выбором дня и авто-сворачиванием) =====================
+async function generateNpcDiaryForDate(n, targetDate = '') {
+    const st = store();
+    if (!st || !n) return false;
+    const names = storyNames();
+    const useDate = targetDate || st.time?.date || '';
+    const dateLabel = useDate && /^\d{4}-\d{2}-\d{2}$/.test(useDate) ? formatDate(useDate) : (useDate || 'сегодня');
+    const dayEvents = (st.time?.timeline || [])
+        .filter(e => e.date === useDate)
+        .map(e => e.text)
+        .filter(Boolean);
+    const eventsLine = dayEvents.length
+        ? `События этого дня в истории (${dateLabel}): ${dayEvents.join('; ')}.`
+        : `Дата записи: ${dateLabel}. Опирайся на события чата и жизнь персонажа в этот период.`;
+
+    const toastNote = toastr.info(
+        `Окно свернулось, пока ${escapeHtml(n.name)} делает запись за ${escapeHtml(dateLabel)}… Дневник откроется сам, когда будет готово!`,
+        '📓 Личный дневник',
+        { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true, escapeHtml: false }
+    );
+
+    let ok = false;
+    try {
+        await withBusy(`📓 ${n.name} пишет в дневнике (${dateLabel})…`, async s2 => {
+            const prompt = `[OOC: Пауза в ролевой игре. Напиши одну живую, искреннюю страницу из личного дневника персонажа «${n.name}» от ПЕРВОГО ЛИЦА («Я...») за дату: ${dateLabel}.
+${eventsLine}
+Информация о персонаже: ${n.card}. ${formatNpcScaleSummary(n)}
+Важные требования:
+— Персонаж не должен думать ТОЛЬКО о ${names.user}! Обязательно отрази его собственную жизнь в этот день: личные дела, работу/учёбу, бытовые мелочи, отношения с семьёй или другими NPC, его собственную мечту (${n.dream || 'личную цель'}) или скрытое беспокойство (${n.fear || 'сомнения'}), и лишь затем — его честные, сокровенные мысли о ${names.user} и событиях дня.
+— Пиши в характерной для ${n.name} манере речи, 1–2 абзаца, строго без кавычек, без служебных меток и БЕЗ вариантов действий (никаких ACTIONS).]`;
+            const raw = await quietGenerate(prompt);
+            const text = stripActionTags(raw);
+            if (text) {
+                if (!Array.isArray(n.diary)) n.diary = [];
+                n.diary.push({ date: useDate || s2.time?.date || '', text });
+                if (n.diary.length > 30) n.diary.shift();
+                await commit();
+                ok = true;
+            }
+        });
+    } finally {
+        try { toastr.clear(toastNote); } catch (e) { /* ignore */ }
+    }
+    return ok;
+}
+
+async function openNpcDiaryPopup(n, initialFilterDate = '') {
     const st = store();
     if (!st || !n) return;
     ensureNpcScales(n, st);
+
+    // Автоматически очищаем старые записи от случайно попавших туда вариантов ответа (ACTIONS)
+    if (Array.isArray(n.diary)) {
+        n.diary.forEach(entry => {
+            entry.text = stripActionTags(entry.text);
+        });
+    }
+
+    let filterDate = initialFilterDate || '__all__';
+    let pageIdx = Math.max(0, (n.diary || []).length - 1);
 
     const el = $('<div class="nnb-pop"></div>');
     const renderDiary = () => {
         el.empty();
         el.append($('<h3></h3>').text(`📓 Личный дневник: ${n.name}`));
-        el.append($('<div class="nnb-pop-sub"></div>').text(`Тайные записи от первого лица — о чём ${n.name} думает наедине с собой (не только о тебе, но и о своей жизни, семье, работе, мечтах и страхах). Токены тратятся только тогда, когда ты нажимаешь кнопку ниже:`));
+        el.append($('<div class="nnb-pop-sub"></div>').text(`Тайные записи от первого лица — о чём ${n.name} думает наедине с собой за выбранный день. При генерации окно само сворачивается и открывается снова, когда запись готова!`));
 
-        if (!n.diary || !n.diary.length) {
-            el.append('<div class="nnb-empty" style="margin:10px 0;">В дневнике этого героя пока нет подсмотренных страниц. Нажми кнопку ниже, чтобы узнать, что он записал за последний день!</div>');
+        const entries = n.diary || [];
+
+        // 1. Панель просмотра записей за определённые дни
+        if (!entries.length) {
+            el.append('<div class="nnb-empty" style="margin:10px 0;">В дневнике этого героя пока нет подсмотренных страниц. Выбери день ниже и нажми «Подсмотреть запись»!</div>');
         } else {
-            [...n.diary].reverse().forEach((entry, idx) => {
-                const page = $('<div class="nnb-note" style="padding:12px 14px; border-left:3px solid var(--SmartThemeQuoteColor, #8b78c4); margin:8px 0;"></div>');
-                page.append($('<div class="nnb-meta" style="margin-bottom:4px;"></div>').text(`📅 ${entry.date ? (/^\d{4}-\d{2}-\d{2}$/.test(entry.date) ? formatDate(entry.date) : entry.date) : 'Запись дня'}`));
+            const uniqueDates = [...new Set(entries.map(e => e.date || 'Без даты'))];
+            const filterRow = $('<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0; flex-wrap:wrap; padding:6px 10px; border-radius:10px; background:color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 10%, transparent);"></div>');
+
+            const prevBtn = $('<div class="menu_button" style="padding:4px 10px; font-weight:600;"><i class="fa-solid fa-arrow-left"></i></div>');
+            const nextBtn = $('<div class="menu_button" style="padding:4px 10px; font-weight:600;"><i class="fa-solid fa-arrow-right"></i></div>');
+            const dateFilterSel = $('<select class="text_pole" style="flex:1; min-width:170px; margin:0;"></select>');
+            dateFilterSel.append($('<option value="__single__"></option>').text(`📄 По страницам (${pageIdx + 1} из ${entries.length})`));
+            dateFilterSel.append($('<option value="__all__"></option>').text(`📚 Все записи списком (${entries.length})`));
+            uniqueDates.forEach(d => {
+                const label = /^\d{4}-\d{2}-\d{2}$/.test(d) ? `📅 За день: ${formatDate(d)}` : `📅 ${d}`;
+                dateFilterSel.append($('<option></option>').val(d).text(label));
+            });
+            if (filterDate !== '__all__' && filterDate !== '__single__' && !uniqueDates.includes(filterDate)) {
+                filterDate = '__single__';
+            }
+            dateFilterSel.val(filterDate);
+
+            dateFilterSel.on('change', function () {
+                filterDate = String($(this).val() || '__single__');
+                renderDiary();
+            });
+            prevBtn.on('click', () => {
+                filterDate = '__single__';
+                if (pageIdx > 0) pageIdx--;
+                renderDiary();
+            });
+            nextBtn.on('click', () => {
+                filterDate = '__single__';
+                if (pageIdx < entries.length - 1) pageIdx++;
+                renderDiary();
+            });
+            if (filterDate === '__single__') {
+                prevBtn.css({ opacity: pageIdx <= 0 ? 0.35 : 1, pointerEvents: pageIdx <= 0 ? 'none' : 'auto' });
+                nextBtn.css({ opacity: pageIdx >= entries.length - 1 ? 0.35 : 1, pointerEvents: pageIdx >= entries.length - 1 ? 'none' : 'auto' });
+            }
+
+            filterRow.append(prevBtn, dateFilterSel, nextBtn);
+            el.append(filterRow);
+
+            const shownEntries = filterDate === '__all__'
+                ? [...entries].reverse()
+                : filterDate === '__single__'
+                    ? [entries[Math.max(0, Math.min(entries.length - 1, pageIdx))]].filter(Boolean)
+                    : entries.filter(e => (e.date || 'Без даты') === filterDate);
+
+            shownEntries.forEach(entry => {
+                const page = $('<div class="nnb-note" style="padding:12px 14px; border-left:3px solid var(--SmartThemeQuoteColor, #8b78c4); margin:6px 0;"></div>');
+                const head = $('<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;"></div>');
+                const dText = entry.date ? (/^\d{4}-\d{2}-\d{2}$/.test(entry.date) ? `${weekday(entry.date)}, ${formatDate(entry.date)}` : entry.date) : 'Запись дня';
+                head.append($('<div class="nnb-meta" style="font-weight:700;"></div>').text(`📅 ${dText}`));
+                const acts = $('<div class="nnb-actions"></div>');
+                const editBtn = $('<i class="fa-solid fa-pen" title="Изменить запись"></i>').on('click', async () => {
+                    const updated = await askText('Текст записи дневника', entry.text);
+                    if (updated && updated.trim()) {
+                        entry.text = stripActionTags(updated.trim());
+                        await commit();
+                        renderDiary();
+                    }
+                });
+                const delBtn = $('<i class="fa-solid fa-trash" title="Удалить запись"></i>').on('click', async () => {
+                    const idx = n.diary.indexOf(entry);
+                    if (idx >= 0) n.diary.splice(idx, 1);
+                    pageIdx = Math.max(0, n.diary.length - 1);
+                    await commit();
+                    renderDiary();
+                });
+                acts.append(editBtn, delBtn);
+                head.append(acts);
+                page.append(head);
                 page.append($('<div class="nnb-npc-text" style="font-style:italic; line-height:1.5;"></div>').text(entry.text));
                 el.append(page);
             });
         }
 
-        const genBtn = $('<div class="menu_button nnb-btn-primary" style="margin-top:8px;"><i class="fa-solid fa-feather-pointed"></i> Подсмотреть новую запись за сегодня</div>').on('click', async () => {
-            const names = storyNames();
-            await withBusy(`📓 Подсматриваем, что ${n.name} пишет в дневнике…`, async s2 => {
-                const prompt = `[OOC: Пауза в ролевой игре. Напиши одну живую, искреннюю страницу из личного дневника персонажа «${n.name}» от ПЕРВОГО ЛИЦА («Я...») за сегодняшний день (${s2.time?.date ? formatDate(s2.time.date) : 'сегодня'}).
-Информация о персонаже: ${n.card}. ${formatNpcScaleSummary(n)}
-Важные требования:
-— Персонаж не должен думать ТОЛЬКО о ${names.user}! Обязательно отрази его собственную жизнь: личные дела, работу/учёбу, усталость или бытовые мелочи, отношения с семьёй или другими NPC, его собственную мечту (${n.dream || 'личную цель'}) или скрытое беспокойство (${n.fear || 'сомнения'}), и лишь затем — его честные, сокровенные мысли о ${names.user} и последних событиях чата.
-— Пиши в характерной для ${n.name} манере речи, 1–2 абзаца, без кавычек и без служебных меток.]`;
-                const raw = await quietGenerate(prompt);
-                const text = String(raw || '').replace(/<(think|thinking|reasoning)>[\s\S]*?<\/>/gi, '').trim();
-                if (text) {
-                    if (!Array.isArray(n.diary)) n.diary = [];
-                    n.diary.push({ date: s2.time?.date || '', text });
-                    if (n.diary.length > 15) n.diary.shift();
-                    await commit();
-                }
-            });
-            renderDiary();
+        // 2. Выбор дня и генерация новой записи (с авто-сворачиванием окна!)
+        const genBox = $('<div class="nnb-note" style="margin-top:10px; padding:10px 12px;"></div>');
+        genBox.append('<div style="font-weight:700; margin-bottom:6px;">✍️ Подсмотреть запись за выбранный день</div>');
+
+        const knownStoryDates = [];
+        if (st.time?.date) knownStoryDates.push(st.time.date);
+        (st.time?.timeline || []).forEach(e => {
+            if (e.date && !knownStoryDates.includes(e.date)) knownStoryDates.push(e.date);
         });
-        el.append(genBtn);
+        knownStoryDates.sort().reverse();
+
+        const dayRow = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;"></div>');
+        const daySel = $('<select class="text_pole" style="flex:1; min-width:180px; margin:0;"></select>');
+        if (st.time?.date) {
+            daySel.append($('<option></option>').val(st.time.date).text(`Сегодня в истории: ${formatDate(st.time.date)}`));
+        } else {
+            daySel.append('<option value="">Текущий день (по последним событиям чата)</option>');
+        }
+        knownStoryDates.forEach(d => {
+            if (d === st.time?.date) return;
+            const evPreview = (st.time?.timeline || []).find(e => e.date === d)?.text || '';
+            const shortEv = evPreview ? ` — ${evPreview.slice(0, 38)}${evPreview.length > 38 ? '…' : ''}` : '';
+            daySel.append($('<option></option>').val(d).text(`${/^\d{4}-\d{2}-\d{2}$/.test(d) ? formatDate(d) : d}${shortEv}`));
+        });
+        daySel.append('<option value="__custom__">✏️ Вписать другую дату или день…</option>');
+
+        const customDateInp = $('<input type="text" class="text_pole" style="display:none; width:100%; margin-top:4px;" placeholder="Напиши дату (например «14 октября» или «Вчера после вечеринки»)">');
+        daySel.on('change', function () {
+            customDateInp.toggle($(this).val() === '__custom__');
+        });
+        dayRow.append(daySel, customDateInp);
+        genBox.append(dayRow);
+
+        const genBtn = $('<div class="menu_button nnb-btn-primary"><i class="fa-solid fa-feather-pointed"></i> Подсмотреть запись за выбранный день (окно свернётся на время генерации)</div>').on('click', async () => {
+            let targetDate = String(daySel.val() || '');
+            if (targetDate === '__custom__') {
+                const rawCustom = String(customDateInp.val() || '').trim();
+                if (!rawCustom) return toastr.warning('Укажи дату или событие для записи', '📓 Дневник');
+                const parsedIso = parseDateText(rawCustom, st.time?.date || '2024-10-12');
+                targetDate = parsedIso || rawCustom;
+            }
+            // Сворачиваем окно на время генерации!
+            closePopupOf(el);
+            const ok = await generateNpcDiaryForDate(n, targetDate);
+            if (ok) {
+                await openNpcDiaryPopup(n, '__single__');
+            }
+        });
+        genBox.append(genBtn);
+        el.append(genBox);
     };
 
     renderDiary();
@@ -10306,10 +10477,22 @@ function renderChronicleAndMedals(st, det) {
 
             const pageTitleBox = $('<div style="text-align:center; flex:1; min-width:0;"></div>');
             pageTitleBox.append($('<div style="font-size:0.78em; opacity:0.7; letter-spacing:0.04em; text-transform:uppercase;"></div>').text(`Страница ${idx + 1} из ${pages.length}`));
-            const dateHeading = isIso
-                ? `${seasIcon} ${weekday(page.date)}, ${formatDate(page.date)}`
-                : `📖 ${page.date}`;
-            pageTitleBox.append($('<div style="font-weight:700; font-size:1.05em; margin-top:1px;"></div>').text(dateHeading));
+
+            // Выпадающий список для быстрого перехода к любому конкретному дню в дневнике
+            const dateSelect = $('<select class="text_pole" style="margin:2px auto; max-width:280px; font-weight:700; text-align:center;"></select>');
+            pages.forEach((pItem, pIndex) => {
+                const pIso = /^\d{4}-\d{2}-\d{2}$/.test(pItem.date);
+                const pSeas = pIso ? season(pItem.date) : null;
+                const pIcon = pSeas ? ({ 'зима': '❄️', 'весна': '🌸', 'лето': '☀️', 'осень': '🍂' }[pSeas.name] || '📅') : '📖';
+                const pLabel = pIso ? `${pIcon} ${weekday(pItem.date)}, ${formatDate(pItem.date)}` : `${pIcon} ${pItem.date}`;
+                dateSelect.append($('<option></option>').val(String(pIndex)).text(pLabel));
+            });
+            dateSelect.val(String(idx)).on('change', function () {
+                st._diaryPageIdx = Number($(this).val()) || 0;
+                renderCurrentPage();
+            });
+            pageTitleBox.append(dateSelect);
+
             if (isIso && st.time.date) {
                 pageTitleBox.append($('<div class="nnb-npc-status" style="font-size:0.8em; margin-top:1px;"></div>').text(agoText(daysBetween(page.date, st.time.date))));
             }
@@ -10376,6 +10559,7 @@ function renderChronicleAndMedals(st, det) {
                 const entriesBox = $('<div style="display:flex; flex-direction:column; gap:8px;"></div>');
                 page.entries.forEach(e => {
                     const entryRow = $('<div class="nnb-note" style="margin:0; display:flex; justify-content:space-between; align-items:flex-start; gap:10px; background:color-mix(in srgb, var(--SmartThemeBlurTintColor, #000) 35%, transparent);"></div>');
+                    e.text = stripActionTags(e.text);
                     const textDiv = $('<div class="nnb-npc-text" style="flex:1; line-height:1.45; font-size:0.95em;"></div>').text(e.text);
                     const acts = $('<div class="nnb-actions" style="flex-shrink:0;"></div>');
                     const editIcon = $('<i class="fa-solid fa-pen" title="Изменить запись"></i>').on('click', async () => {
@@ -10571,22 +10755,8 @@ function placeMesButtonsSoon() {
 
 // ⏩ у поля ввода и пункты в меню «волшебной палочки»
 function placeFfButton() {
-    const on = !!settings().ffButton;
-    let btn = $('#nnb_ff_btn');
-    if (on && !btn.length && $('#send_but').length) {
-        btn = $('<div id="nnb_ff_btn" class="fa-solid fa-forward interactable" title="Дальше: перейти к следующему событию" tabindex="0"></div>');
-        btn.on('click', fastForward);
-        $('#send_but').before(btn);
-    }
-    btn.toggle(on);
-
-    let topBtn = $('#nnb_topics_btn');
-    if (on && !topBtn.length && $('#send_but').length) {
-        topBtn = $('<div id="nnb_topics_btn" class="fa-solid fa-comments interactable" title="💬 Заготовленные темы для разговора" tabindex="0" style="cursor:pointer;"></div>');
-        topBtn.on('click', () => openTopicsPopup());
-        $('#send_but').before(topBtn);
-    }
-    topBtn.toggle(on);
+    // Кнопки «Дальше» и «Темы для разговора» перенесены под волшебную палочку (🪄), чтобы не сжимать поле ввода текста
+    $('#nnb_ff_btn, #nnb_topics_btn').remove();
 }
 
 function cleanEnglishExtensionsMenu() {
