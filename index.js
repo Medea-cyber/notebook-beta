@@ -83,9 +83,13 @@ const NPC_INJECT_HEADER = `[Персонажи истории, их ключи �
    — Если по логике текущего момента (страстные поцелуи, откровенные ласки, близость или сильное попадание в его «ключи») персонаж уже должен быть сильно взволнован или НА ГРАНИ — ни в коем случае не застревай на «лёгком ветерке», сразу отыгрывай реальный высокий накал (60–84 = сильное волнение и сбившееся дыхание; 85–100 = на грани / пик страсти и желания)!
    — Если же сцена сейчас обычная, бытовая или только зарождается лёгкий флирт — не пиши шаблонное «болезненное желание» на пустом месте, а отыгрывай спокойствие (0–14), лёгкий ветерок (15–34) или мягкое, уютное тепло без спешки (35–59).
    — Когда интимная сцена завершилась и герои перешли к отдыху, душу или разговору — естественно переводи тело в мягкое расслабленное послевкусие (0–15).
-2) ЖИВОЕ АВТО-ОБНОВЛЕНИЕ ШКАЛЫ В КАЖДОМ ПОСТЕ: в самом конце своего ответа добавь короткую скрытую метку с актуальным состоянием тела (от 0 до 100) и текущим статусом основного персонажа прямо в этой сцене:
-<!--SPARK: число_от_0_до_100 | краткий статус в 3–6 словах-->
-(например: <!--SPARK: 92 | на грани в твоих руках--> в разгар страсти, или <!--SPARK: 10 | расслаблен после душа--> когда сцена сменилась отдыхом). Метка невидима для игрока.]`;
+2) ЖИВЫЕ ЭМОЦИИ, БЫТОВЫЕ ССОРЫ, РЕВНОСТЬ И НЕДОПОНИМАНИЯ (БЕЗ ПРИТОРНОСТИ И БЕЗ УГРОЗЫ ОТНОШЕНИЯМ):
+   — Персонажи живые, со своим характером и гордостью: они НЕ должны быть приторно-покладистыми и мгновенно во всём соглашаться с {{user}}.
+   — Если в сцене задета «бытовая заноза» персонажа (в чём он упрямится), сработал его триггер ревности/собственничества, возникло двусмысленное недопонимание или у него сейчас непростой тонус («на взводе», «ревнивый», «упрямый», «задетый») — НЕ сглаживай острый угол за один пост! Позволь ему упереться, поворчать, поспорить по бытовому поводу, ревниво прищуриться или показать характер на протяжении всей сцены, пока герои сами эмоционально не разрядят обстановку.
+   — ЖЕЛЕЗНОЕ ПРАВИЛО БЕЗОПАСНОСТИ: любые бытовые ссоры, ревность, упрямство и недопонимания происходят ТОЛЬКО внутри надёжной привязанности — без угроз жизни, без жестокости/абьюза, без измен и без реальной угрозы разрыва отношений. Это живая перчинка, которая подогревает химию и ведёт к яркому примирению.
+3) ЖИВОЕ АВТО-ОБНОВЛЕНИЕ ШКАЛЫ И ТОНУСА В КАЖДОМ ПОСТЕ: в самом конце своего ответа добавь короткую скрытую метку с актуальным состоянием тела (от 0 до 100), текущим статусом и (по желанию) текущим эмоциональным тонусом основного персонажа прямо в этой сцене:
+<!--SPARK: число_от_0_до_100 | краткий статус в 3–6 словах | тонус: тёплый/взвод/ревность/упрямый/задетый-->
+(например: <!--SPARK: 92 | на грани в твоих руках | тёплый--> в разгар страсти, <!--SPARK: 25 | спорит из-за планов на вечер | упрямый--> в бытовой перепалке, или <!--SPARK: 40 | хмуро косится на твоего собеседника | ревность--> при вспышке ревности). Метка невидима для игрока.]`;
 
 const INTRIGUE_INJECT_HEADER = '[Тайны и интриги — секрет автора, игрок правды не знает. Раскрывай постепенно: через намёки, улики, оговорки NPC, слухи (в том числе ложные). Не выдавай правду целиком раньше времени и не форсируй.]';
 
@@ -1116,6 +1120,7 @@ function store() {
     if (!st.intrigues) st.intrigues = [];
     if (!st.nextIntrigueId) st.nextIntrigueId = 1;
     if (st.direction.npcs === undefined) st.direction.npcs = true;
+    if (st.direction.spicyFriction === undefined) st.direction.spicyFriction = true;
     if (!st.npcs) st.npcs = [];
     if (!st.nextNpcId) st.nextNpcId = 1;
     if (st.direction.arcs === undefined) st.direction.arcs = true;
@@ -1189,6 +1194,11 @@ function formatNotes(notes) {
 
 function buildDirection(st) {
     const parts = [buildGenreDirection(st)];
+    if (st?.direction?.spicyFriction !== false) {
+        parts.push(`ЖИВАЯ ПЕРЧИНКА И ЭМОЦИИ (БЕЗ ПРИТОРНОСТИ, НО БЕЗ ТЯЖЁЛОЙ ДРАМЫ):
+— Следи, чтобы история не становилась приторно-сладкой и бесконфликтной: среди новых задумок (ADD) обязательно предлагай 1–2 живых повода для бытовых трений, мелкого столкновения характеров и привычек, комичного или острого недопонимания либо укола ревности/собственничества (например: двусмысленный знак внимания от NPC, спор о бытовой привычке, забытое обещание, столкновение упрямства).
+— ВАЖНО: все такие трения должны быть живыми и бытовыми/романтическими — строго БЕЗ угроз жизни, здоровья, предательства или разрушения отношений.`);
+    }
     if (st?.rejected?.length) {
         parts.push('Игрок отклонил эти идеи — не предлагай их и похожие:\n' + st.rejected.map(t => `— ${t}`).join('\n'));
     }
@@ -1361,6 +1371,51 @@ const INTIMATE_ACCENT_TAGS = [
     'Акцент на тактильности: волосы, шея, руки, дыхание',
 ];
 
+const DAILY_MOOD_OPTIONS = {
+    warm: {
+        id: 'warm',
+        short: '☀️ В хорошем духе',
+        label: '☀️ В хорошем духе (тёплый и расположенный)',
+        desc: 'в хорошем расположении духа, открыт к теплу и общению, но сохраняет свой характер и собственное мнение',
+    },
+    edgy: {
+        id: 'edgy',
+        short: '⚡ На взводе',
+        label: '⚡ На взводе / устал (легко вспыхивает из-за мелочей)',
+        desc: 'сегодня уставший, немного на взводе и колючий: легко цепляется к бытовым мелочам, бурчит, отвечает резче обычного и не сглаживает углы за один пост',
+    },
+    jealous: {
+        id: 'jealous',
+        short: '👀 Ревнивый',
+        label: '👀 Ревнивый и собственнический (ищет подвох и чужие взгляды)',
+        desc: 'сегодня обострённо собственнический и подозрительный: ревниво замечает любое чужое внимание к {{user}}, её улыбки другим или недомолвки, легко вспыхивает ревностью и требует её внимания себе',
+    },
+    stubborn: {
+        id: 'stubborn',
+        short: '🪨 Упрямый',
+        label: '🪨 Упрямый и спорщицкий (стоит на своём из принципа)',
+        desc: 'сегодня в упрямом, заводном и спорщицком настроении: подкалывает, спорит из принципа по бытовым пустякам и ни за что не соглашается уступить первым',
+    },
+    sulky: {
+        id: 'sulky',
+        short: '🌧 Задетый',
+        label: '🌧 Задетый / недопонимание (держит прохладцу и ждёт шага)',
+        desc: 'чувствует себя немного задетым или неправильно понятым из-за недавней мелочи или двусмысленности: держит горделивую дистанцию и ждёт, пока {{user}} сама сделает шаг навстречу',
+    },
+};
+
+function parseDailyMoodValue(val) {
+    const v = String(val || '').toLowerCase().trim();
+    if (!v) return '';
+    if (DAILY_MOOD_OPTIONS[v]) return v;
+    if (/взвод|устал|раздраж|колюч|нервн|резк/.test(v)) return 'edgy';
+    if (/ревн|собствен|подозр/.test(v)) return 'jealous';
+    if (/упрям|спор|принцип|вредн/.test(v)) return 'stubborn';
+    if (/задет|обид|недопоним|прохлад|дуется|хмур/.test(v)) return 'sulky';
+    if (/тепл|тёпл|хорош|споко|располож|добр/.test(v)) return 'warm';
+    return '';
+}
+
 function friendshipTierLabel(val) {
     const v = Number(val) || 0;
     if (v <= -50) return '⚡ Враги';
@@ -1445,6 +1500,9 @@ function ensureNpcScales(n, st) {
     }
     if (typeof n.turnOns !== 'string') n.turnOns = '';
     if (typeof n.turnOffs !== 'string') n.turnOffs = '';
+    if (typeof n.petPeeves !== 'string') n.petPeeves = '';
+    if (typeof n.jealousyTriggers !== 'string') n.jealousyTriggers = '';
+    if (!n.dailyMood || !DAILY_MOOD_OPTIONS[n.dailyMood]) n.dailyMood = 'warm';
     if (typeof n.dream !== 'string') n.dream = '';
     if (typeof n.fear !== 'string') n.fear = '';
     if (typeof n.likes !== 'string') n.likes = '';
@@ -1495,6 +1553,10 @@ function formatNpcScaleSummary(n) {
         parts.push(`Отметка состояния тела с прошлого шага: ${n.spark}/100 (${sparkTierLabel(n.spark)}) — НЕ используй как тормоз: если по логике текущей сцены персонаж уже должен быть сильно взволнован или на грани (или наоборот уже отдыхает после близости), сразу отыгрывай реальный накал момента и обнови шкалу меткой <!--SPARK: 0..100 | краткий статус--> в конце ответа.`);
         parts.push(`Природа телесного отклика: ${bsObj.label} (${bsObj.desc}).`);
         parts.push(`Условие для сближения («зелёный свет»): ${glObj.label} (${glObj.desc}).`);
+        const moodObj = DAILY_MOOD_OPTIONS[n.dailyMood] || DAILY_MOOD_OPTIONS.warm;
+        parts.push(`Текущий эмоциональный тонус («с какой ноги встал» в этой сцене): ${moodObj.label} — ${moodObj.desc}.`);
+        if (n.petPeeves) parts.push(`Бытовая заноза (в чём упрямится, ворчит и спорит в быту — при столкновении НЕ сглаживай за один пост, дай поспорить!): ${n.petPeeves}.`);
+        if (n.jealousyTriggers) parts.push(`Триггеры ревности и собственничества (от чего мгновенно напрягается и ревнует): ${n.jealousyTriggers}.`);
         if (n.turnOns) parts.push(`Ключи к нему (что цепляет, влюбляет и заводит): ${n.turnOns}.`);
         if (n.turnOffs) parts.push(`Стоп-факторы (что охлаждает и заставляет закрыться): ${n.turnOffs}.`);
         if (n.publicRole || n.intimateRole !== 'equal' || n.intimateStyle !== 'tender_harmony' || (n.intimateTags && n.intimateTags.length)) {
@@ -1546,7 +1608,7 @@ ${formatRelationships(st, true)}
 Команды для них (с новой строки, вместе с остальными):
 NPC [Имя]: кто это, внешность, характер, отношение к {{user}} — 1–3 предложения.
 NPCSTATE [Имя]: что персонаж делает ПРЯМО СЕЙЧАС в последних 1–2 сообщениях чата (обязательно обновляй для ${charName} и присутствующих в сцене NPC! Если прежняя сцена — например, близость, спор или поездка — уже закончилась несколько постов назад, замени старый статус на то, чем персонаж занят прямо сейчас).
-KEYS [${charName}]: цепляет=2–3 конкретные вещи, жеста или черты поведения, от которых он тает или загорается | охлаждает=1–2 вещи, которые его отталкивают | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс — заполни ТОЛЬКО для основного персонажа (${charName}).
+KEYS [${charName}]: цепляет=2–3 конкретные вещи, жеста или черты поведения, от которых он тает или загорается | охлаждает=1–2 вещи, которые его отталкивают | заноза=1–2 бытовые привычки или темы, в которых он упрямится, ворчит и спорит с {{user}} | ревность=1–2 ситуации, от которых в нём просыпается ревность и собственничество | тонус=тёплый/взвод/ревность/упрямый/задетый | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс — заполни и обновляй ТОЛЬКО для основного персонажа (${charName}).
 PROFILE [Имя]: мечта=к чему стремится в жизни сам по себе | страх=чего боится | любит=любимые цвета, стиль одежды, еда, погода | не_любит=что не переносит — личные цели и вкусы для ${charName} и важных NPC.
 SCALE [Имя]: дружба=число_или_сдвиг | романтика=число_или_сдвиг | тело=число_или_сдвиг — обнови шкалы:
 — Для обычных NPC меняй ТОЛЬКО «дружба=...» (романтику и состояние тела обычным NPC НЕ ставь!).
@@ -1753,7 +1815,7 @@ function buildActionPromptsInjection() {
 Требования к вариантам:
 — Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «погладить ${user}» — действует только сама ${user}.
 — Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${poiLine}
+— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${(st && st.direction?.spicyFriction !== false) ? `\n— Не делай все 3 варианта приторно-соглашательскими: хотя бы один из вариантов должен давать ${user} возможность проявить характер — упрямо настоять на своём в бытовом споре, подколоть собеседника, сыграть на ревности или остро отреагировать на недопонимание.` : ''}${poiLine}
 — Формулируй кратко (1–2 фразы), чтобы ${user} могла отправить этот вариант как свой ход. Метка невидима для игрока, не упоминай её в основном тексте ответа.]`;
 }
 
@@ -2278,6 +2340,16 @@ function parseAndApply(raw) {
                         if (km) { n.turnOns = km[2].trim().replace(/\]$/, ''); return; }
                         const om = p.match(/^(охлаждает|отталкивает|стоп|turnoffs?)\s*[=:]\s*(.+)$/i);
                         if (om) { n.turnOffs = om[2].trim().replace(/\]$/, ''); return; }
+                        const pm = p.match(/^(заноза|упрямство|пунктик|раздражает|быт|petpeeves?)\s*[=:]\s*(.+)$/i);
+                        if (pm) { n.petPeeves = pm[2].trim().replace(/\]$/, ''); return; }
+                        const jm = p.match(/^(ревность|собственничество|ревнует|jealousy)\s*[=:]\s*(.+)$/i);
+                        if (jm) { n.jealousyTriggers = jm[2].trim().replace(/\]$/, ''); return; }
+                        const mm = p.match(/^(тонус|настроение|нога|mood)\s*[=:]\s*(.+)$/i);
+                        if (mm) {
+                            const parsedMood = parseDailyMoodValue(mm[2]);
+                            if (parsedMood) n.dailyMood = parsedMood;
+                            return;
+                        }
                         const gm = p.match(/^(?:зелёный_?свет|зеленый_?свет|свет)\s*[=:]\s*(.+)$/i);
                         if (gm) {
                             const gv = gm[1].toLowerCase();
@@ -3991,33 +4063,53 @@ function canDrawScene() {
     return !!imageCommand();
 }
 
-function scenePromptRequest(st, mesId, camMode = 'third') {
+function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
     const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
     const names = storyNames();
-    const msg = Number.isInteger(mesId) ? ctx().chat?.[mesId] : null;
-    const moment = msg?.mes ? `Нарисовать нужно момент из этого сообщения (${msg.is_user ? names.user : (msg.name || names.char)}): «${String(msg.mes).replace(/<[^>]+>/g, '').slice(0, 1500)}»` : '';
+    const chat = ctx().chat || [];
+    let targetIdx = Number.isInteger(mesId) ? mesId : (chat.length - 1);
+    while (targetIdx >= 0 && (!chat[targetIdx] || chat[targetIdx].is_system)) targetIdx--;
+    const msg = targetIdx >= 0 ? chat[targetIdx] : null;
+    const prevMsg = targetIdx > 0 ? chat.slice(Math.max(0, targetIdx - 2), targetIdx).filter(m => m && !m.is_system && m.mes) : [];
+    const prevContext = prevMsg.length
+        ? `Контекст прямо перед этим моментом (чтобы не потерять присутствующих в комнате NPC):\n` + prevMsg.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 500)}»`).join('\n')
+        : '';
+    const moment = msg?.mes ? `Главный момент, который нужно нарисовать (${msg.is_user ? names.user : (msg.name || names.char)}): «${stripTags(stripActionTags(String(msg.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 1500)}»` : '';
     const a = st.wardrobe?.active;
     const outfit = (!isPov && a?.status === 'worn') ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
     const lastAppearance = (!isPov && st.wardrobe?.appearance) ? `Внешность ${names.user}: ${st.wardrobe.appearance}.` : '';
+    const npcCardsList = (st.npcs || []).slice(0, 15).map(n => `— ${n.name}: ${n.card || 'персонаж истории'}${n.status ? ` (сейчас: ${n.status})` : ''}`).join('\n');
+    const npcBlock = npcCardsList ? `Справка по внешности и ролям известных NPC (обязательно используй их описание, если они есть в сцене!):\n${npcCardsList}` : '';
+    const forcedCastLine = Array.isArray(forcedCast) && forcedCast.length
+        ? `ВАЖНО — ИГРОК ЯВНО УКАЗАЛ, КТО ДОЛЖЕН БЫТЬ В КАДРЕ: ${forcedCast.join(', ')}. Обязательно включи ВСЕХ перечисленных (${forcedCast.length} чел.) в строку CAST и подробно опиши внешность, одежду и позу КАЖДОГО из них в строке SCENE!`
+        : '';
+
     let cameraInstruction = '';
     if (isPovHands) {
-        cameraInstruction = `ВАЖНО — ВИД ОТ ПЕРВОГО ЛИЦА С ЭФФЕКТОМ ПРИСУТСТВИЯ (POV HANDS): картинка строго глазами ${names.user} (first-person POV). Чтобы ракурс НЕ ломался, строго ЗАПРЕЩЕНО рисовать голову, лицо, волосы, плечи или спину ${names.user}! Но для живого эффекта присутствия на переднем плане с края кадра МОЖЕТ быть видна рука или ладонь ${names.user} (pov hands reaching out, holding an object/cup, or touching the character), а перед ней на уровне глаз — собеседник или обстановка сцены. В CAST саму ${names.user} НЕ пиши (если в сцене никого кроме неё нет — напиши CAST: none и опиши окружение).`;
+        cameraInstruction = `ВАЖНО — ВИД ОТ ПЕРВОГО ЛИЦА С ЭФФЕКТОМ ПРИСУТСТВИЯ (POV HANDS): картинка строго глазами ${names.user} (first-person POV). Чтобы ракурс НЕ ломался, строго ЗАПРЕЩЕНО рисовать голову, лицо, волосы, плечи или спину ${names.user}! Но для живого эффекта присутствия на переднем плане с края кадра МОЖЕТ быть видна рука или ладонь ${names.user} (pov hands reaching out, holding an object/cup, or touching the character), а перед ней на уровне глаз — ВСЕ собеседники (включая NPC!) или обстановка сцены. В CAST саму ${names.user} НЕ пиши (перечисли всех остальных, кто виден перед ней).`;
     } else if (isPov) {
-        cameraInstruction = `ВАЖНО — ЧИСТЫЙ ВЗГЛЯД НАПРОТИВ (ГЛАЗАМИ ГЕРОИНИ): покажи то, что видит перед собой ${names.user} на уровне глаз (eye-level medium shot facing the viewer). Саму ${names.user} (включая её руки и тело) в кадре НЕ описывай и в CAST не включай. Если в сцене есть собеседник (или несколько НПС) — покажи их прямо перед зрителем; если вокруг никого нет — опиши сам интерьер или пейзаж.`;
+        cameraInstruction = `ВАЖНО — ЧИСТЫЙ ВЗГЛЯД НАПРОТИВ (ГЛАЗАМИ ГЕРОИНИ): покажи то, что видит перед собой ${names.user} на уровне глаз (eye-level medium shot facing the viewer). Саму ${names.user} (включая её руки и тело) в кадре НЕ описывай и в CAST не включай. Если в сцене есть собеседник или несколько человек (включая NPC) — покажи их ВСЕХ прямо перед зрителем; если вокруг никого нет — опиши сам интерьер или пейзаж.`;
     } else {
-        cameraInstruction = `ВАЖНО — КИНОКАДР СО СТОРОНЫ (ЕСТЕСТВЕННЫЙ СОСТАВ УЧАСТНИКОВ И ВЗГЛЯД): определи по тексту сообщения, кто реально находится в этой сцене прямо сейчас (это может быть один персонаж, пара, компания с NPC или вообще пустая локация без людей — если людей нет, напиши CAST: none). Если в кадре два или более человек, они должны смотреть ДРУГ НА ДРУГА (mutual eye contact) или на своё занятие в сцене, а НЕ в камеру / НЕ на зрителя!`;
+        cameraInstruction = `ВАЖНО — КИНОКАДР СО СТОРОНЫ (ВСЕ УЧАСТНИКИ СЦЕНЫ, НЕ ТЕРЯЙ NPC!):
+1) Внимательно проверь по тексту сообщения и контексту, КТО ИМЕННО находится в этой сцене прямо сейчас.
+2) СТРОГО ЗАПРЕЩЕНО по шаблону оставлять только ${names.user} и ${names.char}, если в сцене также присутствуют другие персонажи (подруга, коллега, продавец, родственник или любой NPC)! И наоборот: если ${names.char} в этой сцене нет (например, ${names.user} разговаривает только с подругой/NPC), НЕ пиши ${names.char} в CAST и НЕ рисуй его!
+3) Если в сцене 3 или более человек (например, ${names.user}, ${names.char} и ещё NPC) — обязательно перечисли их ВСЕХ в CAST, а описание SCENE начни с точного числа людей в кадре (например: "Group of 3 people in the scene: 1) [Name + appearance + pose], 2) [Name + appearance + pose], 3) [Name + appearance + pose]..."), чтобы художник гарантированно нарисовал каждого и никого не потерял!
+4) Персонажи смотрят ДРУГ НА ДРУГА или на своё занятие в сцене, а НЕ в камеру / НЕ на зрителя!`;
     }
     return [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник художника: опиши картинку того, что происходит в сцене прямо сейчас (по последним сообщениям чата).',
+        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник художника: опиши картинку того, что происходит в сцене прямо сейчас.',
+        prevContext,
         moment,
         st.time?.date ? `Время в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; место: ${placeLine(st)}` : ''}.` : '',
         outfit,
         lastAppearance,
+        npcBlock,
+        forcedCastLine,
         cameraInstruction,
         'Ответь ровно двумя строками, без пояснений:',
-        `CAST: кто именно виден в кадре — перечисли только тех, кто реально присутствует в этом моменте (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 8).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 8).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
-        'SCENE: один абзац по-английски для генератора картинок: место и обстановка, время суток и свет, кто в кадре и как выглядит (внешность, одежда), позы, куда направлен взгляд, выражения лиц, настроение, ракурс. Это одна иллюстрация, без текста и подписей.]',
+        `CAST: кто именно виден в кадре через запятую — перечисли ВСЕХ, кто реально присутствует в этом моменте, включая NPC (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
+        'SCENE: один подробный абзац по-английски для генератора картинок: сначала укажи точное количество людей в кадре и подробно опиши внешность (пол, волосы, черты, одежду) и позу КАЖДОГО присутствующего персонажа (особенно NPC!), их взаимодействие, куда направлен взгляд, место, свет и настроение. Это одна иллюстрация, без текста и подписей.]',
     ].filter(Boolean).join('\n');
 }
 
@@ -4094,17 +4186,53 @@ async function askSceneCameraMode(existingMeta = null) {
             el.append(reuseBox);
         }
 
-        el.append('<div class="nnb-pop-sub">Или создай новое описание сцены с выбранным ракурсом (состав участников определится по тексту сообщения):</div>');
+        const st = store();
+        const names = storyNames();
+        const selectedCast = new Set();
+
+        const castBox = $('<div class="nnb-note" style="padding:8px 10px; margin:6px 0;"></div>');
+        castBox.append('<div style="font-size:0.84em; font-weight:600; margin-bottom:4px;">👥 Кто в кадре? <span style="font-weight:400; opacity:0.8;">(оставь «Авто по тексту» или отметь вручную, чтобы никого не потерять)</span></div>');
+        const castChips = $('<div class="nnb-chips-row" style="justify-content:flex-start; gap:6px;"></div>');
+        const autoChip = $('<div class="nnb-travel-chip active" style="font-size:0.8em; padding:3px 8px;" tabindex="0">✨ Авто по тексту поста</div>');
+        const candidateNames = [names.user, ...(names.chars || [names.char]), ...((st?.npcs || []).slice(0, 12).map(n => n.name))].filter((v, i, a) => v && a.indexOf(v) === i);
+
+        const syncCastChips = () => {
+            autoChip.toggleClass('active', selectedCast.size === 0);
+            castChips.find('.nnb-cast-person').each(function () {
+                const nm = $(this).attr('data-name');
+                $(this).toggleClass('active', selectedCast.has(nm));
+            });
+        };
+        autoChip.on('click', () => {
+            selectedCast.clear();
+            syncCastChips();
+        });
+        castChips.append(autoChip);
+        candidateNames.forEach(cName => {
+            const ch = $('<div class="nnb-travel-chip nnb-cast-person" style="font-size:0.8em; padding:3px 8px;" tabindex="0"></div>').attr('data-name', cName).text(cName);
+            ch.on('click', () => {
+                if (selectedCast.has(cName)) selectedCast.delete(cName);
+                else selectedCast.add(cName);
+                syncCastChips();
+            });
+            castChips.append(ch);
+        });
+        castBox.append(castChips);
+        el.append(castBox);
+
+        const getForcedCast = () => (selectedCast.size ? [...selectedCast] : null);
+
+        el.append('<div class="nnb-pop-sub">Выбери ракурс для генерации:</div>');
         const grid = $('<div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;"></div>');
         const thirdBtn = $(`
             <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
                 <i class="fa-solid fa-film" style="font-size:1.3em; color:var(--SmartThemeQuoteColor, #8b78c4);"></i>
                 <div>
                     <div style="font-weight:700;">🎥 Взгляд со стороны (кинокадр — все, кто в сцене)</div>
-                    <div style="font-size:0.84em; opacity:0.8;">Рисует всех присутствующих в сцене (героиню, чара, НПС или локацию); персонажи смотрят друг на друга, а не в объектив</div>
+                    <div style="font-size:0.84em; opacity:0.8;">Рисует всех присутствующих в сцене (героиню, чара, всех НПС в комнате или локацию); персонажи смотрят друг на друга, а не в объектив</div>
                 </div>
             </div>
-        `).on('click', () => finish({ mode: 'third' }));
+        `).on('click', () => finish({ mode: 'third', forcedCast: getForcedCast() }));
 
         const povHandsBtn = $(`
             <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
@@ -4114,7 +4242,7 @@ async function askSceneCameraMode(existingMeta = null) {
                     <div style="font-size:0.84em; opacity:0.8;">Вид из глаз твоей героини с её рукой или прикосновением на переднем плане (без головы и спины, чтобы не ломался ракурс)</div>
                 </div>
             </div>
-        `).on('click', () => finish({ mode: 'pov_hands' }));
+        `).on('click', () => finish({ mode: 'pov_hands', forcedCast: getForcedCast() }));
 
         const povCleanBtn = $(`
             <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
@@ -4124,7 +4252,7 @@ async function askSceneCameraMode(existingMeta = null) {
                     <div style="font-size:0.84em; opacity:0.8;">Ровный кадр на уровне взгляда прямо перед тобой без рук и частей тела героини в кадре</div>
                 </div>
             </div>
-        `).on('click', () => finish({ mode: 'pov_clean' }));
+        `).on('click', () => finish({ mode: 'pov_clean', forcedCast: getForcedCast() }));
 
         grid.append(thirdBtn, povHandsBtn, povCleanBtn);
         el.append(grid);
@@ -4135,7 +4263,7 @@ async function askSceneCameraMode(existingMeta = null) {
 }
 
 let sceneDrawing = false;
-async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null) {
+async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, forcedCast = null) {
     if (sceneDrawing) return toastr.info('Сцена уже рисуется', '🎬 Сцена');
     if (!canDrawScene()) return toastr.warning('Не выбрано, чем рисовать: настрой «Чем рисовать» в настройках блокнота.', '🎬 Сцена', { timeOut: 8000 });
     const st = store();
@@ -4155,7 +4283,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null) {
             cast = Array.isArray(reuseMeta.cast) ? reuseMeta.cast : [];
         } else {
             // 1) описание сцены текстовой моделью
-            const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st, mesId, camMode)));
+            const raw = await withBusy('🎬 Модель описывает сцену…', () => quietGenerate(scenePromptRequest(st, mesId, camMode, forcedCast)));
             for (const line of answerLines(raw || '')) {
                 let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
                 if (m) {
@@ -4166,6 +4294,14 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null) {
                 }
                 m = line.match(/^SCENE\s*[:：—–-]\s*(.+)$/i);
                 if (m) desc = m[1].trim().replace(/\]$/, '');
+            }
+            if (Array.isArray(forcedCast) && forcedCast.length) {
+                forcedCast.forEach(fc => {
+                    const nFc = fc.trim().toLowerCase().replace(/ё/g, 'е');
+                    if (nFc && (!isPov || nFc !== storyNames().user.toLowerCase().replace(/ё/g, 'е')) && !cast.some(c => c.includes(nFc) || nFc.includes(c))) {
+                        cast.push(nFc);
+                    }
+                });
             }
             if (!desc) throw new Error('модель не описала сцену — попробуй ещё раз');
         }
@@ -4194,22 +4330,33 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null) {
                 if (img) { images.push(img); who.push(npc.name); }
             }
         }
+        // Проверяем, есть ли в CAST персонажи/NPC, у которых НЕ оказалось картинки-референса (из-за чего GPT раньше рисовал только тех, чьи аватары прикреплены!)
+        const unreferencedInCast = noOneInFrame ? [] : cast.filter(cName => !who.some(wName => norm(wName).includes(cName) || cName.includes(norm(wName))));
+        const totalPeopleCount = noOneInFrame ? 0 : Math.max(cast.length, who.length);
+        const unrefNote = unreferencedInCast.length
+            ? ` CRITICAL: There are ${totalPeopleCount} people in this scene in total (${cast.join(', ')}), NOT just ${who.length}! Reference portraits are provided ONLY for ${who.join(' and ')}, while the remaining character(s) (${unreferencedInCast.join(', ')}) do not have reference portraits — you MUST draw ALL ${totalPeopleCount} people together in the scene according to the text description, do NOT omit ${unreferencedInCast.join(', ')}!`
+            : '';
         const gazeNote = isPovHands
             ? `First-person POV perspective seen through ${names.user}'s eyes (pov hands in foreground allowed, but ${names.user}'s head, face and back are completely out of frame).`
             : isPov
                 ? `Eye-level shot seen directly from ${names.user}'s perspective; ${names.user} is not in the frame.`
                 : `Candid cinematic third-person scene: characters are looking at each other or at their activity in the scene, NEVER looking into the camera or at the viewer.`;
-        const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description. ${gazeNote}` } : null;
+        const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description.${unrefNote} ${gazeNote}` } : null;
+        const countPrefix = (!isPov && totalPeopleCount >= 3 && !/\b(three|four|five|3|4|5)\s+(people|characters|figures)\b/i.test(desc))
+            ? `Scene with ${totalPeopleCount} people visible in frame (${cast.join(', ')}): `
+            : '';
         const cameraSuffix = isPovHands
             ? `first-person POV, pov hands in foreground, viewer head and torso out of frame, eye-level perspective, single illustration, no text, no captions.`
             : isPov
                 ? `eye-level medium shot from viewer's perspective, single illustration, no text, no captions.`
-                : (who.length >= 2
-                    ? `candid cinematic scene, characters looking at each other, interacting naturally, NOT looking at viewer, NOT looking at camera, single illustration, no text, no captions.`
-                    : `candid cinematic scene, natural gaze, NOT looking at camera, single illustration, no text, no captions.`);
+                : (totalPeopleCount >= 3
+                    ? `candid cinematic group scene with all ${totalPeopleCount} characters clearly visible in frame, characters looking at each other and interacting naturally, NOT looking at viewer, NOT looking at camera, single illustration, no text, no captions.`
+                    : totalPeopleCount === 2
+                        ? `candid cinematic scene, characters looking at each other, interacting naturally, NOT looking at viewer, NOT looking at camera, single illustration, no text, no captions.`
+                        : `candid cinematic scene, natural gaze, NOT looking at camera, single illustration, no text, no captions.`);
         const prompt = (reuseMeta?.prompt && reuseMeta.desc === desc)
             ? reuseMeta.prompt
-            : cleanForCommand(`${desc}. ${cameraSuffix}`);
+            : cleanForCommand(`${countPrefix}${desc}. ${cameraSuffix}`);
         console.log('[npc_notebook] drawScene: drawing picture (camMode=' + camMode + ', reuse=' + !!reuseMeta + ')...');
         const url = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
         const sceneMeta = { desc, cast, camMode, prompt, pov: isPov };
@@ -4362,6 +4509,7 @@ async function showScenePopup(mesId) {
     if (!choice) return;
     const camMode = choice.mode || 'third';
     const reuseMeta = choice.reuseMeta || null;
+    const forcedCast = choice.forcedCast || null;
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean';
     const toastMsg = reuseMeta
         ? 'Перерисовываю сцену по готовому промпту… Нажми на уведомление, чтобы скрыть.'
@@ -4369,7 +4517,7 @@ async function showScenePopup(mesId) {
     const note = toastr.info(toastMsg, '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
     let res = null;
     try {
-        res = await drawScene(null, mesId, camMode, reuseMeta);
+        res = await drawScene(null, mesId, camMode, reuseMeta, forcedCast);
     } catch (e) {
         console.error('[npc_notebook] showScenePopup error:', e);
     } finally {
@@ -7915,14 +8063,20 @@ async function processReplyTags() {
         }
     }
 
-    // 1c. Process real-time SPARK / bodily state & status tag (<!--SPARK: 85 | статус-->)
-    const sparkRegex = /<!--\s*(?:SPARK|STATE)\s*[:：]\s*(\d{1,3})(?:\s*\|\s*([^>]+?))?\s*-->/gi;
+    // 1c. Process real-time SPARK / bodily state, status & dailyMood tag (<!--SPARK: 85 | статус | тонус-->)
+    const sparkRegex = /<!--\s*(?:SPARK|STATE)\s*[:：]\s*(\d{1,3})(?:\s*\|\s*([^|>]+?))?(?:\s*\|\s*([^>]+?))?\s*-->/gi;
     let sparkMatch;
     let lastSparkVal = null;
     let lastSparkStatus = '';
+    let lastSparkMood = '';
     while ((sparkMatch = sparkRegex.exec(msg.mes)) !== null) {
         lastSparkVal = Math.max(0, Math.min(100, Number(sparkMatch[1]) || 0));
         if (sparkMatch[2]) lastSparkStatus = sparkMatch[2].trim();
+        if (sparkMatch[3]) {
+            const cleanedMood = sparkMatch[3].replace(/^(?:тонус|настроение|mood)\s*[:=]\s*/i, '').trim();
+            const pm = parseDailyMoodValue(cleanedMood);
+            if (pm) lastSparkMood = pm;
+        }
     }
     if (lastSparkVal !== null) {
         msg.mes = msg.mes.replace(sparkRegex, '').trimEnd();
@@ -7931,6 +8085,7 @@ async function processReplyTags() {
         if (mc) {
             mc.spark = lastSparkVal;
             if (lastSparkStatus) mc.status = lastSparkStatus;
+            if (lastSparkMood) mc.dailyMood = lastSparkMood;
         }
         await c.saveMetadata();
     }
@@ -8806,7 +8961,7 @@ async function generateTopicsNow() {
 
         const mc = ensureMainCharCard(s2);
         const allKnownChars = [
-            mc ? `— ${mc.name} (основной персонаж): ${mc.card || ''}${mc.status ? ` | Сейчас: ${mc.status}` : ''}${mc.fear ? ` | Скрытый страх: ${mc.fear}` : ''}${mc.dream ? ` | Мечта: ${mc.dream}` : ''}` : '',
+            mc ? `— ${mc.name} (основной персонаж): ${mc.card || ''}${mc.status ? ` | Сейчас: ${mc.status}` : ''}${mc.petPeeves ? ` | Бытовая заноза: ${mc.petPeeves}` : ''}${mc.jealousyTriggers ? ` | Триггеры ревности: ${mc.jealousyTriggers}` : ''}${mc.fear ? ` | Скрытый страх: ${mc.fear}` : ''}${mc.dream ? ` | Мечта: ${mc.dream}` : ''}` : '',
             ...(s2.npcs || []).slice(0, 12).map(n => `— ${n.name}: ${n.card || ''}${n.status ? ` | Сейчас: ${n.status}` : ''}${n.fear ? ` | Страх: ${n.fear}` : ''}${n.dream ? ` | Мечта: ${n.dream}` : ''}`),
         ].filter(Boolean).join('\n');
         const companionHint = (s2.map?.currentCompanion && s2.map.currentCompanion !== 'solo')
@@ -8835,7 +8990,7 @@ ${avoidContext}
 — Все 5 тем должны быть эмоционально заряженными, интригующими и бить прямо в нерв отношений и сюжета. Сделай 5 РАЗНЫХ по настроению крючков:
   1) 🔥 [Момент между нами] — живая, чувственная или очень личная реплика/действие прямо по следам того, что только что произошло между ${names.user} и ${names.char} в последнем посте.
   2) 🗝 [Больная точка / Тайна прошлого] — проницательный вопрос или наблюдение, задевающее скрытый страх, уязвимость, тайну прошлого или странную деталь в поведении ${names.char}.
-  3) ⚡ [Провокация / Флирт / Границы] — смелая подколка, игра на ревности, проверка его выдержки или предложение спора на желание.
+  3) 🌶 [Бытовая заноза / Ревность / Недопонимание] — живая перепалка из-за упрямой бытовой привычки, острый повод для ревности/собственничества или выяснение двусмысленного недопонимания (без скучного соглашательства!).
   4) 🕵️‍♀️ [Интрига / Слух] — вывести разговор на одну из тайн сюжета, подозрительного человека, странную находку или недосказанность.
   5) ✨ [Неожиданная выходка / Поворот] — внезапное смелое предложение от лица ${names.user}, которое собьёт ${names.char} с привычного ритма или развернёт сцену в новое русло.
 
@@ -10132,6 +10287,7 @@ const BOOK_HTML = `
         <b>Что ведёт блокнот в этом чате</b>
         <label class="checkbox_label"><input type="checkbox" id="nnb_intrigues_on"> Тайны и интриги</label>
         <label class="checkbox_label"><input type="checkbox" id="nnb_npcs_on"> Карточки героев и связи</label>
+        <label class="checkbox_label"><input type="checkbox" id="nnb_spicy_friction_on"> 🌶 С перчинкой: бытовые ссоры, ревность и недопонимания (без угрозы отношениям)</label>
         <label class="checkbox_label"><input type="checkbox" id="nnb_arcs_on"> Развитие персонажей</label>
         <label class="checkbox_label"><input type="checkbox" id="nnb_time_on"> Время и место</label>
         <label class="checkbox_label"><input type="checkbox" id="nnb_wardrobe_on"> Гардероб</label>
@@ -10359,6 +10515,7 @@ function renderDirection() {
     $('#nnb_mix').val(st?.direction.mixMode ?? 'and').prop('disabled', !enabled);
     $('#nnb_intrigues_on').prop('checked', !!st?.direction.intrigues).prop('disabled', !enabled);
     $('#nnb_npcs_on').prop('checked', !!st?.direction.npcs).prop('disabled', !enabled);
+    $('#nnb_spicy_friction_on').prop('checked', st ? st.direction.spicyFriction !== false : true).prop('disabled', !enabled);
     $('#nnb_arcs_on').prop('checked', !!st?.direction.arcs).prop('disabled', !enabled);
     $('#nnb_time_on').prop('checked', !!st?.direction.time).prop('disabled', !enabled);
     $('#nnb_lines').val(st?.direction.lines ?? '').prop('disabled', !enabled);
@@ -10538,7 +10695,7 @@ ${lastChatLines}
 Ответь строками по шаблону без пояснений:
 NPCSTATE [${n.name}]: где он и что делает ПРЯМО СЕЙЧАС в последнем сообщении (1 короткая фраза)
 PROFILE [${n.name}]: мечта=его главная жизненная цель помимо ${names.user} | страх=скрытый страх или уязвимость | любит=любимые цвета, стиль одежды, еда, детали | не_любит=что не любит
-${isRom ? `KEYS [${n.name}]: цепляет=2–3 вещи в поведении ${names.user}, которые его восхищают и заводят | охлаждает=1–2 стоп-фактора | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
+${isRom ? `KEYS [${n.name}]: цепляет=2–3 вещи в поведении ${names.user}, которые его восхищают и заводят | охлаждает=1–2 стоп-фактора | заноза=1–2 бытовые привычки или темы, в которых он упрямится и ворчит | ревность=1–2 ситуации, от которых он ревнует и собственничает | тонус=тёплый/взвод/ревность/упрямый/задетый | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
 SCALE [${n.name}]: дружба=точное_число_от_-100_до_100 | романтика=точное_число_от_0_до_100 | тело=точное_число_от_0_до_100_по_последнему_посту` : `SCALE [${n.name}]: дружба=точное_число_от_-100_до_100`}]`;
             const raw = await quietGenerate(prompt);
             const wasLocked = n.locked;
@@ -10722,6 +10879,50 @@ async function openNpcCardPopup(n) {
             offCol.append(offInp);
             keysGrid.append(onCol, offCol);
             scalesBox.append(keysGrid);
+
+            // 🎭 Тонус («С какой ноги встал») + Бытовая заноза и Триггеры ревности
+            const spiceBox = $('<div style="margin-top:10px; padding-top:8px; border-top:1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent);"></div>');
+            spiceBox.append('<div style="font-weight:700; font-size:0.88em; margin-bottom:6px;">🌶 Характер в быту, ревность и текущий тонус (чтобы игра не была приторной)</div>');
+
+            const moodRow = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;"></div>');
+            moodRow.append('<div style="font-size:0.82em; opacity:0.85;">🎭 С какой ноги встал (тонус в сцене):</div>');
+            const moodSel = $('<select class="text_pole" style="flex:1; min-width:210px; margin:0;"></select>');
+            Object.values(DAILY_MOOD_OPTIONS).forEach(o => moodSel.append($('<option></option>').val(o.id).text(o.label)));
+            moodSel.val(n.dailyMood || 'warm').on('change', async function () {
+                n.dailyMood = String($(this).val() || 'warm');
+                await commit();
+                renderModalContent();
+            });
+            const moodDice = $('<div class="menu_button" style="width:auto; padding:4px 9px; font-size:0.82em;" title="Случайный тонус на сцену"><i class="fa-solid fa-dice"></i> Сменить тонус</div>').on('click', async () => {
+                const keys = Object.keys(DAILY_MOOD_OPTIONS);
+                const otherKeys = keys.filter(k => k !== n.dailyMood);
+                n.dailyMood = otherKeys[Math.floor(Math.random() * otherKeys.length)] || 'edgy';
+                await commit();
+                renderModalContent();
+            });
+            moodRow.append(moodSel, moodDice);
+            spiceBox.append(moodRow);
+
+            const peevesGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px;"></div>');
+            const peeveCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">💢 Бытовая заноза (в чём упрямится, ворчит и спорит в быту):</div></div>');
+            const peeveInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Напр.: Терпеть не может опоздания, спорит из-за порядка на столе…">').val(n.petPeeves || '');
+            peeveInp.on('change', async function () {
+                n.petPeeves = String($(this).val() || '').trim();
+                await commit();
+            });
+            peeveCol.append(peeveInp);
+
+            const jealCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">👀 Триггеры ревности и собственничества:</div></div>');
+            const jealInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Напр.: Когда героиня долго переписывается с кем-то или улыбается другим…">').val(n.jealousyTriggers || '');
+            jealInp.on('change', async function () {
+                n.jealousyTriggers = String($(this).val() || '').trim();
+                await commit();
+            });
+            jealCol.append(jealInp);
+
+            peevesGrid.append(peeveCol, jealCol);
+            spiceBox.append(peevesGrid);
+            scalesBox.append(spiceBox);
         }
         el.append(scalesBox);
 
@@ -10928,10 +11129,14 @@ function renderNpcs(st) {
         row.find('.nnb-meta').text((n.favorite ? '❤️ ' : '') + n.name + (n.isMainChar ? ' · Карточка чата' : ''));
 
         // Компактная строка шкал (романтика и состояние тела — только у основного героя / ❤️ фаворита)
+        const moodBadge = isRomanticTarget(n) && n.dailyMood && DAILY_MOOD_OPTIONS[n.dailyMood]
+            ? DAILY_MOOD_OPTIONS[n.dailyMood].short
+            : '';
         const scaleParts = [
             `${friendshipTierLabel(n.friendship)} (${n.friendship > 0 ? '+' : ''}${n.friendship})`,
             (isRomanticTarget(n) && n.romance > 0) ? `${romanceTierLabel(n.romance)} (${n.romance}%)` : '',
             (isRomanticTarget(n) && n.spark >= 15) ? `${sparkTierLabel(n.spark)}` : '',
+            moodBadge,
         ].filter(Boolean);
         row.find('.nnb-npc-scales-line').text(scaleParts.join(' · '));
 
@@ -12105,6 +12310,14 @@ jQuery(async () => {
         const st = store();
         if (!st) return;
         st.direction.npcs = $(this).prop('checked');
+        saveDirectionSoon();
+        updateInjection();
+        renderPanel();
+    });
+    $('#nnb_spicy_friction_on').on('change', function () {
+        const st = store();
+        if (!st) return;
+        st.direction.spicyFriction = $(this).prop('checked');
         saveDirectionSoon();
         updateInjection();
         renderPanel();
