@@ -1912,17 +1912,80 @@ function extractTextFromApiResult(raw) {
     if (!raw) return '';
     if (typeof raw === 'string') return raw;
     if (typeof raw?.content === 'string') return raw.content;
+    if (Array.isArray(raw?.content)) {
+        return raw.content.map(p => (typeof p === 'string' ? p : (p?.text || p?.content || ''))).join('');
+    }
     if (typeof raw?.text === 'string') return raw.text;
+    if (typeof raw?.response === 'string') return raw.response;
+    if (typeof raw?.result === 'string') return raw.result;
+    if (typeof raw?.message?.content === 'string') return raw.message.content;
     if (Array.isArray(raw?.choices) && raw.choices[0]) {
-        const msg = raw.choices[0].message || raw.choices[0];
-        if (typeof msg?.content === 'string') return msg.content;
-        if (Array.isArray(msg?.content)) return msg.content.map(p => p?.text || '').join('');
-        if (typeof raw.choices[0]?.text === 'string') return raw.choices[0].text;
+        const msg = raw.choices[0].message || raw.choices[0].delta || raw.choices[0];
+        if (typeof msg?.content === 'string' && msg.content.trim()) return msg.content;
+        if (Array.isArray(msg?.content)) return msg.content.map(p => (typeof p === 'string' ? p : (p?.text || ''))).join('');
+        if (typeof raw.choices[0]?.text === 'string' && raw.choices[0].text.trim()) return raw.choices[0].text;
+        if (typeof msg?.reasoning_content === 'string' && msg.reasoning_content.trim()) return msg.reasoning_content;
+    }
+    if (Array.isArray(raw?.results) && raw.results[0]) {
+        if (typeof raw.results[0]?.text === 'string') return raw.results[0].text;
+        if (typeof raw.results[0]?.content === 'string') return raw.results[0].content;
     }
     if (Array.isArray(raw?.candidates) && raw.candidates[0]?.content?.parts) {
         return raw.candidates[0].content.parts.map(p => p?.text || '').join('');
     }
+    if (raw?.data && typeof raw.data === 'object') {
+        const inner = extractTextFromApiResult(raw.data);
+        if (inner) return inner;
+    }
     return '';
+}
+
+async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, label = 'профиль Таверны', systemNote = '') {
+    const svc = ctx().ConnectionManagerRequestService;
+    if (!svc?.sendRequest) {
+        throw new Error('В этой версии Таверны нет менеджера профилей подключения');
+    }
+    const prof = connectionProfiles().find(p => p.id === profileId || p.name === profileId);
+    const pid = prof ? prof.id : profileId;
+    const isTc = prof?.mode === 'tc';
+    const chatMsgs = [];
+    if (systemNote && String(systemNote).trim()) {
+        chatMsgs.push({ role: 'system', content: String(systemNote).trim() });
+    }
+    chatMsgs.push({ role: 'user', content: fullPrompt });
+    const singleUserMsgs = [{ role: 'user', content: fullPrompt }];
+
+    const attempts = isTc
+        ? [
+            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: true }),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: false }),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: true }),
+        ]
+        : [
+            () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: true }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: true }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: false }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: false, includePreset: true }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: true }),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens),
+        ];
+
+    let lastErr = null;
+    for (const runAttempt of attempts) {
+        try {
+            const raw = await withTimeout(runAttempt(), 75000, label);
+            const txt = extractTextFromApiResult(raw);
+            if (txt && String(txt).trim()) {
+                return String(txt).trim();
+            }
+        } catch (err) {
+            lastErr = err;
+            console.warn(`[npc_notebook] sendViaTavernProfile attempt failed (${label}):`, err?.message || err);
+        }
+    }
+    throw lastErr || new Error(`Профиль «${prof?.name || pid}» вернул пустой ответ`);
 }
 
 function buildStandaloneContextPrompt(taskPrompt) {
@@ -2001,16 +2064,7 @@ async function generateViaStandaloneTextSource(taskPrompt) {
     }
 
     // Профиль подключения Таверны (ConnectionManagerRequestService)
-    const svc = ctx().ConnectionManagerRequestService;
-    if (!svc?.sendRequest) {
-        throw new Error('В этой версии Таверны нет менеджера профилей подключения');
-    }
-    const raw = await withTimeout(
-        svc.sendRequest(src, [{ role: 'user', content: fullPrompt }], 4096, { stream: false, extractData: true, includePreset: false }),
-        75000,
-        'профиль подключения блокнота'
-    );
-    return extractTextFromApiResult(raw);
+    return await sendViaTavernProfile(src, fullPrompt, 4096, 'профиль подключения блокнота');
 }
 
 async function quietGenerateOnce(prompt) {
@@ -2154,16 +2208,7 @@ ${writerNote}]
         return extractTextFromApiResult(json) || text;
     }
 
-    const svc = ctx().ConnectionManagerRequestService;
-    if (!svc?.sendRequest) {
-        throw new Error('В этой версии Таверны нет менеджера профилей подключения');
-    }
-    const raw = await withTimeout(
-        svc.sendRequest(src, [{ role: 'user', content: fullPrompt }], 2048, { stream: false, extractData: true, includePreset: false }),
-        75000,
-        'профиль модели для промптов картинок'
-    );
-    return extractTextFromApiResult(raw);
+    return await sendViaTavernProfile(src, fullPrompt, 2048, 'профиль модели для промптов картинок', writerNote);
 }
 
 async function quietGenerateImagePrompt(prompt) {
@@ -3997,7 +4042,7 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
         if (hasRefs && allowRef) {
             const b64 = await formatRefForNovelAiDirector(refs.images[0]);
             if (b64) {
-                if (/nai-diffusion-(?:4-5|5)/i.test(model)) {
+                if (/nai-diffusion-4-5/i.test(model)) {
                     params.director_reference_images = [b64];
                     params.director_reference_descriptions = [
                         { caption: { base_caption: 'character', char_captions: [] }, legacy_uc: false },
@@ -4270,8 +4315,16 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
             ? `Внешность ${names.user} (обязательно опиши её текстом в SCENE!): ${st.wardrobe.appearance}${cleanPersonaAppearance ? ` (${cleanPersonaAppearance})` : ''}.`
             : (cleanPersonaAppearance ? `Внешность ${names.user} из анкеты Персоны (обязательно опиши её внешность текстом в SCENE!): ${cleanPersonaAppearance}.` : ''))
         : '';
+    const cObj = ctx();
+    const rawMainCh = (cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]) ? cObj.characters[cObj.characterId] : null;
+    const rawMainChDesc = rawMainCh?.description ? cObj.substituteParams(String(rawMainCh.description)).replace(/\s+/g, ' ').trim().slice(0, 900) : '';
     const mcCardObj = ensureMainCharCard(st);
-    const mcAppLine = mcCardObj?.appearanceEn ? `— ${mcCardObj.name} (постоянные теги внешности для художника): ${mcCardObj.appearanceEn}` : '';
+    const mcAppParts = [
+        mcCardObj?.appearanceEn ? `[Теги внешности: ${mcCardObj.appearanceEn}]` : '',
+        mcCardObj?.card ? mcCardObj.card : '',
+        rawMainChDesc ? `[Описание из карточки ${names.char}: ${rawMainChDesc}]` : '',
+    ].filter(Boolean).join(' ');
+    const mcAppLine = mcAppParts ? `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}` : '';
     const npcCardsList = [
         mcAppLine,
         ...(st.npcs || []).slice(0, 15).map(n => `— ${n.name}: ${n.appearanceEn ? `[Теги внешности: ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}${n.status ? ` (сейчас: ${n.status})` : ''}`),
@@ -4644,10 +4697,10 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
         if (!silentToast) {
             toastr.success(
                 totalSaved > 1
-                    ? `Новая картинка добавлена (вариантов: ${totalSaved} — листай стрелками ◀ ▶ или жми ▶ для новой генерации по тому же промпту)!`
-                    : 'Картинка сцены готова! Жми стрелку вправо ▶ в окне картинки (или на самой картинке в посте), чтобы сгенерировать ещё вариант по тому же промпту.',
+                    ? `Новая картинка добавлена под пост (вариантов: ${totalSaved} — листай стрелками ◀ ▶ под картинкой или жми ▶ для ещё одной генерации по тому же промпту)!`
+                    : 'Картинка сцены добавлена под пост! Жми стрелку вправо ▶ под картинкой, чтобы сгенерировать ещё вариант по тому же промпту.',
                 '🎬 Сцена',
-                { timeOut: 6000 }
+                { timeOut: 5500 }
             );
         }
         return;
@@ -4884,12 +4937,12 @@ async function showAlbum() {
 
 async function redrawSceneBySamePrompt(mesId, customMeta = null) {
     if (!Number.isInteger(mesId)) mesId = undefined;
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится в посте сама', '🎬 Сцена');
+    if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится под постом сама', '🎬 Сцена');
     const meta = customMeta || findSavedSceneMeta(mesId);
     if (!meta || (!meta.prompt && !meta.desc)) {
         return showScenePopup(mesId);
     }
-    const note = toastr.info('Перерисовываю сцену по тому же промпту (без запроса к текстовой модели)…', '🔄 Перерисовка сцены', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
+    const note = toastr.info('Рисую ещё один вариант по тому же промпту (без запроса к текстовой модели)…', '🔄 Ещё вариант сцены', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
     let res = null;
     try {
         res = await drawScene(null, mesId, meta.camMode || 'third', meta);
@@ -4901,18 +4954,14 @@ async function redrawSceneBySamePrompt(mesId, customMeta = null) {
     }
     if (res?.url) {
         await attachToLastMessage(res.url, mesId, res.sceneMeta);
-        openSceneImageViewer(mesId, res.sceneMeta);
     }
 }
 
-// 🎬: рисуем в фоне, ставим картинку в пост и открываем окно иллюстрации со стрелкой ▶ для быстрой догенерации по тому же промпту
-async function showScenePopup(mesId, forceNewChoice = false) {
+// 🎬: рисуем в фоне и ставим картинку отдельным блоком под постом (без перекрывающих текст всплывающих окон!)
+async function showScenePopup(mesId) {
     if (!Number.isInteger(mesId)) mesId = undefined;
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится в посте сама', '🎬 Сцена');
+    if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится под постом сама', '🎬 Сцена');
     const existingMeta = findSavedSceneMeta(mesId);
-    if (existingMeta?.url && !forceNewChoice) {
-        return openSceneImageViewer(mesId, existingMeta);
-    }
     const choice = await askSceneCameraMode(existingMeta);
     if (!choice) return;
     const camMode = choice.mode || 'third';
@@ -4934,7 +4983,6 @@ async function showScenePopup(mesId, forceNewChoice = false) {
     }
     if (res?.url) {
         await attachToLastMessage(res.url, mesId, res.sceneMeta);
-        openSceneImageViewer(mesId, res.sceneMeta);
     }
 }
 
@@ -10767,6 +10815,22 @@ const BOOK_HTML = `
         </div>
       </div>
       <div class="nnb-direction">
+        <b>🖼 Чем рисовать картинки (NovelAI V5 / V4.5, Таверна или GPT)</b>
+        <small>Выбери генератор картинок прямо здесь (например, NovelAI V5 по ключу pst-…):</small>
+        <select class="text_pole" id="nnb_book_img_src" title="Чем рисовать картинки" style="margin-top:4px;"></select>
+        <div id="nnb_book_nai_api" style="display:none; margin-top:6px; padding:8px; border:1px solid var(--SmartThemeBorderColor); border-radius:8px;">
+          <input type="password" class="text_pole" id="nnb_book_nai_key" placeholder="Ключ NovelAI (pst-…) — или пусто, если ключ уже в Таверне" autocomplete="off">
+          <select class="text_pole" id="nnb_book_nai_model" title="Модель NovelAI" style="margin-top:4px;">
+            <option value="nai-diffusion-5-full">NovelAI V5 Full (рекомендуется)</option>
+            <option value="nai-diffusion-5-curated">NovelAI V5 Curated</option>
+            <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full (с картинкой-референсом)</option>
+            <option value="nai-diffusion-4-5-curated">NovelAI V4.5 Curated</option>
+            <option value="nai-diffusion-4-full">NovelAI V4 Full</option>
+            <option value="nai-diffusion-3">NovelAI Anime V3</option>
+          </select>
+        </div>
+      </div>
+      <div class="nnb-direction">
         <b>🎨 Отдельная модель и промпт писателя для картинок (NovelAI / иллюстрации)</b>
         <small>Позволяет генерировать промпты для NovelAI отдельной моделью (например, GLM через профиль Таверны или по ключу) и задать свою инструкцию писателя промптов (например, чтобы не ломал анатомию):</small>
         <select class="text_pole" id="nnb_book_img_prompt_src" title="Какая модель пишет промпты для картинок" style="margin-top:4px;"></select>
@@ -10841,7 +10905,7 @@ function openBook(tab) {
     if (!book.length) { $('body').append(BOOK_HTML); book = $('#nnb_book'); bindBook(); }
     if (!book.parent().is('body')) book.appendTo('body'); // окно должно лежать прямо в body, иначе его закроют панели Таверны
     book.css({ display: 'flex', 'background-color': solidThemeColor() });
-    fillTextSources();
+    fillImageSources();
     safeRender('направление', renderDirection);
     safeRender('блокнот', renderPanel);
     bookTabs();
@@ -12551,17 +12615,22 @@ function fillTextSources() {
 
 function fillImageSources() {
     fillTextSources();
-    const sel = $('#nnb_img_src');
-    if (!sel.length) return;
+    const sels = $('#nnb_img_src, #nnb_book_img_src');
+    if (!sels.length) return;
     const cur = settings().imageSource || '';
-    sel.empty().append($('<option value=""></option>').text('Генерация картинок Таверны (Image Generation)'));
-    sel.append($('<option value="novelai"></option>').text('Картинки NovelAI (V4.5 / V4 / V3 — по ключу pst-… или через Таверну)'));
-    for (const p of connectionProfiles()) sel.append($('<option></option>').val(p.id).text(`Профиль: ${p.name}`));
-    sel.append($('<option value="openai-images"></option>').text('Картинки OpenAI по ключу (gpt-image)'));
-    if (cur && cur !== 'openai-images' && cur !== 'novelai' && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
-    sel.val(cur);
+    sels.each(function () {
+        const sel = $(this);
+        sel.empty().append($('<option value=""></option>').text('Генерация картинок Таверны (Image Generation)'));
+        sel.append($('<option value="novelai"></option>').text('Картинки NovelAI (V5 / V4.5 — по ключу pst-… или через Таверну)'));
+        for (const p of connectionProfiles()) sel.append($('<option></option>').val(p.id).text(`Профиль: ${p.name}`));
+        sel.append($('<option value="openai-images"></option>').text('Картинки OpenAI по ключу (gpt-image)'));
+        if (cur && cur !== 'openai-images' && cur !== 'novelai' && !connectionProfiles().some(p => p.id === cur)) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
+        sel.val(cur);
+    });
     $('#nnb_img_api').toggle(cur === 'openai-images');
-    $('#nnb_nai_api').toggle(cur === 'novelai');
+    $('#nnb_nai_api, #nnb_book_nai_api').toggle(cur === 'novelai');
+    $('#nnb_nai_key, #nnb_book_nai_key').val(settings().naiApiKey || '');
+    $('#nnb_nai_model, #nnb_book_nai_model').val(settings().naiModel || 'nai-diffusion-5-full');
 }
 
 // 🎬 и 👗 у сообщений: сцена — на каждом сообщении, гардероб — у последнего
@@ -12585,40 +12654,80 @@ function placeMesButtons() {
             box.find('.nnb-mes-scene-redraw').remove();
         }
 
-        // Панель со стрелками ◀ и ▶ прямо в окне/блоке картинки в самом посте чата!
-        const imgCont = $(this).find('.mes_img_container').first();
-        imgCont.find('.nnb-inline-scene-bar').remove();
+        // Гарантируем, что блок с картинкой сцены всегда располагается ОТДЕЛЬНЫМ БЛОКОМ ПОД ТЕКСТОМ ПОСТА (не перекрывая текст!)
+        const mesEl = $(this);
+        const mesText = mesEl.find('.mes_text').first();
+        const mediaWrapper = mesEl.find('.mes_media_wrapper').first();
+        const imgCont = mesEl.find('.mes_img_container').first();
+        if (mediaWrapper.length && mesText.length) {
+            if (mediaWrapper.index() < mesText.index()) {
+                mesText.after(mediaWrapper);
+            }
+        } else if (imgCont.length && mesText.length && imgCont.parent().is(mesEl.find('.mes_block'))) {
+            if (imgCont.index() < mesText.index()) {
+                mesText.after(imgCont);
+            }
+        }
+        mesEl.find('.nnb-inline-scene-bar').remove();
         const sceneMeta = Number.isInteger(mId) ? c.chat?.[mId]?.extra?.nnbScene : null;
         if (imgCont.length && sceneMeta && (sceneMeta.prompt || sceneMeta.desc)) {
             const hist = Array.isArray(sceneMeta.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta.url ? [sceneMeta.url] : []);
             let cIdx = hist.indexOf(sceneMeta.url);
             if (cIdx < 0) cIdx = hist.length - 1;
+            const curUrl = hist[cIdx] || sceneMeta.url || '';
+            if (curUrl) {
+                const imgEl = imgCont.find('img.mes_img').first();
+                if (imgEl.length && imgEl.attr('src') !== curUrl) {
+                    imgEl.attr('src', curUrl);
+                }
+            }
             const isLastSlide = cIdx >= hist.length - 1;
 
-            const bar = $('<div class="nnb-inline-scene-bar" style="display:flex; align-items:center; justify-content:center; gap:8px; margin-top:6px; padding:4px 8px; border-radius:10px; background:color-mix(in srgb, var(--SmartThemeBlurTintColor, #1e1b26) 88%, transparent); border:1px solid var(--SmartThemeBorderColor);"></div>');
-            const prevBtn = $(`<div class="menu_button" style="padding:3px 10px; font-size:0.82em; margin:0; ${cIdx <= 0 ? 'opacity:0.35; pointer-events:none;' : ''}" title="Предыдущий вариант (◀)"><i class="fa-solid fa-chevron-left"></i></div>`).on('click', async e => {
+            const bar = $('<div class="nnb-inline-scene-bar"></div>');
+            const navRow = $('<div class="nnb-inline-scene-nav"></div>');
+            const prevBtn = $(`<div class="menu_button" style="padding:4px 12px; font-size:0.84em; margin:0; ${cIdx <= 0 ? 'opacity:0.35; pointer-events:none;' : ''}" title="Предыдущий вариант (◀)"><i class="fa-solid fa-chevron-left"></i></div>`).on('click', async e => {
                 e.stopPropagation();
                 if (cIdx <= 0) return;
                 const prevUrl = hist[cIdx - 1];
                 sceneMeta.url = prevUrl;
                 await attachToLastMessage(prevUrl, mId, sceneMeta, true);
             });
-            const infoBtn = $(`<div class="menu_button" style="padding:3px 10px; font-size:0.8em; margin:0;" title="Открыть большое окно иллюстрации и промпта"><i class="fa-solid fa-magnifying-glass-plus"></i> Вариант ${cIdx + 1} / ${hist.length}</div>`).on('click', e => {
-                e.stopPropagation();
-                openSceneImageViewer(mId, sceneMeta);
-            });
-            const nextBtn = $(`<div class="menu_button ${isLastSlide ? 'nnb-btn-primary' : ''}" style="padding:3px 10px; font-size:0.82em; margin:0;" title="${isLastSlide ? 'Сгенерировать ещё одну картинку по тому же промпту (▶)' : 'Следующий вариант (▶)'}"><span>${isLastSlide ? '+ Ещё ' : ''}</span><i class="fa-solid fa-chevron-right"></i></div>`).on('click', async e => {
+            const promptToggleBtn = $(`<div class="menu_button" style="padding:4px 10px; font-size:0.82em; margin:0;" title="Показать/подправить промпт этой сцены прямо под картинкой"><i class="fa-solid fa-pen-to-square"></i> Вариант ${cIdx + 1} / ${hist.length}</div>`);
+            const nextBtn = $(`<div class="menu_button ${isLastSlide ? 'nnb-btn-primary' : ''}" style="padding:4px 12px; font-size:0.84em; margin:0;" title="${isLastSlide ? 'Сгенерировать ещё одну картинку по тому же промпту прямо под постом (▶)' : 'Следующий вариант (▶)'}"><span>${isLastSlide ? '+ Ещё ' : ''}</span><i class="fa-solid fa-chevron-right"></i></div>`).on('click', async function (e) {
                 e.stopPropagation();
                 if (!isLastSlide) {
                     const nextUrl = hist[cIdx + 1];
                     sceneMeta.url = nextUrl;
                     await attachToLastMessage(nextUrl, mId, sceneMeta, true);
                 } else {
+                    const btn = $(this);
+                    btn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Рисую…');
                     await redrawSceneBySamePrompt(mId, sceneMeta);
                 }
             });
-            bar.append(prevBtn, infoBtn, nextBtn);
-            imgCont.append(bar);
+            navRow.append(prevBtn, promptToggleBtn, nextBtn);
+            bar.append(navRow);
+
+            const promptBox = $('<div class="nnb-inline-scene-prompt" style="display:none; width:100%; margin-top:6px;"></div>');
+            const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой сцены (можно подправить теги вручную и нажать ▶)"></textarea>').val(sceneMeta.desc || sceneMeta.prompt || '');
+            promptArea.on('click', e => e.stopPropagation());
+            promptArea.on('input change', function () {
+                const val = String($(this).val() || '').trim();
+                if (val) {
+                    sceneMeta.desc = val;
+                    sceneMeta.prompt = '';
+                }
+            });
+            promptBox.append(promptArea);
+            bar.append(promptBox);
+
+            promptToggleBtn.on('click', e => {
+                e.stopPropagation();
+                promptBox.slideToggle(150);
+            });
+
+            // Вставляем панель строго ПОСЛЕ контейнера картинки, чтобы она никогда не перекрывала ни текст поста, ни саму иллюстрацию!
+            imgCont.after(bar);
         }
     });
     $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map, .nnb-mes-customer, .nnb-mes-actions-btn').remove();
@@ -12833,14 +12942,23 @@ jQuery(async () => {
         saveSettings();
         toastr.success('Шаблон промпта писателя для NovelAI (с защитой анатомии) подставлен — можешь дополнить его под себя!', '✍️ Промпт писателя картинок');
     });
-    $('#nnb_img_src').on('change', function () {
+    $('#nnb_img_src, #nnb_book_img_src').on('change', function () {
         settings().imageSource = String($(this).val() || '');
         saveSettings();
-        $('#nnb_img_api').toggle(settings().imageSource === 'openai-images');
-        $('#nnb_nai_api').toggle(settings().imageSource === 'novelai');
+        fillImageSources();
     });
     bind('nnb_nai_key', 'naiApiKey');
     bind('nnb_nai_model', 'naiModel');
+    $('#nnb_book_nai_key').on('input change', function () {
+        settings().naiApiKey = String($(this).val() || '');
+        $('#nnb_nai_key').val(settings().naiApiKey);
+        saveSettings();
+    });
+    $('#nnb_book_nai_model').on('change', function () {
+        settings().naiModel = String($(this).val() || 'nai-diffusion-5-full');
+        $('#nnb_nai_model').val(settings().naiModel);
+        saveSettings();
+    });
     bind('nnb_nai_sampler', 'naiSampler');
     bind('nnb_nai_char_ref', 'naiCharRefMode');
     bind('nnb_nai_prefix', 'naiPrefix');

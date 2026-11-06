@@ -322,3 +322,52 @@
 .nnb-action-custom:hover {
     opacity: 1 !important;
 }
+
+/* --- 🎬 Отдельный блок иллюстрации сцены под постом (без перекрытия текста) --- */
+#chat .mes .mes_media_wrapper:has(.mes_img),
+#chat .mes .mes_media_wrapper:has(.nnb-inline-scene-bar) {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    clear: both !important;
+    float: none !important;
+    position: static !important;
+    margin: 12px 0 6px 0 !important;
+    padding: 0 !important;
+}
+#chat .mes .mes_img_container {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    clear: both !important;
+    float: none !important;
+    position: relative !important;
+    margin: 8px 0 4px 0 !important;
+}
+#chat .mes .nnb-inline-scene-bar {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    clear: both !important;
+    float: none !important;
+    position: static !important;
+    margin: 6px 0 4px 0 !important;
+    padding: 6px 10px !important;
+    border-radius: 10px !important;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 10%, transparent) !important;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 28%, transparent) !important;
+}
+#chat .mes .nnb-inline-scene-nav {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+    width: 100% !important;
+}
