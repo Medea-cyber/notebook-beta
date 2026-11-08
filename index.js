@@ -41,7 +41,8 @@ DROP #номер — задумка больше не подходит
 const INJECT_FF_KEY = 'npc_notebook_ff';
 const FF_MARKER = '[Перемотка:';
 
-const DEFAULT_INJECT = `[Личный блокнот автора. Это твои собственные задумки на будущее сюжета. Не упоминай блокнот и не цитируй его. Вплетай задумки естественно и постепенно, когда момент подходит; не нужно реализовывать всё сразу и не нужно форсировать. ВАЖНО: любую задумку, бытовую деталь, жест (например, взгляд на письмо или предмет) или выходку фонового существа обыгрывай НЕ БОЛЕЕ ОДНОГО РАЗА — строго запрещено повторять один и тот же крючок или фоновую деталь в каждом посте! Отсчёт «сообщ. назад» — это сообщения чата, а не сюжетное время; в истории могли пройти дни или недели.]
+const DEFAULT_INJECT = `[Личный блокнот автора. Это твои собственные задумки на будущее сюжета. Не упоминай блокнот и не цитируй его. Вплетай задумки естественно и постепенно, когда момент подходит; не нужно реализовывать всё сразу и не нужно форсировать.
+ПРАВИЛО ОДНОЙ СЦЕНЫ: пока текущий разговор, эмоция или уже начатая задумка в разгаре, НЕ перебивай сцену новыми идеями из списка — дай текущему эпизоду спокойно развиться и дойти до логической точки. Подкинуть повод к новой задумке можно только на естественном стыке сцен (когда текущий эпизод завершился, разговор затих или сменились время/локация). При этом мелкие фоновые детали обстановки (вроде взгляда на предмет или выходки питомца) не повторяй из поста в пост. Отсчёт «сообщ. назад» — это сообщения чата, а не сюжетное время; в истории могли пройти дни или недели.]
 {{notes}}`;
 
 const REROLL_PROMPT = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Игроку не понравилась одна из твоих задумок:
@@ -1048,7 +1049,7 @@ const defaults = {
     naiScheduler: 'karras',
     naiSteps: 28,
     naiScale: 5.5,
-    naiCharRefMode: 'char_priority',
+    naiCharRefMode: 'char_no_style',
     naiPrefix: 'very aesthetic, masterpiece, best quality, no text',
     naiNegative: 'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, negative space, blank page, bad anatomy, bad hands, text, watermark, signature',
     textSource: '',
@@ -1102,6 +1103,13 @@ function settings() {
             s.thinkPrompt = DEFAULT_THINK;
         }
         s.promptVersion = 3;
+        ctx().saveSettingsDebounced();
+    }
+    if ((s.promptVersion || 0) < 5) {
+        if (!s.injectPrompt || s.injectPrompt.includes('любую задумку, бытовую деталь') || s.injectPrompt.includes('НЕ держи их мёртвым грузом')) {
+            s.injectPrompt = DEFAULT_INJECT;
+        }
+        s.promptVersion = 5;
         ctx().saveSettingsDebounced();
     }
     return s;
@@ -3965,16 +3973,122 @@ async function formatRefForNovelAiDirector(dataUrl) {
     });
 }
 
+
+// --- Диагностика генерации картинок и очистка промпта NovelAI ---
+const imageDiagHistory = [];
+let sceneDrawingStartedAt = 0;
+
+function logImageDiag(step, detail = '') {
+    const now = new Date();
+    const ts = now.toTimeString().slice(0, 8);
+    const entry = `[${ts}] ${step}${detail ? ': ' + String(detail).slice(0, 600) : ''}`;
+    imageDiagHistory.push(entry);
+    if (imageDiagHistory.length > 60) imageDiagHistory.shift();
+    console.log('[npc_notebook][img-diag]', entry);
+}
+
+function showImageDiagPopup() {
+    const el = $('<div class="nnb-pop"><h3>📋 Диагностика и лог генерации картинок</h3></div>');
+    el.append('<div class="nnb-pop-sub" style="margin-bottom:8px;">Здесь записывается каждый шаг последней генерации иллюстрации: запрос к модели промптов (GLM), отделение негативного промпта, отправка в NovelAI и точный текст ошибки, если что-то зависло или не сработало.</div>');
+    const logText = imageDiagHistory.length
+        ? imageDiagHistory.join('\n\n')
+        : 'Пока нет записей за эту сессию. Нажми 🎬 на любом сообщении в чате, чтобы нарисовать сцену.';
+    const area = $('<textarea class="text_pole" rows="14" readonly style="width:100%; font-family:monospace; font-size:0.82em; white-space:pre-wrap;"></textarea>').val(logText);
+    el.append(area);
+    const btnRow = $('<div class="nnb-pop-row" style="margin-top:8px; gap:8px; flex-wrap:wrap;"></div>');
+    btnRow.append($('<div class="menu_button"><i class="fa-solid fa-rotate-left"></i> Сбросить зависшую генерацию</div>').on('click', () => {
+        sceneDrawing = false;
+        sceneDrawingStartedAt = 0;
+        logImageDiag('Ручной сброс флага генерации пользователем');
+        toastr.success('Флаг генерации сброшен — можно снова нажимать 🎬!', '🎬 Сцена');
+        area.val(imageDiagHistory.join('\n\n'));
+    }));
+    btnRow.append($('<div class="menu_button"><i class="fa-solid fa-trash"></i> Очистить лог</div>').on('click', () => {
+        imageDiagHistory.length = 0;
+        area.val('Лог очищен.');
+    }));
+    el.append(btnRow);
+    openPopup(el, true);
+}
+
+// Отделяет "| NEGATIVE: ..." / "NEGATIVE: ..." / "UC: ..." от позитивного промпта, чтобы негатив НЕ попадал в позитив!
+function splitPositiveAndNegativePrompt(rawText) {
+    let text = String(rawText || '').trim();
+    const extraNegParts = [];
+
+    // Ищем конструкцию вида "| NEGATIVE: ...", "| Negative: ...", "| UC: ...", "NEGATIVE: ...", "Undesired Content: ..."
+    const negRegex = /(?:\s*\|\s*|\s+—\s+|\n+\s*|\[\s*)(?:NEGATIVE(?:\s+PROMPT)?|UNDESIRED(?:\s+CONTENT)?|UC)\s*[:：—–-]\s*([\s\S]+)$/i;
+    const m = text.match(negRegex);
+    if (m) {
+        const negTail = m[1].replace(/\]\s*$/, '').trim();
+        if (negTail) extraNegParts.push(negTail);
+        text = text.slice(0, m.index).trim();
+    }
+
+    // Убираем висящие вертикальные черты в конце позитивного промпта (в NovelAI символ | включает смешивание промптов!)
+    text = text.replace(/\s*\|+\s*$/g, '').trim();
+
+    return {
+        positive: text,
+        negative: extraNegParts.join(', '),
+    };
+}
+
+// Исправляет ловушки тегов Danbooru/NovelAI в позитивном промпте:
+// 1) "flat male chest" / "male chest" при наличии кардигана/одежды заставляет NovelAI рисовать голую грудь нараспашку;
+// 2) "no breasts" в позитивном промпте активирует токен "breasts" (отрицания с "no ..." должны быть в негативе!).
+function sanitizeNovelAiPositiveAndNegative(posPrompt, negPrompt) {
+    let pos = String(posPrompt || '').trim();
+    let neg = String(negPrompt || '').trim();
+
+    // Вырезаем если вдруг внутри промпта остался "| NEGATIVE: ..."
+    const split = splitPositiveAndNegativePrompt(pos);
+    pos = split.positive;
+    if (split.negative) {
+        neg = [neg, split.negative].filter(Boolean).join(', ');
+    }
+
+    const isExplicitlyShirtless = /\b(shirtless|bare chest|bare torso|topless|naked torso|unbuttoned|open shirt|open cardigan showing chest)\b/i.test(pos);
+    const hasUpperClothes = /\b(cardigan|sweater|jacket|coat|hoodie|shirt|t-shirt|turtleneck|vest|blazer|suit|uniform)\b/i.test(pos);
+
+    if (!isExplicitlyShirtless && hasUpperClothes) {
+        // В Danbooru "flat male chest" / "male chest" = оголённая мужская грудь! Заменяем на безопасное описание мужской фигуры
+        pos = pos.replace(/\bflat\s+male\s+chest\b/gi, 'masculine upper body');
+        pos = pos.replace(/\bmale\s+chest\b/gi, 'masculine torso');
+        // Если на персонаже кардиган (cardigan), но не упомянута футболка/рубашка под ним — добавляем shirt under cardigan, чтобы кардиган не рисовался на голое тело
+        if (/\bcardigan\b/i.test(pos) && !/\b(shirt|t-shirt|tee|turtleneck|sweater|blouse|top|under\s+cardigan)\b/i.test(pos)) {
+            pos = pos.replace(/\b([a-z]+\s+cardigan|cardigan)\b/i, '$1 over plain shirt, closed front');
+        }
+    }
+
+    // Убираем "no breasts" / "no female chest" из позитивного промпта (в позитиве NovelAI читает само слово после "no") и переносим в негатив
+    if (/\bno\s+(?:breasts|female\s+chest|chest)\b/i.test(pos)) {
+        pos = pos.replace(/,?\s*\bno\s+(?:breasts|female\s+chest|chest)\b/gi, '');
+        if (!/\bbreasts\b/i.test(neg)) {
+            neg = `breasts, female chest, ${neg}`;
+        }
+    }
+
+    pos = pos.replace(/,\s*,+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').trim();
+    return { pos, neg };
+}
+
 async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
     const s = settings();
-    const model = String(s.naiModel || 'nai-diffusion-4-5-full').trim();
+    const model = String(s.naiModel || 'nai-diffusion-5-full').trim();
     const sampler = String(s.naiSampler || 'k_euler_ancestral').trim();
     const scheduler = String(s.naiScheduler || 'karras').trim();
     const steps = Math.max(1, Math.min(50, Number(s.naiSteps) || 28));
     const scale = Math.max(1, Math.min(20, Number(s.naiScale) || 5.5));
     const prefix = String(s.naiPrefix ?? 'very aesthetic, masterpiece, best quality, no text').trim();
-    let negPrompt = String(s.naiNegative ?? defaults.naiNegative).trim();
-    if (/NOT looking at viewer/i.test(prompt) && !/looking at viewer/i.test(negPrompt)) {
+    let baseNeg = String(s.naiNegative ?? defaults.naiNegative).trim();
+    if (refs?.extraNeg) {
+        baseNeg = [baseNeg, refs.extraNeg].filter(Boolean).join(', ');
+    }
+    const sanitized = sanitizeNovelAiPositiveAndNegative(prompt, baseNeg);
+    let negPrompt = sanitized.neg;
+    const cleanPrompt = sanitized.pos.replace(/\s+/g, ' ').trim();
+    if (/NOT looking at viewer/i.test(cleanPrompt) && !/looking at viewer/i.test(negPrompt)) {
         negPrompt = `looking at viewer, looking at camera, eye contact with viewer, ${negPrompt}`;
     }
 
@@ -3983,8 +4097,8 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
     if (orient === 'landscape') { width = 1216; height = 832; }
     else if (orient === 'square') { width = 1024; height = 1024; }
 
-    const cleanPrompt = String(prompt || '').replace(/\s+/g, ' ').trim();
     const fullPrompt = [prefix, cleanPrompt].filter(Boolean).join(', ');
+    logImageDiag(`Запуск NovelAI (${model}, ${width}x${height})`, `ПОЗИТИВ: ${fullPrompt}\nНЕГАТИВ: ${negPrompt}`);
     const seed = Math.floor(Math.random() * 4294967295);
     const isV4Plus = /nai-diffusion-[45]/i.test(model);
     const isV5 = /nai-diffusion-5/i.test(model);
@@ -4034,8 +4148,8 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
             };
         }
 
-        // Прикрепляем картинку-референс внешности в NovelAI (поддерживается на V5 и V4.5 через director_reference_*, и на V3 через reference_image_multiple)
-        const refMode = String(s.naiCharRefMode || 'char_priority');
+        // Прикрепляем картинку-референс внешности в NovelAI (поддерживается на V4.5 через director_reference_*, и на V3 через reference_image_multiple)
+        const refMode = String(s.naiCharRefMode || 'char_no_style');
         const hasRefs = Array.isArray(refs?.images) && refs.images.length > 0;
         const allowRef = refMode !== 'off';
         let attachedRef = false;
@@ -4043,19 +4157,32 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
             const b64 = await formatRefForNovelAiDirector(refs.images[0]);
             if (b64) {
                 if (/nai-diffusion-4-5/i.test(model)) {
+                    // В NovelAI Director Reference:
+                    // base_caption: 'character' = ТОЛЬКО персонаж БЕЗ стиля аватарки (Style Aware ВЫКЛ);
+                    // base_caption: 'character&style' = Персонаж + стиль аватарки (Style Aware ВКЛ);
+                    // base_caption: 'style' = ТОЛЬКО стиль аватарки.
+                    // secondary_strength_values = (1 - Fidelity): при 0.55..0.65 не копирует рисовку и пропорции с аватарки!
+                    const isCharAndStyle = refMode === 'char_and_style';
+                    const isStyleOnly = refMode === 'style_only';
+                    const baseCap = isStyleOnly ? 'style' : (isCharAndStyle ? 'character&style' : 'character');
+                    const secStrength = (isCharAndStyle || isStyleOnly) ? 0.2 : 0.55;
                     params.director_reference_images = [b64];
                     params.director_reference_descriptions = [
-                        { caption: { base_caption: 'character', char_captions: [] }, legacy_uc: false },
+                        { caption: { base_caption: baseCap, char_captions: [] }, legacy_uc: false },
                     ];
                     params.director_reference_information_extracted = [1];
-                    params.director_reference_strength_values = [1];
-                    params.director_reference_secondary_strength_values = [0.2];
+                    params.director_reference_strength_values = [isStyleOnly ? 0.85 : 0.85];
+                    params.director_reference_secondary_strength_values = [secStrength];
                     attachedRef = true;
+                    logImageDiag('NovelAI Character Reference прикреплён', `режим=${baseCap}, secondary_strength=${secStrength}`);
                 } else if (!isV4Plus) {
                     params.reference_image_multiple = [b64];
                     params.reference_information_extracted_multiple = [1];
                     params.reference_strength_multiple = [0.6];
                     attachedRef = true;
+                    logImageDiag('NovelAI V3 Reference прикреплён');
+                } else {
+                    logImageDiag('Модель NovelAI V5: референс передан подробным текстовым описанием внешности в промпте');
                 }
             }
         }
@@ -4360,7 +4487,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
             ? `ВАЖНАЯ ИНСТРУКЦИЯ ОТ АВТОРА ДЛЯ СОСТАВЛЕНИЯ ПРОМПТА КАРТИНКИ (СОБЛЮДАЙ СТРОГО, ОСОБЕННО ПО АНАТОМИИ И СТИЛЮ):\n${settings().imgPromptWriterNote.trim()}`
             : '',
         settings().imageSource === 'novelai'
-            ? 'Формат для NovelAI: пиши строку SCENE на английском языке, сочетая чёткие теги (например: 1girl, 1boy, natural body proportions, anatomically correct hands) и наглядное описание внешности, одежды, естественных поз (где именно находятся руки каждого персонажа, без вывернутых суставов и слияния тел) и освещения.'
+            ? 'Формат для NovelAI: пиши строку SCENE на английском языке, сочетая чёткие теги (например: 1girl, 1boy, mature adult, natural body proportions, anatomically correct hands) и наглядное описание внешности, одежды, естественных поз и освещения. ВАЖНЫЕ ПРАВИЛА ДЛЯ NOVELAI: 1) НИКОГДА не пиши "| NEGATIVE:" внутри строки SCENE (в NovelAI символ "|" смешивает негативные слова в позитивный промпт! Если нужны негативные теги — вынеси их на отдельную третью строку NEGATIVE: ...). 2) Если персонаж одет (например, в кардиган, свитер, куртку или рубашку), НИКОГДА не пиши в позитивном промпте теги "flat male chest", "male chest" или "no breasts" (в словаре NovelAI тег "male chest" означает голую открытую грудь нараспашку!). Если на персонаже кардиган/куртка не на голое тело — явно указывай футболку или рубашку под ним (например: wearing plain shirt under baggy cardigan, closed cardigan, fully clothed).'
             : '',
         'Ответь ровно двумя строками, без пояснений:',
         `CAST: кто именно виден в кадре через запятую — перечисли ВСЕХ, кто реально присутствует в этом моменте, включая NPC (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
@@ -4519,11 +4646,21 @@ async function askSceneCameraMode(existingMeta = null) {
 
 let sceneDrawing = false;
 async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, forcedCast = null) {
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется', '🎬 Сцена');
+    if (sceneDrawing) {
+        const elapsed = sceneDrawingStartedAt ? Math.round((Date.now() - sceneDrawingStartedAt) / 1000) : 0;
+        if (elapsed > 95) {
+            logImageDiag(`Предыдущая генерация висела ${elapsed} сек. — автоматический сброс`);
+            sceneDrawing = false;
+        } else {
+            toastr.info(`Сцена уже рисуется (${elapsed} сек.). Если генерация зависла — открой «⚙️ Настройки → 📋 Диагностика и лог картинок → Сбросить».`, '🎬 Сцена', { timeOut: 6000 });
+            return null;
+        }
+    }
     if (!canDrawScene()) return toastr.warning('Не выбрано, чем рисовать: настрой «Чем рисовать» в настройках блокнота.', '🎬 Сцена', { timeOut: 8000 });
     const st = store();
     if (!st || !ctx().chat?.length) return toastr.warning('Сначала открой чат', '🎬 Сцена');
     sceneDrawing = true;
+    sceneDrawingStartedAt = Date.now();
     const status = popupEl?.find('.nnb-scene-status');
     const say = t => status?.text(t);
     try {
@@ -4531,14 +4668,21 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
         const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
         let desc = '';
+        let extraNeg = reuseMeta?.extraNeg || '';
         let cast = [];
 
         if (reuseMeta && (reuseMeta.desc || reuseMeta.prompt)) {
-            desc = reuseMeta.desc || reuseMeta.prompt;
+            const splitReuse = splitPositiveAndNegativePrompt(reuseMeta.desc || reuseMeta.prompt);
+            desc = splitReuse.positive;
+            if (splitReuse.negative) extraNeg = [extraNeg, splitReuse.negative].filter(Boolean).join(', ');
             cast = Array.isArray(reuseMeta.cast) ? reuseMeta.cast : [];
+            logImageDiag('Перерисовка по готовому промпту', desc);
         } else {
             // 1) описание сцены текстовой моделью (через отдельную модель промптов картинок, например GLM, если она выбрана!)
+            const promptSrcLabel = settings().imgPromptSource || settings().textSource || 'основной чат';
+            logImageDiag(`Шаг 1/2: запрос промпта сцены (источник: ${promptSrcLabel}, ракурс: ${camMode})`);
             const raw = await withBusy('🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(scenePromptRequest(st, mesId, camMode, forcedCast)));
+            logImageDiag('Ответ модели промптов получен', raw ? String(raw).slice(0, 500) : '(пусто)');
             for (const line of answerLines(raw || '')) {
                 let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
                 if (m) {
@@ -4547,8 +4691,24 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     else cast = rawCast.split(/[,;]/).map(x => x.trim().toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
                     continue;
                 }
+                m = line.match(/^(?:NEGATIVE(?:\s+PROMPT)?|UNDESIRED(?:\s+CONTENT)?|UC)\s*[:：—–-]\s*(.+)$/i);
+                if (m) {
+                    extraNeg = [extraNeg, m[1].trim().replace(/\]$/, '')].filter(Boolean).join(', ');
+                    continue;
+                }
                 m = line.match(/^SCENE\s*[:：—–-]\s*(.+)$/i);
                 if (m) desc = m[1].trim().replace(/\]$/, '');
+            }
+            if (!desc && raw) {
+                // Если модель ответила без префикса SCENE:, берём непустую английскую строку
+                const fallbackLines = answerLines(raw).filter(l => !/^(CAST|NEGATIVE|UC)\s*[:：—–-]/i.test(l));
+                if (fallbackLines.length) desc = fallbackLines.join(' ').trim();
+            }
+            const splitDesc = splitPositiveAndNegativePrompt(desc);
+            desc = splitDesc.positive;
+            if (splitDesc.negative) {
+                extraNeg = [extraNeg, splitDesc.negative].filter(Boolean).join(', ');
+                logImageDiag('Из строки SCENE автоматически вырезан блок | NEGATIVE и перенесён в негативный промпт', splitDesc.negative);
             }
             if (Array.isArray(forcedCast) && forcedCast.length) {
                 forcedCast.forEach(fc => {
@@ -4558,7 +4718,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     }
                 });
             }
-            if (!desc) throw new Error('модель не описала сцену — попробуй ещё раз');
+            if (!desc) throw new Error('модель не описала сцену (в ответе нет строки SCENE) — открой лог диагностики в настройках блокнота');
         }
 
         // 2) образцы: аватар персоны (только если НЕ вид от первого лица!) и аватары тех, кто реально в кадре
@@ -4622,7 +4782,21 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             : isPov
                 ? `Eye-level shot seen directly from ${names.user}'s perspective; ${names.user} is not in the frame.`
                 : `Candid cinematic third-person scene: characters are looking at each other or at their activity in the scene, NEVER looking into the camera or at the viewer.`;
-        const refs = images.length ? { images, note: `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. Keep their faces, hair and features recognizable; clothing, pose and setting follow the description.${unrefNote} ${gazeNote}` } : null;
+        const refModeSetting = String(settings().naiCharRefMode || 'char_no_style');
+        const styleInstruction = refModeSetting === 'char_and_style'
+            ? 'Keep both their facial/hair features AND the visual art style from the reference image.'
+            : refModeSetting === 'style_only'
+                ? 'Use the attached reference image ONLY for the visual art style, rendering, and color palette, while drawing the characters strictly according to the text description.'
+                : 'Use the attached reference image ONLY for character identity (hair color, eye color, facial features) — DO NOT copy the art style, proportions, framing, or lighting of the reference avatar!';
+        const refs = (images.length || extraNeg)
+            ? {
+                images,
+                extraNeg,
+                note: images.length
+                    ? `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. ${styleInstruction} Clothing, adult body proportions, pose and setting must strictly follow the text description.${unrefNote} ${gazeNote}`
+                    : '',
+            }
+            : null;
         const countPrefix = (!isPov && totalPeopleCount >= 3 && !/\b(three|four|five|3|4|5)\s+(people|characters|figures)\b/i.test(desc))
             ? `Scene with ${totalPeopleCount} people visible in frame (${cast.join(', ')}): `
             : '';
@@ -4635,25 +4809,29 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     : totalPeopleCount === 2
                         ? `candid cinematic scene, characters looking at each other, interacting naturally, NOT looking at viewer, NOT looking at camera, single illustration, no text, no captions.`
                         : `candid cinematic scene, natural gaze, NOT looking at camera, single illustration, no text, no captions.`);
-        const prompt = (reuseMeta?.prompt && reuseMeta.desc === desc)
-            ? reuseMeta.prompt
+        const rawCombinedPrompt = (reuseMeta?.prompt && reuseMeta.desc === desc)
+            ? splitPositiveAndNegativePrompt(reuseMeta.prompt).positive
             : cleanForCommand(`${countPrefix}${desc}. ${cameraSuffix}`);
-        console.log('[npc_notebook] drawScene: drawing picture (camMode=' + camMode + ', reuse=' + !!reuseMeta + ')...');
+        const prompt = splitPositiveAndNegativePrompt(rawCombinedPrompt).positive;
+        logImageDiag(`Шаг 2/2: отправка промпта в генератор (${imageSourceName()})`, `Референсов: ${images.length} (${who.join(', ') || 'нет'}), режим референса: ${refModeSetting}`);
         const url = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
-        const sceneMeta = { desc, cast, camMode, prompt, pov: isPov };
+        logImageDiag('Картинка успешно получена и сохранена!', url ? String(url).slice(0, 120) : '');
+        const sceneMeta = { desc, extraNeg, cast, camMode, prompt, pov: isPov };
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
-        st.scenes.push({ url, at: ctx().chat.length, date: st.time?.date || '', desc, cast, camMode, prompt, pov: isPov });
+        st.scenes.push({ url, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, camMode, prompt, pov: isPov });
         if (st.scenes.length > 100) st.scenes.shift();
         await ctx().saveMetadata();
         renderPanel();
         return { url, sceneMeta };
     } catch (err) {
         console.warn('[npc_notebook] scene', err);
-        toastr.warning(`Сцену нарисовать не вышло: ${escapeHtml(err?.message || err)}`, '🎬 Сцена', { escapeHtml: false, timeOut: 10000 });
+        logImageDiag('ОШИБКА генерации сцены', err?.message || String(err));
+        toastr.warning(`Сцену нарисовать не вышло: ${escapeHtml(err?.message || err)}<br><small>Нажми «📋 Диагностика и лог картинок» в настройках блокнота для подробностей.</small>`, '🎬 Сцена', { escapeHtml: false, timeOut: 10000 });
         return null;
     } finally {
         sceneDrawing = false;
+        sceneDrawingStartedAt = 0;
     }
 }
 
@@ -10700,10 +10878,12 @@ const PANEL_HTML = `
             <option value="k_dpmpp_2m_sde">DPM++ 2M SDE</option>
             <option value="ddim_v3">DDIM</option>
           </select>
-          <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">🖼 Картинка-референс внешности (V5 / V4.5 Character Reference):</div>
+          <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса (V4.5 Character Reference / референсы):</div>
           <select class="text_pole" id="nnb_nai_char_ref" title="Режим картинки-референса в NovelAI" style="margin-top:2px;">
-            <option value="char_priority">Авто: референс для char (если только user — её; если оба — референс char, а user по описанию)</option>
-            <option value="off">Выкл: всех рисовать только по текстовому описанию и тегам (0 Anlas)</option>
+            <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (рекомендуется)</option>
+            <option value="char_and_style">Внешность персонажа + стиль рисовки с аватарки</option>
+            <option value="style_only">Только стиль рисовки с аватарки (внешность по тексту)</option>
+            <option value="off">Выкл: рисовать только по текстовому описанию и тегам (без аватарки)</option>
           </select>
           <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">✨ Теги стиля/качества (всегда добавляются в начало):</div>
           <input type="text" class="text_pole" id="nnb_nai_prefix" placeholder="Теги стиля/качества в начало промпта" style="margin-top:2px;">
@@ -10828,6 +11008,17 @@ const BOOK_HTML = `
             <option value="nai-diffusion-4-full">NovelAI V4 Full</option>
             <option value="nai-diffusion-3">NovelAI Anime V3</option>
           </select>
+          <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса:</div>
+          <select class="text_pole" id="nnb_book_nai_char_ref" title="Что брать с аватарки-референса" style="margin-top:2px;">
+            <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (рекомендуется)</option>
+            <option value="char_and_style">Внешность персонажа + стиль рисовки с аватарки</option>
+            <option value="style_only">Только стиль рисовки с аватарки (внешность по тексту)</option>
+            <option value="off">Выкл: рисовать только по текстовому описанию и тегам (без аватарки)</option>
+          </select>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+          <div class="menu_button" id="nnb_book_img_diag_btn" style="padding:4px 10px; font-size:0.82em; width:auto;"><i class="fa-solid fa-bug"></i> 📋 Диагностика и лог картинок</div>
+          <div class="menu_button" id="nnb_book_img_reset_btn" style="padding:4px 10px; font-size:0.82em; width:auto;"><i class="fa-solid fa-rotate-left"></i> ⏹ Сбросить зависшую генерацию</div>
         </div>
       </div>
       <div class="nnb-direction">
@@ -12631,6 +12822,9 @@ function fillImageSources() {
     $('#nnb_nai_api, #nnb_book_nai_api').toggle(cur === 'novelai');
     $('#nnb_nai_key, #nnb_book_nai_key').val(settings().naiApiKey || '');
     $('#nnb_nai_model, #nnb_book_nai_model').val(settings().naiModel || 'nai-diffusion-5-full');
+    const curRefMode = (settings().naiCharRefMode === 'char_priority' || !settings().naiCharRefMode) ? 'char_no_style' : settings().naiCharRefMode;
+    settings().naiCharRefMode = curRefMode;
+    $('#nnb_nai_char_ref, #nnb_book_nai_char_ref').val(curRefMode);
 }
 
 // 🎬 и 👗 у сообщений: сцена — на каждом сообщении, гардероб — у последнего
@@ -12960,7 +13154,18 @@ jQuery(async () => {
         saveSettings();
     });
     bind('nnb_nai_sampler', 'naiSampler');
-    bind('nnb_nai_char_ref', 'naiCharRefMode');
+    $('#nnb_nai_char_ref, #nnb_book_nai_char_ref').on('change', function () {
+        settings().naiCharRefMode = String($(this).val() || 'char_no_style');
+        $('#nnb_nai_char_ref, #nnb_book_nai_char_ref').val(settings().naiCharRefMode);
+        saveSettings();
+    });
+    $('#nnb_book_img_diag_btn').on('click', () => showImageDiagPopup());
+    $('#nnb_book_img_reset_btn').on('click', () => {
+        sceneDrawing = false;
+        sceneDrawingStartedAt = 0;
+        logImageDiag('Ручной сброс зависшей генерации из настроек блокнота');
+        toastr.success('Зависшая генерация сброшена — можно снова нажимать 🎬!', '🎬 Сцена');
+    });
     bind('nnb_nai_prefix', 'naiPrefix');
     bind('nnb_nai_neg', 'naiNegative');
     bind('nnb_img_base', 'imgApiBase');
