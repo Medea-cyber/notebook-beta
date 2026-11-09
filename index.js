@@ -1,3 +1,211 @@
+// ===================== МОСТ СОВМЕСТИМОСТИ ДЛЯ TAVO (Tavo AI Roleplay Frontend) =====================
+// Если плагин запущен внутри приложения Tavo (где нет глобального объекта SillyTavern),
+// автоматически поднимаем совместимое окружение, плавающую кнопку 📖 на краю экрана и связку с TavoJS.
+(function initTavoCompatBridge() {
+    if (typeof window === 'undefined' || window.SillyTavern?.getContext) return;
+    window.__NNB_IS_TAVO__ = true;
+    console.log('[npc_notebook] Tavo environment detected — initializing Tavo compatibility bridge...');
+
+    // Подгружаем FontAwesome для иконок, если его ещё нет на странице
+    if (!document.querySelector('link[href*="font-awesome"], link[href*="fontawesome"]')) {
+        const fa = document.createElement('link');
+        fa.rel = 'stylesheet';
+        fa.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css';
+        document.head.appendChild(fa);
+    }
+
+    // Лёгкие уведомления toastr для Tavo
+    if (!window.toastr) {
+        const showToast = (msg, title = '', kind = 'info', opts = {}) => {
+            let box = document.getElementById('nnb_tavo_toast_host');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'nnb_tavo_toast_host';
+                box.style.cssText = 'position:fixed;top:14px;right:14px;left:14px;z-index:2147483646;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;';
+                document.body.appendChild(box);
+            }
+            const card = document.createElement('div');
+            const bg = kind === 'error' ? '#5c1f28' : kind === 'warning' ? '#5a4318' : kind === 'success' ? '#1d4d35' : '#262136';
+            card.style.cssText = `pointer-events:auto;max-width:460px;width:100%;background:${bg};color:#f5f2ff;border:1px solid rgba(255,255,255,0.22);border-radius:12px;padding:10px 14px;box-shadow:0 8px 24px rgba(0,0,0,0.45);font-size:13.5px;line-height:1.4;cursor:pointer;`;
+            card.innerHTML = `${title ? `<div style="font-weight:700;margin-bottom:3px;">${title}</div>` : ''}<div>${msg}</div>`;
+            card.onclick = () => card.remove();
+            box.appendChild(card);
+            const timeout = opts?.timeOut === 0 ? 0 : (opts?.timeOut || 4500);
+            if (timeout > 0) setTimeout(() => { try { card.remove(); } catch (e) {} }, timeout);
+            return card;
+        };
+        window.toastr = {
+            info: (m, t, o) => showToast(m, t, 'info', o),
+            success: (m, t, o) => showToast(m, t, 'success', o),
+            warning: (m, t, o) => showToast(m, t, 'warning', o),
+            error: (m, t, o) => showToast(m, t, 'error', o),
+            clear: el => { try { if (el?.remove) el.remove(); } catch (e) {} },
+        };
+    }
+
+    // Чтение и сохранение локальных настроек и метаданных чата в Tavo
+    const loadJson = (k, def) => {
+        try {
+            const raw = localStorage.getItem(k);
+            return raw ? JSON.parse(raw) : def;
+        } catch (e) { return def; }
+    };
+    const saveJson = (k, val) => {
+        try { localStorage.setItem(k, JSON.stringify(val)); } catch (e) {}
+    };
+
+    const extSettings = loadJson('tavo_nnb_ext_settings_v1', {});
+    const allChatsMeta = loadJson('tavo_nnb_chats_meta_v1', {});
+    const resolveChatId = () => {
+        try {
+            if (window.tavo?.getChatId) return String(window.tavo.getChatId() || 'tavo_default_chat');
+            if (window.tavo?.chatId) return String(window.tavo.chatId);
+        } catch (e) {}
+        return String(location.hash || location.pathname || 'tavo_default_chat');
+    };
+
+    // Сбор видимых сообщений чата из TavoJS или DOM-пузырей Tavo
+    const collectTavoChat = () => {
+        try {
+            if (typeof window.tavo?.getMessages === 'function') {
+                const msgs = window.tavo.getMessages();
+                if (Array.isArray(msgs) && msgs.length) {
+                    return msgs.map(m => ({
+                        name: m.name || (m.role === 'user' ? (window.tavo?.userName || 'Ты') : (window.tavo?.charName || 'Персонаж')),
+                        is_user: m.role === 'user' || !!m.is_user,
+                        is_system: m.role === 'system',
+                        mes: String(m.content || m.mes || m.text || ''),
+                        extra: m.extra || {},
+                    }));
+                }
+            }
+        } catch (e) {}
+        const domNodes = document.querySelectorAll('[data-message-id], .message-content, .chat-message, .mes_text');
+        const list = [];
+        domNodes.forEach((node, idx) => {
+            const txt = (node.innerText || node.textContent || '').trim();
+            if (!txt) return;
+            const isUser = !!(node.closest('[data-role="user"], .user-message, .is_user') || (idx % 2 === 1));
+            list.push({
+                name: isUser ? 'Героиня' : 'Персонаж',
+                is_user: isUser,
+                is_system: false,
+                mes: txt,
+                extra: {},
+            });
+        });
+        return list;
+    };
+
+    const listeners = {};
+    const eventSource = {
+        on: (ev, fn) => {
+            if (!ev || typeof fn !== 'function') return;
+            (listeners[ev] = listeners[ev] || []).push(fn);
+        },
+        emit: (ev, ...args) => {
+            (listeners[ev] || []).forEach(fn => { try { fn(...args); } catch (e) {} });
+        },
+    };
+
+    const injectedPrompts = {};
+    const syncTavoMemoryInjection = () => {
+        const combined = Object.values(injectedPrompts).filter(Boolean).join('\n\n');
+        try {
+            localStorage.setItem('tavo_nnb_active_injection', combined);
+            if (typeof window.tavo?.set === 'function') {
+                window.tavo.set('npc_notebook', combined);
+            }
+            if (typeof window.tavo?.setSystemPromptAddon === 'function') {
+                window.tavo.setSystemPromptAddon('npc_notebook', combined);
+            }
+        } catch (e) {}
+    };
+
+    window.SillyTavern = {
+        getContext: () => {
+            const cid = resolveChatId();
+            if (!allChatsMeta[cid]) allChatsMeta[cid] = {};
+            const chatArr = collectTavoChat();
+            return {
+                chatId: cid,
+                chat: chatArr,
+                chatMetadata: allChatsMeta[cid],
+                extensionSettings: extSettings,
+                characterId: 0,
+                characters: [{
+                    name: window.tavo?.charName || 'Персонаж',
+                    description: window.tavo?.charDescription || '',
+                    personality: window.tavo?.charPersonality || '',
+                    scenario: window.tavo?.charScenario || '',
+                    avatar: '',
+                }],
+                name1: window.tavo?.userName || 'Героиня',
+                name2: window.tavo?.charName || 'Персонаж',
+                powerUserSettings: {
+                    persona_description: window.tavo?.personaDescription || localStorage.getItem('tavo_nnb_persona_desc') || '',
+                },
+                event_types: {
+                    MESSAGE_RECEIVED: 'MESSAGE_RECEIVED',
+                    MESSAGE_SENT: 'MESSAGE_SENT',
+                    CHAT_CHANGED: 'CHAT_CHANGED',
+                    MESSAGE_DELETED: 'MESSAGE_DELETED',
+                    CHARACTER_MESSAGE_RENDERED: 'CHARACTER_MESSAGE_RENDERED',
+                    USER_MESSAGE_RENDERED: 'USER_MESSAGE_RENDERED',
+                    CHAT_COMPLETION_PROMPT_READY: 'CHAT_COMPLETION_PROMPT_READY',
+                },
+                eventSource,
+                saveSettingsDebounced: () => saveJson('tavo_nnb_ext_settings_v1', extSettings),
+                saveMetadata: async () => saveJson('tavo_nnb_chats_meta_v1', allChatsMeta),
+                saveChat: async () => saveJson('tavo_nnb_chats_meta_v1', allChatsMeta),
+                setExtensionPrompt: (key, text) => {
+                    injectedPrompts[key] = String(text || '');
+                    syncTavoMemoryInjection();
+                },
+                substituteParams: str => String(str || '')
+                    .replace(/\{\{user\}\}/gi, window.tavo?.userName || 'Героиня')
+                    .replace(/\{\{char\}\}/gi, window.tavo?.charName || 'Персонаж'),
+                getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+                generateQuietPrompt: async (promptArg) => {
+                    const pText = typeof promptArg === 'object' ? promptArg?.quietPrompt : promptArg;
+                    if (typeof window.tavo?.generate === 'function') {
+                        return await window.tavo.generate(String(pText || ''));
+                    }
+                    throw new Error('В Tavo открой «📖 Блокнот → ⚙️ Настройки → ⚡ Отдельное быстрое подключение» и выбери «Свой быстрый API по ключу» (например, Gemini Flash или OpenRouter).');
+                },
+            };
+        },
+    };
+
+    // Создаём в Tavo контейнеры совместимости и плавающую кнопку «📖 Блокнот» у правого края экрана
+    const mountTavoLauncher = () => {
+        if (!document.body) return;
+        if (!document.getElementById('extensions_settings2')) {
+            const hiddenHost = document.createElement('div');
+            hiddenHost.id = 'extensions_settings2';
+            hiddenHost.style.display = 'none';
+            document.body.appendChild(hiddenHost);
+        }
+        if (!document.getElementById('nnb_tavo_fab')) {
+            const fab = document.createElement('div');
+            fab.id = 'nnb_tavo_fab';
+            fab.title = 'Открыть Блокнот рассказчика (Tavo)';
+            fab.innerHTML = '📖';
+            fab.style.cssText = 'position:fixed;right:12px;bottom:130px;z-index:2147483000;width:46px;height:46px;border-radius:50%;background:linear-gradient(135deg,#3b2d54,#241b35);color:#f3eaff;border:1.5px solid rgba(212,180,255,0.55);box-shadow:0 4px 16px rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;user-select:none;';
+            fab.onclick = () => {
+                const openBtn = document.getElementById('nnb_open_book');
+                if (openBtn) openBtn.click();
+            };
+            document.body.appendChild(fab);
+        }
+    };
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mountTavoLauncher);
+    } else {
+        mountTavoLauncher();
+    }
+})();
+
 // Блокнот рассказчика — модель раз в N сообщений сама решает,
 // что хочет реализовать / спросить / придумать, и записывает это.
 // Записи хранятся в метаданных чата и подмешиваются в промпт.
@@ -1044,13 +1252,14 @@ const defaults = {
     imgApiModel: 'gpt-image-2-c',
     imgApiSize: '1536x1024',
     naiApiKey: '',
-    naiModel: 'nai-diffusion-5-full',
+    naiModel: 'nai-diffusion-5-full-medium',
     naiSampler: 'k_euler_ancestral',
     naiScheduler: 'karras',
     naiSteps: 28,
-    naiScale: 5.5,
+    naiScale: 5.0,
+    naiRescale: 0,
     naiCharRefMode: 'char_no_style',
-    naiPrefix: 'very aesthetic, masterpiece, best quality, no text',
+    naiPrefix: '',
     naiNegative: 'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, negative space, blank page, bad anatomy, bad hands, text, watermark, signature',
     textSource: '',
     textApiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -1110,6 +1319,16 @@ function settings() {
             s.injectPrompt = DEFAULT_INJECT;
         }
         s.promptVersion = 5;
+        ctx().saveSettingsDebounced();
+    }
+    if ((s.promptVersion || 0) < 6) {
+        if (!s.naiModel || s.naiModel === 'nai-diffusion-5-full' || s.naiModel === 'nai-diffusion-4-5-full') {
+            s.naiModel = 'nai-diffusion-5-full-medium';
+        }
+        if (s.naiPrefix === 'very aesthetic, masterpiece, best quality, no text') {
+            s.naiPrefix = '';
+        }
+        s.promptVersion = 6;
         ctx().saveSettingsDebounced();
     }
     return s;
@@ -3455,8 +3674,10 @@ function addLookToCloset(st, look, defaultCat = 'Повседневный') {
 
 function lookThumb(item, width = '88px', height = '126px') {
     const el = $('<div class="nnb-card-img nnb-find-thumb"></div>').css({ width, height, 'flex-shrink': '0' });
-    const ratio = item?.imageLayout?.rows === 2 ? 2 / 3 : 1.5;
-    applyCrop(el, item.image, item.crop || { x: 0, y: 0, w: 1, h: 1 }, ratio);
+    const isSingle = !!(item?.isSingleImage || (item?.imageLayout?.cols === 1 && item?.imageLayout?.rows === 1));
+    const ratio = isSingle ? (832 / 1216) : (item?.imageLayout?.rows === 2 ? 2 / 3 : 1.5);
+    const cropBox = isSingle ? { x: 0, y: 0, w: 1, h: 1 } : (item.crop || { x: 0, y: 0, w: 1, h: 1 });
+    applyCrop(el, item.image, cropBox, ratio);
     return el;
 }
 
@@ -4069,18 +4290,31 @@ function sanitizeNovelAiPositiveAndNegative(posPrompt, negPrompt) {
         }
     }
 
+    const userStyle = String(settings().naiPrefix || '').trim();
+    if (userStyle) {
+        pos = pos.replace(/\b(?:anime\s+style|semi-realistic\s+anime|masterpiece|best\s+quality|very\s+aesthetic|amazing\s+quality|highres)\b\s*,?\s*/gi, '');
+    }
+
     pos = pos.replace(/,\s*,+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').trim();
     return { pos, neg };
 }
 
 async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
     const s = settings();
-    const model = String(s.naiModel || 'nai-diffusion-5-full').trim();
-    const sampler = String(s.naiSampler || 'k_euler_ancestral').trim();
+    const model = String(s.naiModel || 'nai-diffusion-5-full-medium').trim();
+    const isV5Medium = /nai-diffusion-5-full-medium/i.test(model);
+    const isV5 = /nai-diffusion-5/i.test(model);
+    const isV4Plus = /nai-diffusion-[45]/i.test(model);
+
+    // В V5 Medium Effort сервер NovelAI требует строго 14 шагов, k_euler_ancestral, cfg_rescale: 0 и ucPreset: 2 (Heavy)
+    const sampler = isV5Medium ? 'k_euler_ancestral' : String(s.naiSampler || 'k_euler_ancestral').trim();
     const scheduler = String(s.naiScheduler || 'karras').trim();
-    const steps = Math.max(1, Math.min(50, Number(s.naiSteps) || 28));
-    const scale = Math.max(1, Math.min(20, Number(s.naiScale) || 5.5));
-    const prefix = String(s.naiPrefix ?? 'very aesthetic, masterpiece, best quality, no text').trim();
+    const steps = isV5Medium ? 14 : Math.max(1, Math.min(50, Number(s.naiSteps) || 28));
+    const scale = Math.max(1, Math.min(20, Number(s.naiScale) || 5.0));
+    const cfgRescale = isV5Medium ? 0 : Math.max(0, Math.min(1, Number(s.naiRescale ?? 0)));
+
+    // Пользовательский стиль вставляется 1-в-1 без изменений текстовой моделью!
+    const prefix = String(s.naiPrefix ?? '').trim();
     let baseNeg = String(s.naiNegative ?? defaults.naiNegative).trim();
     if (refs?.extraNeg) {
         baseNeg = [baseNeg, refs.extraNeg].filter(Boolean).join(', ');
@@ -4092,16 +4326,14 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
         negPrompt = `looking at viewer, looking at camera, eye contact with viewer, ${negPrompt}`;
     }
 
-    // Стандартные разрешения Opus Free (0 Anlas до 28 шагов)
+    // Стандартные разрешения Opus Free (832x1216)
     let width = 832, height = 1216;
     if (orient === 'landscape') { width = 1216; height = 832; }
     else if (orient === 'square') { width = 1024; height = 1024; }
 
     const fullPrompt = [prefix, cleanPrompt].filter(Boolean).join(', ');
-    logImageDiag(`Запуск NovelAI (${model}, ${width}x${height})`, `ПОЗИТИВ: ${fullPrompt}\nНЕГАТИВ: ${negPrompt}`);
+    logImageDiag(`Запуск NovelAI (${model}, steps=${steps}, scale=${scale}, rescale=${cfgRescale}, ${width}x${height})`, `ПОЗИТИВ: ${fullPrompt}\nНЕГАТИВ: ${negPrompt}`);
     const seed = Math.floor(Math.random() * 4294967295);
-    const isV4Plus = /nai-diffusion-[45]/i.test(model);
-    const isV5 = /nai-diffusion-5/i.test(model);
 
     const token = String(s.naiApiKey || '').trim();
 
@@ -4116,15 +4348,15 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
             steps,
             seed,
             n_samples: 1,
-            ucPreset: 0,
-            qualityToggle: true,
+            ucPreset: isV5Medium ? 2 : 0,
+            qualityToggle: !prefix,
             sm: false,
             sm_dyn: false,
             dynamic_thresholding: false,
             controlnet_strength: 1,
             legacy: false,
             add_original_image: true,
-            cfg_rescale: 0,
+            cfg_rescale: cfgRescale,
             noise_schedule: scheduler,
             legacy_v3_extend: false,
             uncond_scale: 1,
@@ -4214,6 +4446,16 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
             const dataUrl = await sendNaiDirect(params);
             return storeImage(dataUrl);
         } catch (err) {
+            if (isV5Medium && params.negative_prompt) {
+                console.warn('[npc_notebook] V5 Medium rejected custom negative prompt or params, retrying with fixed V5 Medium preset:', err);
+                logImageDiag('Повтор V5 Medium со стандартным пресетом негатива (14 шагов, Euler Ancestral)');
+                params.negative_prompt = '';
+                if (params.v4_negative_prompt?.caption) {
+                    params.v4_negative_prompt.caption.base_caption = '';
+                }
+                const dataUrl = await sendNaiDirect(params);
+                return storeImage(dataUrl);
+            }
             if (attachedRef) {
                 console.warn('[npc_notebook] NovelAI Character Reference failed (e.g. 402 Anlas), retrying without image ref:', err);
                 toastr.info('NovelAI Character Reference не принят для этого кадра — рисую по текстовым тегам внешности…', '🎨 NovelAI', { timeOut: 5000 });
@@ -4259,6 +4501,9 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
 }
 
 function cleanForCommand(t) {
+    if (settings().imageSource === 'novelai') {
+        return String(t || '').replace(/[\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+    }
     return String(t || '').replace(/[|{}\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 function imgOrient() {
@@ -4354,6 +4599,24 @@ function accentsPrompt(a, layout) {
 }
 
 
+
+function getHeroineAppearanceEn(st, activeWardrobe = null) {
+    const fromActive = activeWardrobe?.appearance ? String(activeWardrobe.appearance).trim() : '';
+    const fromStore = st?.wardrobe?.appearance ? String(st.wardrobe.appearance).trim() : '';
+    const rawPersona = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
+    const fromPersona = rawPersona ? ctx().substituteParams(String(rawPersona)).replace(/\s+/g, ' ').trim().slice(0, 450) : '';
+    return fromActive || fromStore || fromPersona || 'attractive young woman';
+}
+
+function buildSingleOutfitPromptForNai(who, outfitObj) {
+    const outfitText = String(outfitObj?.en || outfitObj?.desc || outfitObj?.title || 'stylish outfit').trim();
+    return cleanForCommand(`1girl, solo, full body, standing, simple light background, ${who}, wearing ${outfitText}, single character, natural body proportions, anatomically correct hands, no text, no captions`);
+}
+
+function buildSingleAccentPromptForNai(who, accentObj) {
+    return cleanForCommand(`1item, solo, ${ITEM_STYLE}, solid plain light cream background, ${accentEnDesc(accentObj, who)}, no text, no captions`);
+}
+
 // Рисует картинку для текущего выбора (kind: looks | accents); onDone получает адрес картинки или ''
 async function ensurePicture(kind, force, onDone) {
     const st = store();
@@ -4367,39 +4630,101 @@ async function ensurePicture(kind, force, onDone) {
     drawingKind[kind] = true;
     let url = '';
     try {
-        let refs = null;
-        if ((kind === 'looks' || kind === 'accents') && settings().imageRef) {
-            const me = await personaAvatarDataUrl();
-            if (me) {
-                const note = kind === 'looks'
-                    ? 'The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.'
-                    : 'The input picture is the reference for the character face: keep the same face, hair, eyes, nose and facial features recognizable, showing her with the specified makeup in the portrait cell.';
-                refs = { images: [me], note };
+        const isNai = settings().imageSource === 'novelai';
+        const who = getHeroineAppearanceEn(st, a);
+
+        // Если выбран NovelAI и мы рисуем гардероб (5 образов) или штрихи (4 штриха):
+        // 1) Никогда не передаём референс с аватарки (refs = null), чтобы не ломать генерацию!
+        // 2) Делаем отдельные запросы к NovelAI по каждому образу (5 отдельных запросов для 5 нарядов), чтобы не было мешанины на одном листе!
+        if (isNai && kind === 'looks') {
+            const count = Math.min((a.options || []).length, 5);
+            const singleUrls = [];
+            for (let i = 0; i < count; i++) {
+                const opt = a.options[i];
+                setStatus(`🎨 NovelAI рисует наряд ${i + 1} из ${count} («${opt.title}»)…`);
+                logImageDiag(`Гардероб NovelAI: запрос наряда ${i + 1}/${count}`, opt.title);
+                const singlePrompt = buildSingleOutfitPromptForNai(who, opt);
+                const singleUrl = await drawViaNovelAi(singlePrompt, 'portrait', null);
+                if (singleUrl) {
+                    opt.image = singleUrl;
+                    opt.imageLayout = { rows: 1, cols: 1 };
+                    opt.crop = { x: 0, y: 0, w: 1, h: 1 };
+                    opt.isSingleImage = true;
+                    singleUrls.push(singleUrl);
+                } else {
+                    singleUrls.push('');
+                }
             }
+            a.individualImages = singleUrls;
+            url = singleUrls.find(Boolean) || '';
+            if (!url) throw new Error('NovelAI не вернул картинки нарядов');
+            a[field] = url;
+            a[field + 'Layout'] = { rows: 1, cols: 1 };
+            a[failField] = false;
+            await ctx().saveMetadata();
+        } else if (isNai && kind === 'accents') {
+            const items = (a.accents || []).slice(0, 4);
+            const singleUrls = [];
+            for (let i = 0; i < items.length; i++) {
+                const ac = items[i];
+                setStatus(`🎨 NovelAI рисует штрих ${i + 1} из ${items.length} («${ac.title}»)…`);
+                const singlePrompt = buildSingleAccentPromptForNai(who, ac);
+                const isMakeup = ac.kind === 'makeup' || /макияж|makeup|lipstick|тени|помад/i.test(ac.kind || ac.title);
+                const singleUrl = await drawViaNovelAi(singlePrompt, isMakeup ? 'portrait' : 'square', null);
+                if (singleUrl) {
+                    ac.image = singleUrl;
+                    ac.imageLayout = { rows: 1, cols: 1 };
+                    ac.crop = { x: 0, y: 0, w: 1, h: 1 };
+                    ac.isSingleImage = true;
+                    singleUrls.push(singleUrl);
+                } else {
+                    singleUrls.push('');
+                }
+            }
+            a.individualAccentImages = singleUrls;
+            url = singleUrls.find(Boolean) || '';
+            if (!url) throw new Error('NovelAI не вернул картинки штрихов');
+            a[field] = url;
+            a[field + 'Layout'] = { rows: 1, cols: 1 };
+            a[failField] = false;
+            await ctx().saveMetadata();
+        } else {
+            let refs = null;
+            // Для не-NovelAI генераторов берём аватар только если включена галочка imageRef И режим референса не выключен
+            if (!isNai && (kind === 'looks' || kind === 'accents') && settings().imageRef && settings().naiCharRefMode !== 'off') {
+                const me = await personaAvatarDataUrl();
+                if (me) {
+                    const note = kind === 'looks'
+                        ? 'The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.'
+                        : 'The input picture is the reference for the character face: keep the same face, hair, eyes, nose and facial features recognizable, showing her with the specified makeup in the portrait cell.';
+                    refs = { images: [me], note };
+                }
+            }
+            const layout = kind === 'looks' ? looksLayout(Math.min(a.options.length, 5)) : kind === 'accents' ? accentsLayout((a.accents || []).length) : { rows: 1, cols: Math.min(a.options.length, 3) };
+            const orient = (kind === 'looks' || kind === 'accents') && layout.rows === 2 ? 'portrait' : 'landscape';
+            const prevUrl = a[field];
+            const prevLayout = a[field + 'Layout'] || layout;
+            url = await drawPicture(kind === 'looks' ? sheetPrompt(a, layout) : kind === 'gacha' ? gachaPicPrompt(a) : accentsPrompt(a, layout), refs, orient);
+            const histKey = field + 'History';
+            if (!Array.isArray(a[histKey])) a[histKey] = [];
+            if (prevUrl && !a[histKey].some(h => h.url === prevUrl)) {
+                a[histKey].push({ url: prevUrl, layout: prevLayout });
+            }
+            if (url && !a[histKey].some(h => h.url === url)) {
+                a[histKey].push({ url, layout });
+            }
+            a[field] = url;
+            a[field + 'Layout'] = layout;
+            a[failField] = false;
+            await ctx().saveMetadata();
         }
-        const layout = kind === 'looks' ? looksLayout(Math.min(a.options.length, 5)) : kind === 'accents' ? accentsLayout((a.accents || []).length) : { rows: 1, cols: Math.min(a.options.length, 3) };
-        const orient = (kind === 'looks' || kind === 'accents') && layout.rows === 2 ? 'portrait' : 'landscape';
-        const prevUrl = a[field];
-        const prevLayout = a[field + 'Layout'] || layout;
-        url = await drawPicture(kind === 'looks' ? sheetPrompt(a, layout) : kind === 'gacha' ? gachaPicPrompt(a) : accentsPrompt(a, layout), refs, orient);
-        const histKey = field + 'History';
-        if (!Array.isArray(a[histKey])) a[histKey] = [];
-        if (prevUrl && !a[histKey].some(h => h.url === prevUrl)) {
-            a[histKey].push({ url: prevUrl, layout: prevLayout });
-        }
-        if (url && !a[histKey].some(h => h.url === url)) {
-            a[histKey].push({ url, layout });
-        }
-        a[field] = url;
-        a[field + 'Layout'] = layout;
-        a[failField] = false;
-        await ctx().saveMetadata();
     } catch (err) {
         a[failField] = true;
         console.warn('[npc_notebook] image', kind, err);
         toastr.warning(`Картинку ${kind === 'looks' ? 'с образами' : kind === 'gacha' ? 'с находками' : 'со штрихами'} нарисовать не вышло: ${escapeHtml(err?.message || err)}. Выбирать можно и по названиям.`, kind === 'gacha' ? '🎰 Находки' : '👗 Гардероб', { escapeHtml: false, timeOut: 10000 });
     } finally {
         drawingKind[kind] = false;
+        setStatus('');
         flushPicture(kind, url);
     }
     // штрихи рисуем следом за образами, пока игрок выбирает наряд
@@ -4487,7 +4812,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
             ? `ВАЖНАЯ ИНСТРУКЦИЯ ОТ АВТОРА ДЛЯ СОСТАВЛЕНИЯ ПРОМПТА КАРТИНКИ (СОБЛЮДАЙ СТРОГО, ОСОБЕННО ПО АНАТОМИИ И СТИЛЮ):\n${settings().imgPromptWriterNote.trim()}`
             : '',
         settings().imageSource === 'novelai'
-            ? 'Формат для NovelAI: пиши строку SCENE на английском языке, сочетая чёткие теги (например: 1girl, 1boy, mature adult, natural body proportions, anatomically correct hands) и наглядное описание внешности, одежды, естественных поз и освещения. ВАЖНЫЕ ПРАВИЛА ДЛЯ NOVELAI: 1) НИКОГДА не пиши "| NEGATIVE:" внутри строки SCENE (в NovelAI символ "|" смешивает негативные слова в позитивный промпт! Если нужны негативные теги — вынеси их на отдельную третью строку NEGATIVE: ...). 2) Если персонаж одет (например, в кардиган, свитер, куртку или рубашку), НИКОГДА не пиши в позитивном промпте теги "flat male chest", "male chest" или "no breasts" (в словаре NovelAI тег "male chest" означает голую открытую грудь нараспашку!). Если на персонаже кардиган/куртка не на голое тело — явно указывай футболку или рубашку под ним (например: wearing plain shirt under baggy cardigan, closed cardigan, fully clothed).'
+            ? 'Формат для NovelAI: пиши строку SCENE на английском языке, сочетая чёткие теги (например: 1girl, 1boy, mature adult, natural body proportions, anatomically correct hands) и наглядное описание внешности, одежды, естественных поз и освещения. ВАЖНЫЕ ПРАВИЛА ДЛЯ NOVELAI: 1) НЕ пиши в начале SCENE общие слова стиля (вроде anime style, semi-realistic, masterpiece, best quality, artstyle) и НЕ меняй теги стиля автора — авторский стиль рисовки подставляется в начало промпта отдельно 1-в-1! Описывай только самих персонажей, их внешность, одежду, позы, ракурс и обстановку. 2) НИКОГДА не пиши "| NEGATIVE:" внутри строки SCENE (если нужны негативные теги — вынеси их на отдельную третью строку NEGATIVE: ...). 3) Если персонаж одет (например, в кардиган, свитер, куртку или рубашку), НИКОГДА не пиши в позитивном промпте теги "flat male chest", "male chest" или "no breasts" (в словаре NovelAI тег "male chest" означает голую открытую грудь нараспашку!). Если на персонаже кардиган/куртка не на голое тело — явно указывай футболку или рубашку под ним (например: wearing plain shirt under baggy cardigan, closed cardigan, fully clothed).'
             : '',
         'Ответь ровно двумя строками, без пояснений:',
         `CAST: кто именно виден в кадре через запятую — перечисли ВСЕХ, кто реально присутствует в этом моменте, включая NPC (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
@@ -5573,14 +5898,38 @@ async function drawClosetSheetBatch(st, items) {
     if (!items.length) return false;
     const batch = items.slice(0, 5);
     const n = batch.length;
+    const who = getHeroineAppearanceEn(st);
+
+    if (settings().imageSource === 'novelai') {
+        let drawnAny = false;
+        for (let i = 0; i < n; i++) {
+            const it = batch[i];
+            setStatus(`🎨 NovelAI рисует наряд для шкафа ${i + 1} из ${n} («${it.title}»)…`);
+            const singlePrompt = buildSingleOutfitPromptForNai(who, it);
+            const singleUrl = await drawViaNovelAi(singlePrompt, 'portrait', null);
+            if (!singleUrl) continue;
+            drawnAny = true;
+            it.image = singleUrl;
+            it.imageLayout = { rows: 1, cols: 1 };
+            it.crop = { x: 0, y: 0, w: 1, h: 1 };
+            it.isSingleImage = true;
+            if (st.wardrobe?.active?.look?.title === it.title) {
+                st.wardrobe.active.look.image = singleUrl;
+                st.wardrobe.active.look.imageLayout = { rows: 1, cols: 1 };
+                st.wardrobe.active.look.crop = { x: 0, y: 0, w: 1, h: 1 };
+                st.wardrobe.active.look.isSingleImage = true;
+            }
+        }
+        return drawnAny;
+    }
+
     const layout = { rows: 1, cols: n };
-    const who = st.wardrobe?.appearance || 'attractive young woman';
     const pos = ['first', 'second', 'third', 'fourth', 'fifth'];
     const common = 'full body, standing, plain light background, the same face, hair and body in every figure, evenly spaced side by side, not overlapping';
     const prompt = cleanForCommand(`character outfit sheet, the same ${who} shown ${n} times side by side in a single row, each figure centered in its own equal column of the image, ${common}, ` +
         batch.map((o, i) => `${pos[i]} from the left wearing ${o.en || o.desc || o.title}`).join('; ') + ', no text, no captions');
     let refs = null;
-    if (settings().imageRef) {
+    if (settings().imageRef && settings().naiCharRefMode !== 'off') {
         const me = await personaAvatarDataUrl();
         if (me) {
             refs = { images: [me], note: 'The input picture is the reference: keep exactly this character — the same face, hair, eyes and body — and only change the clothes.' };
@@ -6006,6 +6355,17 @@ async function rerollOutfits() {
 async function attachLookCropsFromActive(a) {
     if (!a?.image || !Array.isArray(a.options) || !a.options.length) return;
     const n = Math.min(a.options.length, 5);
+    if (Array.isArray(a.individualImages) && a.individualImages.some(Boolean)) {
+        for (let idx = 0; idx < a.options.length; idx++) {
+            if (idx >= n) break;
+            const singleUrl = a.options[idx].image || a.individualImages[idx] || a.image;
+            a.options[idx].image = singleUrl;
+            a.options[idx].imageLayout = { rows: 1, cols: 1 };
+            a.options[idx].crop = { x: 0, y: 0, w: 1, h: 1 };
+            a.options[idx].isSingleImage = true;
+        }
+        return;
+    }
     const L = a.imageLayout || looksLayout(n);
     let crops = [];
     try {
@@ -6013,6 +6373,7 @@ async function attachLookCropsFromActive(a) {
     } catch (e) { crops = []; }
     for (let idx = 0; idx < a.options.length; idx++) {
         if (idx >= n) break;
+        if (a.options[idx].isSingleImage && a.options[idx].image) continue;
         const r = Math.floor(idx / L.cols), c = idx % L.cols;
         const colW = 1 / L.cols, rowH = 1 / L.rows;
         const fallback = { x: c * colW + colW * 0.05, y: r * rowH + rowH * 0.04, w: colW * 0.9, h: rowH * 0.92 };
@@ -6049,6 +6410,17 @@ async function chooseOutfit(i, customText, extraSaveIndices = []) {
 async function attachAccentCropsFromActive(a) {
     if (!a?.accentImage || !Array.isArray(a.accents) || !a.accents.length) return;
     const n = Math.min(a.accents.length, 4);
+    if (Array.isArray(a.individualAccentImages) && a.individualAccentImages.some(Boolean)) {
+        for (let idx = 0; idx < a.accents.length; idx++) {
+            if (idx >= n) break;
+            const singleUrl = a.accents[idx].image || a.individualAccentImages[idx] || a.accentImage;
+            a.accents[idx].image = singleUrl;
+            a.accents[idx].imageLayout = { rows: 1, cols: 1 };
+            a.accents[idx].crop = { x: 0, y: 0, w: 1, h: 1 };
+            a.accents[idx].isSingleImage = true;
+        }
+        return;
+    }
     const L = a.accentImageLayout || accentsLayout(n);
     let crops = [];
     try {
@@ -6268,7 +6640,12 @@ async function showAccentPopup() {
             topBar.append(savePill, wearBtn);
             card.append(topBar);
 
-            if (hasUrl && i < n) {
+            const singleAccUrl = (ac.isSingleImage && ac.image) ? ac.image : (Array.isArray(a.individualAccentImages) && a.individualAccentImages[i]) ? a.individualAccentImages[i] : null;
+            if (singleAccUrl) {
+                const img = $('<div class="nnb-card-img" style="border-radius:10px; overflow:hidden; width:100%; aspect-ratio:1/1; max-height:320px; margin:2px auto;"></div>');
+                applyCrop(img, singleAccUrl, { x: 0, y: 0, w: 1, h: 1 }, 1);
+                card.append(img);
+            } else if (hasUrl && i < n) {
                 const img = $('<div class="nnb-card-img" style="border-radius:10px; overflow:hidden; width:100%; aspect-ratio:1/1; max-height:320px; margin:2px auto;"></div>');
                 applyCrop(img, url, cellOf(i), layoutOf().rows === 2 ? 2 / 3 : 1.5);
                 card.append(img);
@@ -7149,7 +7526,37 @@ async function showWardrobePopup() {
             card.append(topBar);
 
             // 2. Картинка образа (если есть)
-            if (hasUrl && i < n) {
+            const singleUrlForCard = (o.isSingleImage && o.image) ? o.image : (Array.isArray(a.individualImages) && a.individualImages[i]) ? a.individualImages[i] : null;
+            if (singleUrlForCard) {
+                const imgWrap = $('<div style="position:relative; width:100%; margin:2px 0;"></div>');
+                const img = $('<div class="nnb-card-img" style="border-radius:8px; overflow:hidden; width:100%; aspect-ratio:2/3; max-height:400px;"></div>');
+                applyCrop(img, singleUrlForCard, { x: 0, y: 0, w: 1, h: 1 }, 832 / 1216);
+                const redrawOneBtn = $('<div class="menu_button" style="position:absolute; right:8px; bottom:8px; padding:4px 9px; font-size:0.78em; background:rgba(20,16,30,0.82); border-radius:8px;" title="Перерисовать только этот наряд отдельным запросом"><i class="fa-solid fa-rotate"></i> Перерисовать этот</div>');
+                redrawOneBtn.on('click', async e => {
+                    e.stopPropagation();
+                    redrawOneBtn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Рисую…');
+                    try {
+                        const who = getHeroineAppearanceEn(st, a);
+                        const newSingleUrl = await drawViaNovelAi(buildSingleOutfitPromptForNai(who, o), 'portrait', null);
+                        if (newSingleUrl) {
+                            o.image = newSingleUrl;
+                            o.imageLayout = { rows: 1, cols: 1 };
+                            o.crop = { x: 0, y: 0, w: 1, h: 1 };
+                            o.isSingleImage = true;
+                            if (!Array.isArray(a.individualImages)) a.individualImages = [];
+                            a.individualImages[i] = newSingleUrl;
+                            if (i === 0) a.image = newSingleUrl;
+                            await ctx().saveMetadata();
+                            renderCards(a.image || newSingleUrl);
+                        }
+                    } catch (err) {
+                        toastr.warning(`Не удалось перерисовать наряд: ${escapeHtml(err?.message || err)}`, '👗 Гардероб', { escapeHtml: false });
+                        redrawOneBtn.css({ opacity: 1, pointerEvents: 'auto' }).html('<i class="fa-solid fa-rotate"></i> Перерисовать этот');
+                    }
+                });
+                imgWrap.append(img, redrawOneBtn);
+                card.append(imgWrap);
+            } else if (hasUrl && i < n) {
                 const img = $('<div class="nnb-card-img" style="border-radius:8px; overflow:hidden; width:100%; aspect-ratio:1/2; max-height:380px; margin:2px 0;"></div>');
                 applyCrop(img, url, cellOf(i), layoutOf().rows === 2 ? 2 / 3 : 1.5);
                 card.append(img);
@@ -10861,9 +11268,10 @@ const PANEL_HTML = `
           <div style="font-weight:700; font-size:0.86em; margin-bottom:4px;">🎨 Настройки генератора NovelAI</div>
           <input type="password" class="text_pole" id="nnb_nai_key" placeholder="Ключ NovelAI (pst-…) — или пусто, если ключ уже в Таверне" autocomplete="off">
           <select class="text_pole" id="nnb_nai_model" title="Модель NovelAI" style="margin-top:4px;">
-            <option value="nai-diffusion-5-full">NovelAI V5 Full (рекомендуется)</option>
+            <option value="nai-diffusion-5-full-medium">NovelAI V5 Medium (14 шагов — рекомендуется)</option>
+            <option value="nai-diffusion-5-full">NovelAI V5 Full (High — 28 шагов)</option>
             <option value="nai-diffusion-5-curated">NovelAI V5 Curated</option>
-            <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full</option>
+            <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full (с картинкой-референсом)</option>
             <option value="nai-diffusion-4-5-curated">NovelAI V4.5 Curated</option>
             <option value="nai-diffusion-4-full">NovelAI V4 Full</option>
             <option value="nai-diffusion-4-curated-preview">NovelAI V4 Curated</option>
@@ -11001,20 +11409,36 @@ const BOOK_HTML = `
         <div id="nnb_book_nai_api" style="display:none; margin-top:6px; padding:8px; border:1px solid var(--SmartThemeBorderColor); border-radius:8px;">
           <input type="password" class="text_pole" id="nnb_book_nai_key" placeholder="Ключ NovelAI (pst-…) — или пусто, если ключ уже в Таверне" autocomplete="off">
           <select class="text_pole" id="nnb_book_nai_model" title="Модель NovelAI" style="margin-top:4px;">
-            <option value="nai-diffusion-5-full">NovelAI V5 Full (рекомендуется)</option>
+            <option value="nai-diffusion-5-full-medium">NovelAI V5 Medium (14 шагов — рекомендуется)</option>
+            <option value="nai-diffusion-5-full">NovelAI V5 Full (High — 28 шагов)</option>
             <option value="nai-diffusion-5-curated">NovelAI V5 Curated</option>
             <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full (с картинкой-референсом)</option>
             <option value="nai-diffusion-4-5-curated">NovelAI V4.5 Curated</option>
             <option value="nai-diffusion-4-full">NovelAI V4 Full</option>
             <option value="nai-diffusion-3">NovelAI Anime V3</option>
           </select>
-          <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса:</div>
+          <div style="font-size:0.82em; font-weight:600; margin-top:8px;">✨ Мой стиль для NovelAI (вставляется 1-в-1 в начало промпта в обход GLM!):</div>
+          <small style="display:block; opacity:0.8; margin-bottom:3px;">Вставь сюда свои теги стиля и художников с весами <code>{...}</code>, <code>[...]</code> или <code>1.2::...::</code> — текстовая модель их не тронет, и они уйдут в NovelAI символ в символ:</small>
+          <textarea class="text_pole" id="nnb_book_nai_prefix" rows="3" placeholder="Вставь сюда свой собранный стиль для NovelAI (со всеми скобками {} и весами ::)…" style="margin-top:2px;"></textarea>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+            <div style="flex:1; min-width:130px;">
+              <label style="font-size:0.78em; opacity:0.85;">Guidance (Scale, на сайте ~5.0):</label>
+              <input type="number" step="0.5" min="1" max="20" class="text_pole" id="nnb_book_nai_scale" style="margin-top:2px;">
+            </div>
+            <div style="flex:1; min-width:130px;">
+              <label style="font-size:0.78em; opacity:0.85;">Rescale (для V5 High / V4.5, напр. 0 или 0.4):</label>
+              <input type="number" step="0.05" min="0" max="1" class="text_pole" id="nnb_book_nai_rescale" style="margin-top:2px;">
+            </div>
+          </div>
+          <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса (для сцен 🎬 на V4.5):</div>
           <select class="text_pole" id="nnb_book_nai_char_ref" title="Что брать с аватарки-референса" style="margin-top:2px;">
             <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (рекомендуется)</option>
             <option value="char_and_style">Внешность персонажа + стиль рисовки с аватарки</option>
             <option value="style_only">Только стиль рисовки с аватарки (внешность по тексту)</option>
             <option value="off">Выкл: рисовать только по текстовому описанию и тегам (без аватарки)</option>
           </select>
+          <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🚫 Базовый негативный промпт (Undesired Content):</div>
+          <textarea class="text_pole" id="nnb_book_nai_neg" rows="2" placeholder="Негативный промпт (uc)" style="margin-top:2px;"></textarea>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
           <div class="menu_button" id="nnb_book_img_diag_btn" style="padding:4px 10px; font-size:0.82em; width:auto;"><i class="fa-solid fa-bug"></i> 📋 Диагностика и лог картинок</div>
@@ -12821,7 +13245,11 @@ function fillImageSources() {
     $('#nnb_img_api').toggle(cur === 'openai-images');
     $('#nnb_nai_api, #nnb_book_nai_api').toggle(cur === 'novelai');
     $('#nnb_nai_key, #nnb_book_nai_key').val(settings().naiApiKey || '');
-    $('#nnb_nai_model, #nnb_book_nai_model').val(settings().naiModel || 'nai-diffusion-5-full');
+    $('#nnb_nai_model, #nnb_book_nai_model').val(settings().naiModel || 'nai-diffusion-5-full-medium');
+    $('#nnb_nai_prefix, #nnb_book_nai_prefix').val(settings().naiPrefix ?? '');
+    $('#nnb_nai_neg, #nnb_book_nai_neg').val(settings().naiNegative ?? defaults.naiNegative);
+    $('#nnb_book_nai_scale').val(settings().naiScale ?? 5.0);
+    $('#nnb_book_nai_rescale').val(settings().naiRescale ?? 0);
     const curRefMode = (settings().naiCharRefMode === 'char_priority' || !settings().naiCharRefMode) ? 'char_no_style' : settings().naiCharRefMode;
     settings().naiCharRefMode = curRefMode;
     $('#nnb_nai_char_ref, #nnb_book_nai_char_ref').val(curRefMode);
@@ -13149,7 +13577,7 @@ jQuery(async () => {
         saveSettings();
     });
     $('#nnb_book_nai_model').on('change', function () {
-        settings().naiModel = String($(this).val() || 'nai-diffusion-5-full');
+        settings().naiModel = String($(this).val() || 'nai-diffusion-5-full-medium');
         $('#nnb_nai_model').val(settings().naiModel);
         saveSettings();
     });
@@ -13166,8 +13594,30 @@ jQuery(async () => {
         logImageDiag('Ручной сброс зависшей генерации из настроек блокнота');
         toastr.success('Зависшая генерация сброшена — можно снова нажимать 🎬!', '🎬 Сцена');
     });
-    bind('nnb_nai_prefix', 'naiPrefix');
-    bind('nnb_nai_neg', 'naiNegative');
+    $('#nnb_nai_prefix, #nnb_book_nai_prefix').on('input change', function () {
+        settings().naiPrefix = String($(this).val() ?? '');
+        $('#nnb_nai_prefix, #nnb_book_nai_prefix').val(settings().naiPrefix);
+        saveSettings();
+    });
+    $('#nnb_nai_neg, #nnb_book_nai_neg').on('input change', function () {
+        settings().naiNegative = String($(this).val() ?? '');
+        $('#nnb_nai_neg, #nnb_book_nai_neg').val(settings().naiNegative);
+        saveSettings();
+    });
+    $('#nnb_book_nai_scale').on('input change', function () {
+        const v = Number($(this).val());
+        if (!Number.isNaN(v) && v >= 1 && v <= 20) {
+            settings().naiScale = v;
+            saveSettings();
+        }
+    });
+    $('#nnb_book_nai_rescale').on('input change', function () {
+        const v = Number($(this).val());
+        if (!Number.isNaN(v) && v >= 0 && v <= 1) {
+            settings().naiRescale = v;
+            saveSettings();
+        }
+    });
     bind('nnb_img_base', 'imgApiBase');
     bind('nnb_img_key', 'imgApiKey');
     bind('nnb_img_model', 'imgApiModel');
