@@ -1255,11 +1255,13 @@ const defaults = {
     naiModel: 'nai-diffusion-5-full-medium',
     naiSampler: 'k_euler_ancestral',
     naiScheduler: 'karras',
-    naiSteps: 28,
+    naiSteps: 26,
     naiScale: 5.0,
     naiRescale: 0,
-    naiCharRefMode: 'char_no_style',
+    naiCharRefMode: 'off',
     naiPrefix: '',
+    naiStylePresets: [],
+    imgWriterPresets: [],
     naiNegative: 'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, negative space, blank page, bad anatomy, bad hands, text, watermark, signature',
     textSource: '',
     textApiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -1280,12 +1282,44 @@ const defaults = {
     injectPrompt: DEFAULT_INJECT,
 };
 
-const DEFAULT_NAI_WRITER_PROMPT = `Пиши промпт для NovelAI на английском языке (сочетание точных тегов в духе Danbooru и краткого визуального описания сцены).
-Строго соблюдай правильную анатомию и композицию:
-— Всегда начинай с точного количества и пола персонажей в кадре (например: 1girl, 1boy или 2girls, 1boy).
-— Прописывай естественные, анатомически правильные позы и пропорции тела (natural body proportions, anatomically correct hands and fingers, natural posture).
-— Чётко указывай, где находятся руки и кисти каждого персонажа (например: hands resting on table, holding a cup, hand on shoulder), избегай сложных переплетений пальцев, вывернутых суставов и слияния тел.
-— Чётко разделяй внешность и одежду каждого персонажа, чтобы их черты не смешивались.`;
+const DEFAULT_NAI_WRITER_PROMPT = `ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — написать визуальный промпт для генерации иллюстрации текущей сцены в NovelAI V5.
+Выдай ТОЛЬКО строки CAST и SCENE без рассуждений и комментариев.
+
+СТРУКТУРА ПРОМПТА (по формуле раздельных блоков):
+1. КОЛИЧЕСТВО И ОБЩИЙ КОНЦЕПТ: начни с точного количества персонажей в формате Xboy, Xgirl (например: 1boy, 1girl) и 2–3 тегов общей концепции кадра.
+2. КАЛИБРОВКА РОСТА И ПРОПОРЦИЙ: если в кадре мужчина и женщина, ВСЕГДА фиксируй взрослые пропорции и нормальный мужской рост (вровень с девушкой или чуть выше): 1.3::tall lean adult man, adult male proportions, man slightly taller than woman, equal head and body scale, long male legs, wider male shoulders:: и анти-вес -1.5::otoko no ko, femboy, petite male, short male, smaller male, size difference::. Внутри текстовых фраз называй мужчину ТОЛЬКО man / adult man / male (не пиши слово boy кроме стартового тега 1boy).
+3. РАЗДЕЛЬНЫЕ БЛОКИ ПЕРСОНАЖЕЙ ЧЕРЕЗ ДВОЕТОЧИЕ:
+   — 1girl: [имя], adult, [цвет и длина волос, причёска, глаза, тип фигуры], [одежда в этой сцене], [точная поза, положение рук и пальцев, мимика из 3 деталей: брови, взгляд, губы].
+   — 1boy: [имя], adult, tall lean adult man, [цвет и длина волос, глаза, телосложение], [одежда в этой сцене], [точная поза, положение рук, мимика из 3 деталей].
+4. НАПРАВЛЕННОЕ ВЗАИМОДЕЙСТВИЕ И ОКРУЖЕНИЕ: явно указывай, кто и что делает (woman straddling man's lap, man looking up at woman), ракурс (medium shot, full body, side view), детали интерьера и освещение.
+5. НЕ пиши общие слова стиля (anime style, masterpiece) в начале — авторский стиль подставляется отдельно 1-в-1. Не используй частицу "no ..." в позитиве.`;
+
+const BUILTIN_NAI_WRITER_PRESETS = [
+    {
+        name: '✨ V5: Взрослые пропорции и блочная формула (рекомендуется)',
+        value: DEFAULT_NAI_WRITER_PROMPT,
+    },
+    {
+        name: '📐 Формула ext-blocks (1girl: ... / 1boy: ... как у подруги)',
+        value: `Pause the roleplay. Create an image prompt illustrating the highlight of the latest messages for NovelAI using comma-separated Danbooru tags and short descriptive blocks.
+Rules:
+1. NUMBER OF CHARACTERS: Start with how many characters are in the picture using Xgirl and Xboy formats (e.g., 1girl, 1boy).
+2. GENERAL CONCEPT: Immediately after, describe the general concept and camera angle using 2-3 tags (e.g., medium shot, indoor, romantic tension).
+3. CHARACTERS (keep descriptions strictly separated using colons so traits never mix):
+   1girl: [age: adult/mature], [hair color, hairstyle, eye color, body type], [exact current clothing], [exact pose, what they are sitting/lying/standing on, hand placement, facial expression]
+   1boy: [age: adult/mature, tall lean adult male build], [hair color, hairstyle, eye color, body type], [exact current clothing], [exact pose, hand placement, facial expression]
+4. CONSISTENCY: Use the [CLUE: Latest Scene Generations] block to preserve the exact clothing, appearance, and room details from previous frames unless changed in the story.
+5. ENVIRONMENT: Describe lighting, atmosphere, and background details at the end. Do NOT add generic style tags at the start.`,
+    },
+    {
+        name: '🌿 Короткий универсальный (чистые теги и анатомия рук)',
+        value: `Пиши промпт для NovelAI на английском языке через запятую (70–110 тегов).
+— Начинай с количества персонажей (1girl, 1boy).
+— Прописывай естественные взрослые пропорции тела (adult body proportions, anatomically correct hands and fingers, natural posture).
+— Чётко указывай положение каждой руки и кисти, направление взгляда и мимику каждого персонажа отдельно.
+— Сохраняй одежду и обстановку из предыдущих промптов сцены, если сюжет их не менял.`,
+    },
+];
 
 let busy = false;
 
@@ -2448,10 +2482,17 @@ async function quietGenerateImagePrompt(prompt) {
             }
         } catch (err) {
             console.warn('[npc_notebook] imgPromptSource failed, falling back to quietGenerate:', err);
-            toastr.warning(`Отдельная модель промптов картинок не ответила (${escapeHtml(err?.message || err)}) — использую запасное подключение.`, '🎨 Промпт картинки', { escapeHtml: false, timeOut: 7000 });
+            toastr.warning(`Отдельная модель промптов картинок не ответила (${escapeHtml(err?.message || err)}) — использую запасное подключение (с сохранением твоего промпта писателя).`, '🎨 Промпт картинки', { escapeHtml: false, timeOut: 7000 });
         }
     }
-    return quietGenerate(prompt);
+    const writerNote = String(s.imgPromptWriterNote || '').trim();
+    const writerPrefix = writerNote
+        ? `[Авторская инструкция составителю промптов картинок (соблюдай обязательно!):
+${writerNote}]
+
+`
+        : '';
+    return quietGenerate(writerPrefix + prompt);
 }
 
 // При ошибке лимита (429) ждём и пробуем ещё раз
@@ -4306,12 +4347,12 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
     const isV5 = /nai-diffusion-5/i.test(model);
     const isV4Plus = /nai-diffusion-[45]/i.test(model);
 
-    // В V5 Medium Effort сервер NovelAI требует строго 14 шагов, k_euler_ancestral, cfg_rescale: 0 и ucPreset: 2 (Heavy)
-    const sampler = isV5Medium ? 'k_euler_ancestral' : String(s.naiSampler || 'k_euler_ancestral').trim();
+    // По умолчанию используем выбранное пользователем количество шагов (по умолч. 26)
+    const sampler = String(s.naiSampler || 'k_euler_ancestral').trim();
     const scheduler = String(s.naiScheduler || 'karras').trim();
-    const steps = isV5Medium ? 14 : Math.max(1, Math.min(50, Number(s.naiSteps) || 28));
+    const steps = Math.max(1, Math.min(50, Number(s.naiSteps) || 26));
     const scale = Math.max(1, Math.min(20, Number(s.naiScale) || 5.0));
-    const cfgRescale = isV5Medium ? 0 : Math.max(0, Math.min(1, Number(s.naiRescale ?? 0)));
+    const cfgRescale = Math.max(0, Math.min(1, Number(s.naiRescale ?? 0)));
 
     // Пользовательский стиль вставляется 1-в-1 без изменений текстовой моделью!
     const prefix = String(s.naiPrefix ?? '').trim();
@@ -4446,13 +4487,12 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
             const dataUrl = await sendNaiDirect(params);
             return storeImage(dataUrl);
         } catch (err) {
-            if (isV5Medium && params.negative_prompt) {
-                console.warn('[npc_notebook] V5 Medium rejected custom negative prompt or params, retrying with fixed V5 Medium preset:', err);
-                logImageDiag('Повтор V5 Medium со стандартным пресетом негатива (14 шагов, Euler Ancestral)');
-                params.negative_prompt = '';
-                if (params.v4_negative_prompt?.caption) {
-                    params.v4_negative_prompt.caption.base_caption = '';
-                }
+            if (isV5Medium && (params.steps !== 14 || params.negative_prompt)) {
+                console.warn('[npc_notebook] V5 Medium rejected custom steps/negative, retrying with V5 Medium fallback:', err);
+                logImageDiag(`Повтор V5 Medium: пробуем с совместимыми параметрами (err: ${err?.message || err})`);
+                params.steps = 14;
+                params.sampler = 'k_euler_ancestral';
+                params.cfg_rescale = 0;
                 const dataUrl = await sendNaiDirect(params);
                 return storeImage(dataUrl);
             }
@@ -4745,6 +4785,27 @@ function canDrawScene() {
     return !!imageCommand();
 }
 
+function collectRecentScenePrompts(st, chat, beforeIdx, maxCount = 5) {
+    const list = [];
+    if (Array.isArray(chat)) {
+        for (let i = Math.min(beforeIdx - 1, chat.length - 1); i >= 0 && list.length < maxCount; i--) {
+            const d = chat[i]?.extra?.nnbScene?.desc || chat[i]?.extra?.nsiScene?.desc;
+            if (d && String(d).trim() && !list.includes(String(d).trim())) {
+                list.unshift(String(d).trim());
+            }
+        }
+    }
+    if (list.length < maxCount && Array.isArray(st?.scenes)) {
+        for (let i = st.scenes.length - 1; i >= 0 && list.length < maxCount; i--) {
+            const d = st.scenes[i]?.desc;
+            if (d && String(d).trim() && !list.includes(String(d).trim())) {
+                list.unshift(String(d).trim());
+            }
+        }
+    }
+    return list.slice(-maxCount);
+}
+
 function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
     const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
@@ -4752,12 +4813,31 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
     const chat = ctx().chat || [];
     let targetIdx = Number.isInteger(mesId) ? mesId : (chat.length - 1);
     while (targetIdx >= 0 && (!chat[targetIdx] || chat[targetIdx].is_system)) targetIdx--;
-    const msg = targetIdx >= 0 ? chat[targetIdx] : null;
-    const prevMsg = targetIdx > 0 ? chat.slice(Math.max(0, targetIdx - 2), targetIdx).filter(m => m && !m.is_system && m.mes) : [];
-    const prevContext = prevMsg.length
-        ? `Контекст прямо перед этим моментом (чтобы не потерять присутствующих в комнате NPC):\n` + prevMsg.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 500)}»`).join('\n')
+
+    // Формируем структуру по принципу ext-blocks-custom:
+    // 1) OLDBlock: последние 5 сгенерированных промптов сцен (для сохранения одежды, внешности и деталей локации)
+    const oldPrompts = collectRecentScenePrompts(st, chat, targetIdx, 5);
+    const oldBlock = oldPrompts.length
+        ? `[CLUE: Latest Scene Generations (OLDBlock — последние ${oldPrompts.length} сгенерированных промптов сцен)]\nИспользуй их, чтобы сохранять постоянство внешности, одежды и деталей окружения в основном промпте, если персонажи не переодевались и не переходили в новое место:\n` +
+          oldPrompts.map((p, idx) => `${idx + 1}) SCENE: ${p}`).join('\n')
         : '';
-    const moment = msg?.mes ? `Главный момент, который нужно нарисовать (${msg.is_user ? names.user : (msg.name || names.char)}): «${stripTags(stripActionTags(String(msg.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 1500)}»` : '';
+
+    // 2) CONTEXT (8 предыдущих сообщений до последних двух) и NEWChat (последние 2 сообщения — сам текущий момент)
+    const validUpToTarget = [];
+    for (let i = 0; i <= targetIdx && i < chat.length; i++) {
+        if (chat[i] && !chat[i].is_system && chat[i].mes) validUpToTarget.push(chat[i]);
+    }
+    const newChatMsgs = validUpToTarget.slice(-2);
+    const olderContextMsgs = validUpToTarget.slice(Math.max(0, validUpToTarget.length - 10), Math.max(0, validUpToTarget.length - 2));
+
+    const prevContext = olderContextMsgs.length
+        ? `[CONTEXT — Предыдущие сообщения сцены (для понимания обстановки и присутствующих NPC)]:\n` +
+          olderContextMsgs.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 450)}»`).join('\n\n')
+        : '';
+    const moment = newChatMsgs.length
+        ? `[NEWChat — Главный текущий момент, который нужно нарисовать прямо сейчас]:\n` +
+          newChatMsgs.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 1400)}»`).join('\n\n')
+        : '';
     const a = st.wardrobe?.active;
     const outfit = (!isPov && a?.status === 'worn') ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
     const rawPersonaDesc = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
@@ -4798,26 +4878,25 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
 3) Если в сцене 3 или более человек (например, ${names.user}, ${names.char} и ещё NPC) — обязательно перечисли их ВСЕХ в CAST, а описание SCENE начни с точного числа людей в кадре (например: "Group of 3 people in the scene: 1) [Name + appearance + pose], 2) [Name + appearance + pose], 3) [Name + appearance + pose]..."), чтобы художник гарантированно нарисовал каждого и никого не потерял!
 4) Персонажи смотрят ДРУГ НА ДРУГА или на своё занятие в сцене, а НЕ в камеру / НЕ на зрителя!`;
     }
+    const hasCustomWriter = !!settings().imgPromptWriterNote?.trim();
     return [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник художника: опиши картинку того, что происходит в сцене прямо сейчас.',
+        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Составь детальный промпт иллюстрации для текущего момента ролевой игры.',
+        lastAppearance,
+        outfit,
+        npcBlock,
+        st.time?.date ? `Время и место в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; локация: ${placeLine(st)}` : ''}.` : '',
+        oldBlock,
         prevContext,
         moment,
-        st.time?.date ? `Время в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; место: ${placeLine(st)}` : ''}.` : '',
-        outfit,
-        lastAppearance,
-        npcBlock,
         forcedCastLine,
         cameraInstruction,
-        settings().imgPromptWriterNote?.trim()
-            ? `ВАЖНАЯ ИНСТРУКЦИЯ ОТ АВТОРА ДЛЯ СОСТАВЛЕНИЯ ПРОМПТА КАРТИНКИ (СОБЛЮДАЙ СТРОГО, ОСОБЕННО ПО АНАТОМИИ И СТИЛЮ):\n${settings().imgPromptWriterNote.trim()}`
-            : '',
-        settings().imageSource === 'novelai'
-            ? 'Формат для NovelAI: пиши строку SCENE на английском языке, сочетая чёткие теги (например: 1girl, 1boy, mature adult, natural body proportions, anatomically correct hands) и наглядное описание внешности, одежды, естественных поз и освещения. ВАЖНЫЕ ПРАВИЛА ДЛЯ NOVELAI: 1) НЕ пиши в начале SCENE общие слова стиля (вроде anime style, semi-realistic, masterpiece, best quality, artstyle) и НЕ меняй теги стиля автора — авторский стиль рисовки подставляется в начало промпта отдельно 1-в-1! Описывай только самих персонажей, их внешность, одежду, позы, ракурс и обстановку. 2) НИКОГДА не пиши "| NEGATIVE:" внутри строки SCENE (если нужны негативные теги — вынеси их на отдельную третью строку NEGATIVE: ...). 3) Если персонаж одет (например, в кардиган, свитер, куртку или рубашку), НИКОГДА не пиши в позитивном промпте теги "flat male chest", "male chest" или "no breasts" (в словаре NovelAI тег "male chest" означает голую открытую грудь нараспашку!). Если на персонаже кардиган/куртка не на голое тело — явно указывай футболку или рубашку под ним (например: wearing plain shirt under baggy cardigan, closed cardigan, fully clothed).'
-            : '',
-        'Ответь ровно двумя строками, без пояснений:',
-        `CAST: кто именно виден в кадре через запятую — перечисли ВСЕХ, кто реально присутствует в этом моменте, включая NPC (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
-        'SCENE: один подробный абзац по-английски для генератора картинок: сначала укажи точное количество людей в кадре и подробно опиши внешность (пол, волосы, черты, одежду) и естественную анатомически правильную позу КАЖДОГО присутствующего персонажа (особенно NPC!), их взаимодействие, куда направлен взгляд, место, свет и настроение. Это одна иллюстрация, без текста и подписей.]',
-    ].filter(Boolean).join('\n');
+        hasCustomWriter
+            ? `[ГЛАВНАЯ ИНСТРУКЦИЯ АВТОРА ПО СБОРКЕ ПРОМПТА (СОБЛЮДАЙ СТРОГО)]:\n${settings().imgPromptWriterNote.trim()}`
+            : (settings().imageSource === 'novelai' ? DEFAULT_NAI_WRITER_PROMPT : ''),
+        'Ответь без пояснений и вступлений:',
+        `CAST: кто именно виден в кадре через запятую (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
+        'SCENE: итоговый промпт на английском языке в одну строку (без переносов строк внутри SCENE и без общих тегов стиля в начале).]',
+    ].filter(Boolean).join('\n\n');
 }
 
 function findSavedSceneMeta(mesId) {
@@ -5008,9 +5087,18 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             logImageDiag(`Шаг 1/2: запрос промпта сцены (источник: ${promptSrcLabel}, ракурс: ${camMode})`);
             const raw = await withBusy('🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(scenePromptRequest(st, mesId, camMode, forcedCast)));
             logImageDiag('Ответ модели промптов получен', raw ? String(raw).slice(0, 500) : '(пусто)');
+            // Поддержка ответа в формате <nai_imagen> (если пользователь вставил промпт из ext-blocks-custom) и многострочного SCENE:
+            const rawCleaned = cleanAnswer(raw || '');
+            const iigMatch = rawCleaned.match(/data-iig-instruction\s*=\s*['"]\s*\{[\s\S]*?"prompt"\s*:\s*"([^"]+)"/i);
+            if (iigMatch && iigMatch[1]) {
+                desc = iigMatch[1].trim();
+            }
+            const sceneLines = [];
+            let inSceneBlock = false;
             for (const line of answerLines(raw || '')) {
                 let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
                 if (m) {
+                    inSceneBlock = false;
                     const rawCast = m[1].trim();
                     if (/^(none|никого|нет|пусто|-)$/i.test(rawCast)) cast = ['__none__'];
                     else cast = rawCast.split(/[,;]/).map(x => x.trim().toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
@@ -5018,16 +5106,26 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 }
                 m = line.match(/^(?:NEGATIVE(?:\s+PROMPT)?|UNDESIRED(?:\s+CONTENT)?|UC)\s*[:：—–-]\s*(.+)$/i);
                 if (m) {
+                    inSceneBlock = false;
                     extraNeg = [extraNeg, m[1].trim().replace(/\]$/, '')].filter(Boolean).join(', ');
                     continue;
                 }
-                m = line.match(/^SCENE\s*[:：—–-]\s*(.+)$/i);
-                if (m) desc = m[1].trim().replace(/\]$/, '');
+                m = line.match(/^SCENE\s*[:：—–-]\s*(.*)$/i);
+                if (m) {
+                    inSceneBlock = true;
+                    if (m[1].trim()) sceneLines.push(m[1].trim().replace(/\]$/, ''));
+                    continue;
+                }
+                if (inSceneBlock && !/^(CAST|NEGATIVE|UNDESIRED|UC|NEXT|SKIP)\s*[:：—–-]/i.test(line)) {
+                    sceneLines.push(line.replace(/\]$/, '').trim());
+                }
+            }
+            if (!desc && sceneLines.length) {
+                desc = sceneLines.join(', ').replace(/,\s*,+/g, ', ').trim();
             }
             if (!desc && raw) {
-                // Если модель ответила без префикса SCENE:, берём непустую английскую строку
-                const fallbackLines = answerLines(raw).filter(l => !/^(CAST|NEGATIVE|UC)\s*[:：—–-]/i.test(l));
-                if (fallbackLines.length) desc = fallbackLines.join(' ').trim();
+                const fallbackLines = answerLines(raw).filter(l => !/^(CAST|NEGATIVE|UC)\s*[:：—–-]/i.test(l) && !/^<\/?nai_imagen>/i.test(l));
+                if (fallbackLines.length) desc = fallbackLines.join(', ').trim();
             }
             const splitDesc = splitPositiveAndNegativePrompt(desc);
             desc = splitDesc.positive;
@@ -5134,9 +5232,12 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     : totalPeopleCount === 2
                         ? `candid cinematic scene, characters looking at each other, interacting naturally, NOT looking at viewer, NOT looking at camera, single illustration, no text, no captions.`
                         : `candid cinematic scene, natural gaze, NOT looking at camera, single illustration, no text, no captions.`);
+        // Для NovelAI отправляем чистый промпт SCENE (как в ext-blocks-custom и на сайте NovelAI) без довешивания длинного системного cameraSuffix!
         const rawCombinedPrompt = (reuseMeta?.prompt && reuseMeta.desc === desc)
             ? splitPositiveAndNegativePrompt(reuseMeta.prompt).positive
-            : cleanForCommand(`${countPrefix}${desc}. ${cameraSuffix}`);
+            : (isNai
+                ? cleanForCommand(`${countPrefix}${desc}`)
+                : cleanForCommand(`${countPrefix}${desc}. ${cameraSuffix}`));
         const prompt = splitPositiveAndNegativePrompt(rawCombinedPrompt).positive;
         logImageDiag(`Шаг 2/2: отправка промпта в генератор (${imageSourceName()})`, `Референсов: ${images.length} (${who.join(', ') || 'нет'}), режим референса: ${refModeSetting}`);
         const url = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
@@ -11268,8 +11369,8 @@ const PANEL_HTML = `
           <div style="font-weight:700; font-size:0.86em; margin-bottom:4px;">🎨 Настройки генератора NovelAI</div>
           <input type="password" class="text_pole" id="nnb_nai_key" placeholder="Ключ NovelAI (pst-…) — или пусто, если ключ уже в Таверне" autocomplete="off">
           <select class="text_pole" id="nnb_nai_model" title="Модель NovelAI" style="margin-top:4px;">
-            <option value="nai-diffusion-5-full-medium">NovelAI V5 Medium (14 шагов — рекомендуется)</option>
-            <option value="nai-diffusion-5-full">NovelAI V5 Full (High — 28 шагов)</option>
+            <option value="nai-diffusion-5-full-medium">NovelAI V5 Medium (рекомендуется)</option>
+            <option value="nai-diffusion-5-full">NovelAI V5 Full (High)</option>
             <option value="nai-diffusion-5-curated">NovelAI V5 Curated</option>
             <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full (с картинкой-референсом)</option>
             <option value="nai-diffusion-4-5-curated">NovelAI V4.5 Curated</option>
@@ -11278,23 +11379,37 @@ const PANEL_HTML = `
             <option value="nai-diffusion-3">NovelAI Anime V3</option>
             <option value="nai-diffusion-furry-3">NovelAI Furry V3</option>
           </select>
-          <select class="text_pole" id="nnb_nai_sampler" title="Сэмплер NovelAI" style="margin-top:4px;">
-            <option value="k_euler_ancestral">Euler Ancestral (рекомендуется)</option>
-            <option value="k_euler">Euler</option>
-            <option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
-            <option value="k_dpmpp_2m">DPM++ 2M</option>
-            <option value="k_dpmpp_2m_sde">DPM++ 2M SDE</option>
-            <option value="ddim_v3">DDIM</option>
-          </select>
-          <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса (V4.5 Character Reference / референсы):</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+            <div style="flex:1; min-width:95px;">
+              <label style="font-size:0.78em; opacity:0.85;">Шаги (Steps, по умолч. 26):</label>
+              <input type="number" step="1" min="1" max="50" class="text_pole" id="nnb_nai_steps" style="margin-top:2px;">
+            </div>
+            <div style="flex:1; min-width:120px;">
+              <label style="font-size:0.78em; opacity:0.85;">Сэмплер:</label>
+              <select class="text_pole" id="nnb_nai_sampler" title="Сэмплер NovelAI" style="margin-top:2px;">
+                <option value="k_euler_ancestral">Euler Ancestral</option>
+                <option value="k_euler">Euler</option>
+                <option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
+                <option value="k_dpmpp_2m">DPM++ 2M</option>
+                <option value="k_dpmpp_2m_sde">DPM++ 2M SDE</option>
+                <option value="ddim_v3">DDIM</option>
+              </select>
+            </div>
+          </div>
+          <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса (по умолч. Выкл, чтобы не сбивать стиль):</div>
           <select class="text_pole" id="nnb_nai_char_ref" title="Режим картинки-референса в NovelAI" style="margin-top:2px;">
-            <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (рекомендуется)</option>
+            <option value="off">Выкл: рисовать только по текстовому описанию и тегам (рекомендуется для V5)</option>
+            <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (для V4.5)</option>
             <option value="char_and_style">Внешность персонажа + стиль рисовки с аватарки</option>
             <option value="style_only">Только стиль рисовки с аватарки (внешность по тексту)</option>
-            <option value="off">Выкл: рисовать только по текстовому описанию и тегам (без аватарки)</option>
           </select>
-          <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">✨ Теги стиля/качества (всегда добавляются в начало):</div>
-          <input type="text" class="text_pole" id="nnb_nai_prefix" placeholder="Теги стиля/качества в начало промпта" style="margin-top:2px;">
+          <div style="font-size:0.8em; font-weight:600; margin-top:8px;">✨ Мой стиль для NovelAI (всегда вставляется 1-в-1 в начало):</div>
+          <div style="display:flex; gap:4px; align-items:center; margin-top:3px;">
+            <select class="text_pole nnb-style-preset-sel" style="flex:1; margin:0;" title="Выбрать сохранённый стиль NovelAI"></select>
+            <div class="menu_button nnb-style-preset-save" style="margin:0; padding:4px 8px; font-size:0.8em; width:auto;" title="Сохранить текущий стиль в список"><i class="fa-solid fa-floppy-disk"></i></div>
+            <div class="menu_button nnb-style-preset-del" style="margin:0; padding:4px 8px; font-size:0.8em; width:auto;" title="Удалить выбранный пресет стиля"><i class="fa-solid fa-trash"></i></div>
+          </div>
+          <textarea class="text_pole" id="nnb_nai_prefix" rows="2" placeholder="Теги стиля/качества в начало промпта" style="margin-top:4px;"></textarea>
           <div style="font-size:0.8em; opacity:0.85; margin-top:6px;">🚫 Негативный промпт (против кривой анатомии и артефактов):</div>
           <textarea class="text_pole" id="nnb_nai_neg" rows="2" placeholder="Негативный промпт (uc)" style="margin-top:2px;"></textarea>
         </div>
@@ -11307,10 +11422,13 @@ const PANEL_HTML = `
             <input type="text" class="text_pole" id="nnb_img_prompt_model" placeholder="Модель (например: glm-4-plus или glm-4-flash)" style="margin-top:4px;">
             <input type="text" class="text_pole" id="nnb_img_prompt_base" placeholder="https://open.bigmodel.cn/api/paas/v4 (или адрес прокси)" style="margin-top:4px;">
           </div>
-          <div style="font-weight:700; font-size:0.84em; margin-top:8px; margin-bottom:2px;">✍️ Промпт писателя картинок (инструкция по тегам и анатомии):</div>
-          <small style="display:block; opacity:0.8; margin-bottom:4px;">Вставь сюда промпт автора/писателя (как прописывать теги, позы и руки, чтобы не ломалась анатомия):</small>
-          <textarea class="text_pole" id="nnb_img_writer_note" rows="4" placeholder="Например: Пиши теги для NovelAI, строго следи за естественной анатомией, положением рук и количеством людей в кадре…"></textarea>
-          <div class="menu_button" id="nnb_fill_nai_writer_tpl" style="margin-top:4px; padding:4px 8px; font-size:0.8em;"><i class="fa-solid fa-wand-magic-sparkles"></i> Вставить готовый шаблон для NovelAI (с защитой анатомии)</div>
+          <div style="font-weight:700; font-size:0.84em; margin-top:8px; margin-bottom:2px;">✍️ Промпт писателя картинок (инструкция для модели промптов):</div>
+          <div style="display:flex; gap:4px; align-items:center; margin:3px 0;">
+            <select class="text_pole nnb-writer-preset-sel" style="flex:1; margin:0;" title="Выбрать сохранённый промпт писателя"></select>
+            <div class="menu_button nnb-writer-preset-save" style="margin:0; padding:4px 8px; font-size:0.8em; width:auto;" title="Сохранить текущий промпт писателя в список"><i class="fa-solid fa-floppy-disk"></i></div>
+            <div class="menu_button nnb-writer-preset-del" style="margin:0; padding:4px 8px; font-size:0.8em; width:auto;" title="Удалить выбранный пресет промпта"><i class="fa-solid fa-trash"></i></div>
+          </div>
+          <textarea class="text_pole" id="nnb_img_writer_note" rows="4" placeholder="Вставь сюда промпт писателя для генерации картинок или выбери пресет из списка выше…"></textarea>
         </div>
         <div id="nnb_img_api" style="display:none">
           <input type="password" class="text_pole" id="nnb_img_key" placeholder="Ключ (sk-…)" autocomplete="off">
@@ -11409,8 +11527,8 @@ const BOOK_HTML = `
         <div id="nnb_book_nai_api" style="display:none; margin-top:6px; padding:8px; border:1px solid var(--SmartThemeBorderColor); border-radius:8px;">
           <input type="password" class="text_pole" id="nnb_book_nai_key" placeholder="Ключ NovelAI (pst-…) — или пусто, если ключ уже в Таверне" autocomplete="off">
           <select class="text_pole" id="nnb_book_nai_model" title="Модель NovelAI" style="margin-top:4px;">
-            <option value="nai-diffusion-5-full-medium">NovelAI V5 Medium (14 шагов — рекомендуется)</option>
-            <option value="nai-diffusion-5-full">NovelAI V5 Full (High — 28 шагов)</option>
+            <option value="nai-diffusion-5-full-medium">NovelAI V5 Medium (рекомендуется)</option>
+            <option value="nai-diffusion-5-full">NovelAI V5 Full (High)</option>
             <option value="nai-diffusion-5-curated">NovelAI V5 Curated</option>
             <option value="nai-diffusion-4-5-full">NovelAI V4.5 Full (с картинкой-референсом)</option>
             <option value="nai-diffusion-4-5-curated">NovelAI V4.5 Curated</option>
@@ -11418,24 +11536,33 @@ const BOOK_HTML = `
             <option value="nai-diffusion-3">NovelAI Anime V3</option>
           </select>
           <div style="font-size:0.82em; font-weight:600; margin-top:8px;">✨ Мой стиль для NovelAI (вставляется 1-в-1 в начало промпта в обход GLM!):</div>
-          <small style="display:block; opacity:0.8; margin-bottom:3px;">Вставь сюда свои теги стиля и художников с весами <code>{...}</code>, <code>[...]</code> или <code>1.2::...::</code> — текстовая модель их не тронет, и они уйдут в NovelAI символ в символ:</small>
+          <small style="display:block; opacity:0.8; margin-bottom:4px;">Можно сохранить несколько любимых стилей и переключать их выпадающим списком:</small>
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+            <select class="text_pole nnb-style-preset-sel" style="flex:1; min-width:180px; margin:0;" title="Выбрать сохранённый стиль NovelAI"></select>
+            <div class="menu_button nnb-style-preset-save" style="margin:0; padding:4px 10px; font-size:0.82em; width:auto;"><i class="fa-solid fa-floppy-disk"></i> Сохранить стиль</div>
+            <div class="menu_button nnb-style-preset-del" style="margin:0; padding:4px 8px; font-size:0.82em; width:auto;" title="Удалить выбранный пресет стиля"><i class="fa-solid fa-trash"></i></div>
+          </div>
           <textarea class="text_pole" id="nnb_book_nai_prefix" rows="3" placeholder="Вставь сюда свой собранный стиль для NovelAI (со всеми скобками {} и весами ::)…" style="margin-top:2px;"></textarea>
           <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
-            <div style="flex:1; min-width:130px;">
-              <label style="font-size:0.78em; opacity:0.85;">Guidance (Scale, на сайте ~5.0):</label>
+            <div style="flex:1; min-width:110px;">
+              <label style="font-size:0.78em; opacity:0.85;">Шаги (Steps, по умолч. 26):</label>
+              <input type="number" step="1" min="1" max="50" class="text_pole" id="nnb_book_nai_steps" style="margin-top:2px;">
+            </div>
+            <div style="flex:1; min-width:110px;">
+              <label style="font-size:0.78em; opacity:0.85;">Guidance (Scale, ~5.0):</label>
               <input type="number" step="0.5" min="1" max="20" class="text_pole" id="nnb_book_nai_scale" style="margin-top:2px;">
             </div>
-            <div style="flex:1; min-width:130px;">
-              <label style="font-size:0.78em; opacity:0.85;">Rescale (для V5 High / V4.5, напр. 0 или 0.4):</label>
+            <div style="flex:1; min-width:110px;">
+              <label style="font-size:0.78em; opacity:0.85;">Rescale (0 или 0.4):</label>
               <input type="number" step="0.05" min="0" max="1" class="text_pole" id="nnb_book_nai_rescale" style="margin-top:2px;">
             </div>
           </div>
-          <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса (для сцен 🎬 на V4.5):</div>
+          <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🖼 Что брать с аватарки-референса (по умолч. Выкл, чтобы не сбивать стиль):</div>
           <select class="text_pole" id="nnb_book_nai_char_ref" title="Что брать с аватарки-референса" style="margin-top:2px;">
-            <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (рекомендуется)</option>
+            <option value="off">Выкл: рисовать только по текстовому описанию и тегам (рекомендуется для V5)</option>
+            <option value="char_no_style">Только внешность персонажа — БЕЗ стиля аватарки (для V4.5)</option>
             <option value="char_and_style">Внешность персонажа + стиль рисовки с аватарки</option>
             <option value="style_only">Только стиль рисовки с аватарки (внешность по тексту)</option>
-            <option value="off">Выкл: рисовать только по текстовому описанию и тегам (без аватарки)</option>
           </select>
           <div style="font-size:0.82em; opacity:0.85; margin-top:6px;">🚫 Базовый негативный промпт (Undesired Content):</div>
           <textarea class="text_pole" id="nnb_book_nai_neg" rows="2" placeholder="Негативный промпт (uc)" style="margin-top:2px;"></textarea>
@@ -11454,9 +11581,14 @@ const BOOK_HTML = `
           <input type="text" class="text_pole" id="nnb_book_img_prompt_model" placeholder="Модель (например: glm-4-plus или glm-4-flash)" style="margin-top:4px;">
           <input type="text" class="text_pole" id="nnb_book_img_prompt_base" placeholder="https://open.bigmodel.cn/api/paas/v4 (или адрес прокси)" style="margin-top:4px;">
         </div>
-        <div style="font-size:0.84em; font-weight:600; margin-top:8px;">✍️ Промпт писателя картинок (инструкция для модели-составителя и защита анатомии):</div>
-        <textarea class="text_pole" id="nnb_book_img_writer_note" rows="4" placeholder="Вставь сюда промпт писателя для генерации картинок (правила анатомии, поз, рук, тегов NovelAI)…" style="margin-top:4px;"></textarea>
-        <div class="menu_button" id="nnb_book_fill_nai_writer_tpl" style="margin-top:4px; padding:4px 10px; font-size:0.82em; display:inline-flex; width:auto;"><i class="fa-solid fa-wand-magic-sparkles"></i> Вставить шаблон для NovelAI (с защитой анатомии)</div>
+        <div style="font-size:0.84em; font-weight:600; margin-top:8px;">✍️ Промпт писателя картинок (инструкция для модели-составителя):</div>
+        <small style="display:block; opacity:0.8; margin-bottom:4px;">Выбери готовый пресет из списка или сохрани свой собственный промпт для быстрой вставки:</small>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:4px;">
+          <select class="text_pole nnb-writer-preset-sel" style="flex:1; min-width:180px; margin:0;" title="Выбрать сохранённый промпт писателя"></select>
+          <div class="menu_button nnb-writer-preset-save" style="margin:0; padding:4px 10px; font-size:0.82em; width:auto;"><i class="fa-solid fa-floppy-disk"></i> Сохранить промпт</div>
+          <div class="menu_button nnb-writer-preset-del" style="margin:0; padding:4px 8px; font-size:0.82em; width:auto;" title="Удалить выбранный пресет промпта"><i class="fa-solid fa-trash"></i></div>
+        </div>
+        <textarea class="text_pole" id="nnb_book_img_writer_note" rows="5" placeholder="Вставь сюда промпт писателя для генерации картинок (правила анатомии, поз, рук, тегов NovelAI)…" style="margin-top:2px;"></textarea>
       </div>
       <div class="nnb-direction">
         <b>Что ведёт блокнот в этом чате</b>
@@ -13248,11 +13380,47 @@ function fillImageSources() {
     $('#nnb_nai_model, #nnb_book_nai_model').val(settings().naiModel || 'nai-diffusion-5-full-medium');
     $('#nnb_nai_prefix, #nnb_book_nai_prefix').val(settings().naiPrefix ?? '');
     $('#nnb_nai_neg, #nnb_book_nai_neg').val(settings().naiNegative ?? defaults.naiNegative);
+    $('#nnb_nai_steps, #nnb_book_nai_steps').val(settings().naiSteps ?? 26);
     $('#nnb_book_nai_scale').val(settings().naiScale ?? 5.0);
     $('#nnb_book_nai_rescale').val(settings().naiRescale ?? 0);
-    const curRefMode = (settings().naiCharRefMode === 'char_priority' || !settings().naiCharRefMode) ? 'char_no_style' : settings().naiCharRefMode;
+    const curRefMode = (settings().naiCharRefMode === 'char_priority' || !settings().naiCharRefMode) ? 'off' : settings().naiCharRefMode;
     settings().naiCharRefMode = curRefMode;
     $('#nnb_nai_char_ref, #nnb_book_nai_char_ref').val(curRefMode);
+    renderNaiStyleAndWriterPresets();
+}
+
+function ensurePresetArrays() {
+    const s = settings();
+    if (!Array.isArray(s.naiStylePresets)) s.naiStylePresets = [];
+    if (!Array.isArray(s.imgWriterPresets) || !s.imgWriterPresets.length) {
+        s.imgWriterPresets = structuredClone(BUILTIN_NAI_WRITER_PRESETS);
+    }
+}
+
+function renderNaiStyleAndWriterPresets() {
+    ensurePresetArrays();
+    const s = settings();
+    const curStyle = String(s.naiPrefix ?? '').trim();
+    $('.nnb-style-preset-sel').each(function () {
+        const sel = $(this);
+        sel.empty().append($('<option value=""></option>').text(s.naiStylePresets.length ? '📂 Выбрать сохранённый стиль…' : '📂 Нет сохранённых стилей (нажми 💾, чтобы сохранить)'));
+        s.naiStylePresets.forEach((p, idx) => {
+            const opt = $('<option></option>').val(String(idx)).text(p.name || `Стиль #${idx + 1}`);
+            if (curStyle && String(p.value || '').trim() === curStyle) opt.prop('selected', true);
+            sel.append(opt);
+        });
+    });
+
+    const curWriter = String(s.imgPromptWriterNote ?? '').trim();
+    $('.nnb-writer-preset-sel').each(function () {
+        const sel = $(this);
+        sel.empty().append($('<option value=""></option>').text('📂 Выбрать пресет промпта писателя…'));
+        s.imgWriterPresets.forEach((p, idx) => {
+            const opt = $('<option></option>').val(String(idx)).text(p.name || `Промпт #${idx + 1}`);
+            if (curWriter && String(p.value || '').trim() === curWriter) opt.prop('selected', true);
+            sel.append(opt);
+        });
+    });
 }
 
 // 🎬 и 👗 у сообщений: сцена — на каждом сообщении, гардероб — у последнего
@@ -13558,11 +13726,78 @@ jQuery(async () => {
         $('#nnb_img_writer_note, #nnb_book_img_writer_note').val(settings().imgPromptWriterNote);
         saveSettings();
     });
-    $('#nnb_fill_nai_writer_tpl, #nnb_book_fill_nai_writer_tpl').on('click', function () {
-        settings().imgPromptWriterNote = DEFAULT_NAI_WRITER_PROMPT;
-        $('#nnb_img_writer_note, #nnb_book_img_writer_note').val(DEFAULT_NAI_WRITER_PROMPT);
+    $(document).on('change', '.nnb-style-preset-sel', function () {
+        ensurePresetArrays();
+        const idx = Number($(this).val());
+        const item = settings().naiStylePresets[idx];
+        if (!item) return;
+        settings().naiPrefix = String(item.value || '');
+        $('#nnb_nai_prefix, #nnb_book_nai_prefix').val(settings().naiPrefix);
         saveSettings();
-        toastr.success('Шаблон промпта писателя для NovelAI (с защитой анатомии) подставлен — можешь дополнить его под себя!', '✍️ Промпт писателя картинок');
+        renderNaiStyleAndWriterPresets();
+        toastr.success(`Подставлен стиль «${escapeHtml(item.name)}»`, '✨ Стиль NovelAI', { escapeHtml: false });
+    });
+    $(document).on('click', '.nnb-style-preset-save', async function () {
+        ensurePresetArrays();
+        const val = String($('#nnb_book_nai_prefix').val() || $('#nnb_nai_prefix').val() || settings().naiPrefix || '').trim();
+        if (!val) return toastr.warning('Сначала впиши теги стиля в поле ниже, чтобы сохранить их в пресет', '✨ Стиль NovelAI');
+        const existing = settings().naiStylePresets.find(p => String(p.value || '').trim() === val);
+        const name = await askText('Название для пресета стиля NovelAI:', existing?.name || 'Мой стиль NovelAI');
+        if (!name || !name.trim()) return;
+        const cleanName = name.trim();
+        const byName = settings().naiStylePresets.find(p => p.name.toLowerCase() === cleanName.toLowerCase());
+        if (byName) byName.value = val;
+        else settings().naiStylePresets.push({ name: cleanName, value: val });
+        saveSettings();
+        renderNaiStyleAndWriterPresets();
+        toastr.success(`Стиль «${escapeHtml(cleanName)}» сохранён в список!`, '✨ Стиль NovelAI', { escapeHtml: false });
+    });
+    $(document).on('click', '.nnb-style-preset-del', function () {
+        ensurePresetArrays();
+        const selVal = $('.nnb-style-preset-sel').first().val();
+        const idx = selVal !== '' ? Number(selVal) : settings().naiStylePresets.findIndex(p => String(p.value || '').trim() === String(settings().naiPrefix || '').trim());
+        if (idx < 0 || !settings().naiStylePresets[idx]) return toastr.info('Сначала выбери стиль в выпадающем списке', '✨ Стиль NovelAI');
+        const removed = settings().naiStylePresets.splice(idx, 1)[0];
+        saveSettings();
+        renderNaiStyleAndWriterPresets();
+        toastr.info(`Пресет стиля «${escapeHtml(removed.name)}» удалён`, '✨ Стиль NovelAI', { escapeHtml: false });
+    });
+
+    $(document).on('change', '.nnb-writer-preset-sel', function () {
+        ensurePresetArrays();
+        const idx = Number($(this).val());
+        const item = settings().imgWriterPresets[idx];
+        if (!item) return;
+        settings().imgPromptWriterNote = String(item.value || '');
+        $('#nnb_img_writer_note, #nnb_book_img_writer_note').val(settings().imgPromptWriterNote);
+        saveSettings();
+        renderNaiStyleAndWriterPresets();
+        toastr.success(`Подставлен промпт «${escapeHtml(item.name)}»`, '✍️ Промпт писателя', { escapeHtml: false });
+    });
+    $(document).on('click', '.nnb-writer-preset-save', async function () {
+        ensurePresetArrays();
+        const val = String($('#nnb_book_img_writer_note').val() || $('#nnb_img_writer_note').val() || settings().imgPromptWriterNote || '').trim();
+        if (!val) return toastr.warning('Сначала вставь текст промпта писателя в поле ниже', '✍️ Промпт писателя');
+        const existing = settings().imgWriterPresets.find(p => String(p.value || '').trim() === val);
+        const name = await askText('Название для пресета промпта писателя:', existing?.name || 'Мой промпт для GLM');
+        if (!name || !name.trim()) return;
+        const cleanName = name.trim();
+        const byName = settings().imgWriterPresets.find(p => p.name.toLowerCase() === cleanName.toLowerCase());
+        if (byName) byName.value = val;
+        else settings().imgWriterPresets.push({ name: cleanName, value: val });
+        saveSettings();
+        renderNaiStyleAndWriterPresets();
+        toastr.success(`Промпт «${escapeHtml(cleanName)}» сохранён в выпадающий список!`, '✍️ Промпт писателя', { escapeHtml: false });
+    });
+    $(document).on('click', '.nnb-writer-preset-del', function () {
+        ensurePresetArrays();
+        const selVal = $('.nnb-writer-preset-sel').first().val();
+        const idx = selVal !== '' ? Number(selVal) : settings().imgWriterPresets.findIndex(p => String(p.value || '').trim() === String(settings().imgPromptWriterNote || '').trim());
+        if (idx < 0 || !settings().imgWriterPresets[idx]) return toastr.info('Сначала выбери пресет в выпадающем списке', '✍️ Промпт писателя');
+        const removed = settings().imgWriterPresets.splice(idx, 1)[0];
+        saveSettings();
+        renderNaiStyleAndWriterPresets();
+        toastr.info(`Пресет «${escapeHtml(removed.name)}» удалён`, '✍️ Промпт писателя', { escapeHtml: false });
     });
     $('#nnb_img_src, #nnb_book_img_src').on('change', function () {
         settings().imageSource = String($(this).val() || '');
@@ -13603,6 +13838,14 @@ jQuery(async () => {
         settings().naiNegative = String($(this).val() ?? '');
         $('#nnb_nai_neg, #nnb_book_nai_neg').val(settings().naiNegative);
         saveSettings();
+    });
+    $('#nnb_nai_steps, #nnb_book_nai_steps').on('input change', function () {
+        const v = Number($(this).val());
+        if (!Number.isNaN(v) && v >= 1 && v <= 50) {
+            settings().naiSteps = Math.round(v);
+            $('#nnb_nai_steps, #nnb_book_nai_steps').val(settings().naiSteps);
+            saveSettings();
+        }
     });
     $('#nnb_book_nai_scale').on('input change', function () {
         const v = Number($(this).val());
