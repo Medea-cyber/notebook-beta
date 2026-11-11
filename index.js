@@ -1262,6 +1262,9 @@ const defaults = {
     naiPrefix: '',
     naiStylePresets: [],
     imgWriterPresets: [],
+    savedUniverseNpcs: [],
+    pendingChatMigration: null,
+    albumOnlyChosen: true,
     naiNegative: 'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, negative space, blank page, bad anatomy, bad hands, text, watermark, signature',
     textSource: '',
     textApiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -1454,6 +1457,8 @@ function store() {
     }
     if (!Array.isArray(st.neighborStories)) st.neighborStories = [];
     if (!Array.isArray(st.dreams)) st.dreams = [];
+    if (typeof st.storySummary !== 'string') st.storySummary = '';
+    if (typeof st.wardrobe.customAppearanceEn !== 'string') st.wardrobe.customAppearanceEn = '';
     ensureHolidayState(st);
     return st;
 }
@@ -2105,13 +2110,18 @@ function updateInjection() {
     const timeBlock = st && st.direction.time ? [buildTimeInjection(st), s.events ? buildHolidayInjection(st) : ''].filter(Boolean).join('\n\n') : '';
     const livingBlock = st ? buildLivingWorldInjection(st) : '';
     const linesBlock = st?.direction?.lines?.trim() ? `[Линии, которые игрок хочет видеть в истории: ${st.direction.lines.trim()}. Время от времени давай им проявиться: эти персонажи появляются, их отношения развиваются, о них говорят. Естественно и не в каждой сцене.]` : '';
+    const summaryBlock = st?.storySummary?.trim()
+        ? `[📜 Краткое содержание предыдущих глав истории (канон ролевой — учитывай эти события, отношения и контекст как уже произошедшие):
+${st.storySummary.trim()}]`
+        : '';
     const wardBlock = st ? [wardrobeInjection(st), gachaInjection(st)].filter(Boolean).join('\n\n') : '';
     const actionBlock = (s.actionPrompts && st) ? buildActionPromptsInjection() : '';
-    if (!s.enabled || !st || (!st.notes.length && !showIntrigues && !showNpcs && !showRels && !showArcs && !timeBlock && !livingBlock && !linesBlock && !wardBlock && !actionBlock)) {
+    if (!s.enabled || !st || (!st.notes.length && !showIntrigues && !showNpcs && !showRels && !showArcs && !timeBlock && !livingBlock && !linesBlock && !wardBlock && !actionBlock && !summaryBlock)) {
         c.setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
         return;
     }
     const blocks = [];
+    if (summaryBlock) blocks.push(summaryBlock);
     if (timeBlock) blocks.push(timeBlock);
     if (livingBlock) blocks.push(livingBlock);
     if (wardBlock) blocks.push(wardBlock);
@@ -3819,10 +3829,21 @@ function wardrobePrompt(st, occasion, exclude = []) {
     const favs = (st.npcs || []).filter(n => n.favorite).map(n => n.name);
     const images = wantImages();
     const accents = accentsOn(st);
+    const rawPersona = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
+    const cleanPersona = rawPersona ? ctx().substituteParams(String(rawPersona)).replace(/\s+/g, ' ').trim().slice(0, 900) : '';
+    const customAppEn = st?.wardrobe?.customAppearanceEn ? String(st.wardrobe.customAppearanceEn).trim() : '';
+    const worldApp = st?.worldProfile?.appearance ? String(st.worldProfile.appearance).trim() : '';
+    const personaContextLine = [
+        cleanPersona ? `Описание и внешность ${names.user} из анкеты Персоны: «${cleanPersona}».` : '',
+        worldApp ? `Внешность из карточки мира: «${worldApp}».` : '',
+        customAppEn ? `Закреплённые английские теги внешности ${names.user}: «${customAppEn}».` : '',
+    ].filter(Boolean).join(' ');
+
     const lines = [
         '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и подбираешь наряд, как в визуальной новелле.',
         `${names.user} собирается: ${occasion || 'в ближайшую сцену, где важен наряд (пойми по чату, куда именно)'}.`,
         when ? `Когда и где: ${when}.` : '',
+        personaContextLine ? `ВАЖНО — ТОЧНАЯ ВНЕШНОСТЬ ${names.user} (строго сохраняй её цвет и длину волос, цвет глаз, рост и комплекцию!): ${personaContextLine}` : '',
         favs.length ? `Ключевые фавориты в истории: ${favs.join(', ')}.` : '',
         buildDirection(st),
         avoid.length ? `Не повторяй эти образы: ${avoid.slice(0, 18).join(', ')}.` : '',
@@ -3844,8 +3865,8 @@ function wardrobePrompt(st, occasion, exclude = []) {
         if (settings().imgPromptWriterNote?.trim()) {
             lines.push(`Инструкция автора для английских описаний художнику (APPEARANCE и EN): ${settings().imgPromptWriterNote.trim()}`);
         }
-        lines.push('Сначала одной строкой опиши внешность для художника по-английски:');
-        lines.push(`APPEARANCE: внешность ${names.user} по-английски — пол, возраст, волосы, глаза, телосложение, заметные черты`);
+        lines.push('Сначала одной строкой опиши точную внешность героини для художника по-английски (тегами Danbooru для NovelAI):');
+        lines.push(`APPEARANCE: точная внешность ${names.user} из анкеты Персоны по-английски — точный цвет и длина волос (hair color, hair length, hairstyle), точный цвет глаз (eye color), рост, тип фигуры и телосложение (body type, figure, breast size, waist, hips), тон кожи и заметные черты (НЕ выдумывай чужой цвет волос или глаз!)`);
         lines.push('Затем по три строки на образ, без пояснений:');
         lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
         lines.push('EN: этот же наряд коротко по-английски, только одежда, обувь и причёска');
@@ -4641,16 +4662,49 @@ function accentsPrompt(a, layout) {
 
 
 function getHeroineAppearanceEn(st, activeWardrobe = null) {
+    const fromCustom = st?.wardrobe?.customAppearanceEn ? String(st.wardrobe.customAppearanceEn).trim() : '';
+    if (fromCustom) return fromCustom;
     const fromActive = activeWardrobe?.appearance ? String(activeWardrobe.appearance).trim() : '';
     const fromStore = st?.wardrobe?.appearance ? String(st.wardrobe.appearance).trim() : '';
     const rawPersona = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
     const fromPersona = rawPersona ? ctx().substituteParams(String(rawPersona)).replace(/\s+/g, ' ').trim().slice(0, 450) : '';
-    return fromActive || fromStore || fromPersona || 'attractive young woman';
+    // Если в анкете Персоны уже есть английские слова/теги, а в гардеробе пусто — берём их
+    return fromActive || fromStore || (/[a-zA-Z]{4,}/.test(fromPersona) ? fromPersona : '') || 'adult woman, natural proportions';
+}
+
+async function ensureHeroineAppearanceEnForNai(st, activeWardrobe = null) {
+    const custom = st?.wardrobe?.customAppearanceEn ? String(st.wardrobe.customAppearanceEn).trim() : '';
+    if (custom) return custom;
+    const rawPersona = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
+    const cleanPersona = rawPersona ? ctx().substituteParams(String(rawPersona)).replace(/\s+/g, ' ').trim().slice(0, 800) : '';
+    const worldApp = st?.worldProfile?.appearance ? String(st.worldProfile.appearance).trim() : '';
+    const sourceText = [cleanPersona, worldApp].filter(Boolean).join('; ');
+    // Если есть описание Персоны на русском, а закреплённых английских тегов ещё нет — один раз переводим внешность Персоны в точные теги Danbooru для NovelAI!
+    if (sourceText && /[а-яА-ЯёЁ]/.test(sourceText)) {
+        try {
+            const trPrompt = `[OOC: Выпиши из описания персонажа ТОЛЬКО физическую внешность (пол, возраст adult, точный цвет и длина волос, причёска, цвет глаз, рост, тип фигуры, размер груди, талия/бёдра, тон кожи, очки/родинки/особые приметы) и переведи её в короткие точные английские теги Danbooru через запятую для NovelAI. НЕ пиши характер, биографию и одежду. Выдай ТОЛЬКО одну строку тегов на английском без вступлений:\n«${sourceText}»]`;
+            const rawEn = await quietGenerateImagePrompt(trPrompt);
+            const cleanedEn = String(rawEn || '').replace(/^APPEARANCE\s*[:：—–-]\s*/i, '').replace(/[\r\n]+/g, ', ').trim();
+            if (cleanedEn && /[a-zA-Z]{3,}/.test(cleanedEn)) {
+                if (st?.wardrobe) {
+                    st.wardrobe.customAppearanceEn = cleanedEn;
+                    st.wardrobe.appearance = cleanedEn;
+                }
+                if (activeWardrobe) activeWardrobe.appearance = cleanedEn;
+                await ctx().saveMetadata();
+                return cleanedEn;
+            }
+        } catch (e) {
+            console.warn('[npc_notebook] auto translate persona appearance error:', e);
+        }
+    }
+    return getHeroineAppearanceEn(st, activeWardrobe);
 }
 
 function buildSingleOutfitPromptForNai(who, outfitObj) {
     const outfitText = String(outfitObj?.en || outfitObj?.desc || outfitObj?.title || 'stylish outfit').trim();
-    return cleanForCommand(`1girl, solo, full body, standing, simple light background, ${who}, wearing ${outfitText}, single character, natural body proportions, anatomically correct hands, no text, no captions`);
+    const cleanWho = String(who || 'adult woman').replace(/^1girl\s*,\s*/i, '').trim();
+    return cleanForCommand(`1girl, solo, full body, standing, simple background, 1.3::${cleanWho}::, 1.2::wearing ${outfitText}::, single character, adult proportions, anatomically correct hands, no text, no captions`);
 }
 
 function buildSingleAccentPromptForNai(who, accentObj) {
@@ -4671,7 +4725,7 @@ async function ensurePicture(kind, force, onDone) {
     let url = '';
     try {
         const isNai = settings().imageSource === 'novelai';
-        const who = getHeroineAppearanceEn(st, a);
+        const who = isNai ? await ensureHeroineAppearanceEnForNai(st, a) : getHeroineAppearanceEn(st, a);
 
         // Если выбран NovelAI и мы рисуем гардероб (5 образов) или штрихи (4 штриха):
         // 1) Никогда не передаём референс с аватарки (refs = null), чтобы не ломать генерацию!
@@ -5242,11 +5296,23 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         logImageDiag(`Шаг 2/2: отправка промпта в генератор (${imageSourceName()})`, `Референсов: ${images.length} (${who.join(', ') || 'нет'}), режим референса: ${refModeSetting}`);
         const url = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
         logImageDiag('Картинка успешно получена и сохранена!', url ? String(url).slice(0, 120) : '');
-        const sceneMeta = { desc, extraNeg, cast, camMode, prompt, pov: isPov };
+        let targetMesIdx = Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1);
+        while (targetMesIdx >= 0 && (!ctx().chat[targetMesIdx] || ctx().chat[targetMesIdx].is_system)) targetMesIdx--;
+        const sceneMeta = { desc, extraNeg, cast, camMode, prompt, pov: isPov, mesId: targetMesIdx };
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
-        st.scenes.push({ url, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, camMode, prompt, pov: isPov });
-        if (st.scenes.length > 100) st.scenes.shift();
+        // Храним в альбоме ТОЛЬКО ОДНУ (выбранную/активную) картинку на сообщение, чтобы не забивать память всеми попытками генерации!
+        const existingSceneIdx = st.scenes.findIndex(x =>
+            (Number.isInteger(targetMesIdx) && targetMesIdx >= 0 && x.mesId === targetMesIdx) ||
+            (reuseMeta && x.url && (x.url === reuseMeta.url || (Array.isArray(reuseMeta.history) && reuseMeta.history.includes(x.url))))
+        );
+        const sceneEntry = { url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, camMode, prompt, pov: isPov };
+        if (existingSceneIdx >= 0) {
+            st.scenes[existingSceneIdx] = sceneEntry;
+        } else {
+            st.scenes.push(sceneEntry);
+        }
+        if (st.scenes.length > 60) st.scenes.shift();
         await ctx().saveMetadata();
         renderPanel();
         return { url, sceneMeta };
@@ -5274,6 +5340,15 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
         } else if (m.extra.nnbScene) {
             m.extra.nnbScene.url = url;
             m.extra.nnbScene.history = prevHistory;
+        }
+        // Синхронизируем выбранный вариант с Альбомом (чтобы в альбоме всегда была именно та картинка, которую ты оставила в посте!)
+        const stCur = store();
+        if (stCur && Array.isArray(stCur.scenes) && url) {
+            const scIdx = stCur.scenes.findIndex(x => x.mesId === i || (prevHistory.length && prevHistory.includes(x.url)));
+            if (scIdx >= 0) {
+                stCur.scenes[scIdx].url = url;
+                stCur.scenes[scIdx].mesId = i;
+            }
         }
         const imgDesc = Object.getOwnPropertyDescriptor(m.extra, 'image');
         const newApi = Array.isArray(m.extra.media) || (imgDesc && typeof imgDesc.get === 'function') || typeof c.appendMediaToMessage === 'function';
@@ -5499,44 +5574,157 @@ async function openSceneImageViewer(mesId, fallbackSceneObj = null) {
     await openPopup(el, true);
 }
 
-async function showAlbumItem(item) {
-    const st = store();
+async function deleteAlbumItem(st, item) {
+    if (!st || !item) return;
     if (item.kind === 'scene') {
-        const scObj = st?.scenes?.[item.ref];
-        if (scObj) {
-            return openSceneImageViewer(undefined, scObj);
+        if (Array.isArray(st.scenes) && item.ref >= 0 && item.ref < st.scenes.length) {
+            st.scenes.splice(item.ref, 1);
+        }
+    } else if (item.kind === 'look') {
+        if (Array.isArray(st.wardrobe?.history) && item.ref >= 0 && item.ref < st.wardrobe.history.length) {
+            st.wardrobe.history[item.ref].image = '';
         }
     }
+    await commit();
+    toastr.info('Фото удалено из альбома', '🖼 Альбом');
+}
+
+async function cleanupBloatedAlbumAndChat(st) {
+    if (!st) return;
+    const c = ctx();
+    const chat = Array.isArray(c.chat) ? c.chat : [];
+    let removedVariants = 0;
+    const activeSceneByMes = new Map();
+
+    // 1. В каждом сообщении чата оставляем только текущий выбранный вариант картинки (удаляем невыбранные дубли из history и media)
+    chat.forEach((m, idx) => {
+        if (!m || !m.extra) return;
+        const sc = m.extra.nnbScene;
+        if (sc && sc.url) {
+            if (Array.isArray(sc.history) && sc.history.length > 1) {
+                removedVariants += (sc.history.length - 1);
+                sc.history = [sc.url];
+            }
+            if (Array.isArray(m.extra.media) && m.extra.media.length > 1) {
+                m.extra.media = m.extra.media.filter(x => x.url === sc.url || x.source !== 'generated');
+                m.extra.media_index = Math.max(0, m.extra.media.length - 1);
+            }
+            activeSceneByMes.set(idx, {
+                url: sc.url,
+                mesId: idx,
+                at: idx + 1,
+                date: st.time?.date || '',
+                desc: sc.desc || '',
+                extraNeg: sc.extraNeg || '',
+                cast: sc.cast || [],
+                camMode: sc.camMode || 'third',
+                prompt: sc.prompt || '',
+                pov: !!sc.pov,
+            });
+        }
+    });
+
+    // 2. В самом альбоме (st.scenes) оставляем только по 1 выбранной картинке на сцену и убираем дубликаты
+    const oldScenesCount = (st.scenes || []).length;
+    if (activeSceneByMes.size > 0) {
+        const keptUrls = new Set();
+        const deduped = [];
+        for (const [, val] of activeSceneByMes.entries()) {
+            if (val.url && !keptUrls.has(val.url)) {
+                keptUrls.add(val.url);
+                deduped.push(val);
+            }
+        }
+        st.scenes = deduped;
+    } else if (Array.isArray(st.scenes)) {
+        const seen = new Set();
+        st.scenes = st.scenes.filter(x => {
+            if (!x?.url || seen.has(x.url)) return false;
+            seen.add(x.url);
+            return true;
+        });
+    }
+    const removedAlbum = Math.max(0, oldScenesCount - (st.scenes || []).length);
+
+    // 3. Очищаем временные буферы невыбранных нарядов в гардеробе
+    if (st.wardrobe?.active && st.wardrobe.active.status === 'worn') {
+        delete st.wardrobe.active.individualImages;
+        delete st.wardrobe.active.imageHistory;
+    }
+
+    await c.saveChat();
+    await commit();
+    placeMesButtonsSoon();
+    toastr.success(`Память очищена! Убрано лишних дублей из альбома: ${removedAlbum}, черновых вариантов из постов: ${removedVariants}.`, '🧹 Очистка альбома и чата', { timeOut: 7000 });
+}
+
+async function showAlbumItem(item) {
+    const st = store();
     const el = $('<div class="nnb-pop nnb-pop-visual"></div>');
-    el.append($('<div class="nnb-album-big"></div>').append($('<img alt="">').attr('src', item.url)));
-    el.append($('<div class="nnb-look-title"></div>').text([item.title, item.date ? formatDate(item.date) : ''].filter(Boolean).join(' · ')));
-    if (item.text) el.append($('<div class="nnb-pop-sub"></div>').text(item.text.length > 300 ? item.text.slice(0, 300) + '…' : item.text));
-    const row = $('<div class="nnb-pop-row nnb-pop-links"></div>');
-    row.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Во весь экран</div>').on('click', () => window.open(item.url, '_blank')));
+    el.append($('<div class="nnb-album-big" style="text-align:center;"></div>').append($('<img alt="" style="max-height:65vh; max-width:100%; border-radius:10px; object-fit:contain;">').attr('src', item.url)));
+    el.append($('<div class="nnb-look-title" style="margin-top:8px;"></div>').text([item.title, item.date ? formatDate(item.date) : ''].filter(Boolean).join(' · ')));
+    if (item.text) el.append($('<div class="nnb-pop-sub"></div>').text(item.text.length > 350 ? item.text.slice(0, 350) + '…' : item.text));
+    const row = $('<div class="nnb-pop-row nnb-pop-links" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between;"></div>');
+    row.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Открыть в полном размере</div>').on('click', () => window.open(item.url, '_blank')));
+    if (item.kind === 'scene' && st?.scenes?.[item.ref]) {
+        row.append($('<div class="menu_button"><i class="fa-solid fa-sliders"></i> Варианты и промпт сцены</div>').on('click', () => {
+            closePopupOf(el);
+            openSceneImageViewer(st.scenes[item.ref].mesId, st.scenes[item.ref]);
+        }));
+    }
+    row.append($('<div class="menu_button" style="border-color:#d9534f; color:#ff8a84;"><i class="fa-solid fa-trash"></i> Удалить фото из альбома</div>').on('click', async () => {
+        closePopupOf(el);
+        await deleteAlbumItem(st, item);
+    }));
     el.append(row);
     await openPopup(el, true);
 }
+
 function renderAlbum(st) {
     const root = $('#nnb_album_box').empty();
     const items = albumItems(st);
-    if (!items.length) { root.append('<div class="nnb-empty">Пока пусто: здесь будут картинки сцен (🎬) и листы образов.</div>'); return; }
     const det = $('<details open class="nnb-section"><summary></summary></details>');
     det.find('summary').text(`🖼 Альбом (${items.length})`);
+
+    const tools = $('<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px;"></div>');
+    tools.append($('<div class="menu_button" style="padding:5px 10px; font-size:0.83em; width:auto;" title="Убрать из альбома и сообщений все невыбранные дубли генераций, оставив только те картинки, которые сейчас стоят в постах"><i class="fa-solid fa-broom"></i> 🧹 Очистить дубли и черновики (ускорить Таверну)</div>').on('click', () => cleanupBloatedAlbumAndChat(st)));
+    if (items.length > 0) {
+        tools.append($('<div class="menu_button" style="padding:5px 10px; font-size:0.83em; width:auto;" title="Очистить весь альбом"><i class="fa-solid fa-trash-can"></i> Очистить весь альбом</div>').on('click', async () => {
+            if (!confirm(`Удалить все фотографии (${items.length} шт.) из альбома этого чата?`)) return;
+            st.scenes = [];
+            (st.wardrobe?.history || []).forEach(h => { h.image = ''; });
+            await commit();
+            toastr.info('Альбом полностью очищен', '🖼 Альбом');
+        }));
+    }
+    det.append(tools);
+    det.append('<div class="nnb-npc-status" style="margin-bottom:8px; font-size:0.82em;">В альбом автоматически сохраняется <b>только выбранный вариант</b> каждой сцены. Нажми 🗑️ в углу любого фото, чтобы удалить его.</div>');
+
+    if (!items.length) {
+        det.append('<div class="nnb-empty">Пока пусто: здесь будут выбранные картинки сцен (🎬) и образов.</div>');
+        root.append(det);
+        return;
+    }
+
     const grid = $('<div class="nnb-album"></div>');
-    items.forEach(it => grid.append($('<div class="nnb-album-thumb" tabindex="0"></div>').attr('title', it.title).css('background-image', `url("${String(it.url).replace(/"/g, '%22')}")`).on('click', () => showAlbumItem(it))));
+    items.forEach(it => {
+        const card = $('<div class="nnb-album-thumb" tabindex="0" style="position:relative; overflow:hidden; background:rgba(0,0,0,0.25);"></div>').attr('title', it.title);
+        const imgEl = $('<img loading="lazy" decoding="async" alt="" style="width:100%; height:100%; object-fit:cover; display:block;">').attr('src', it.url);
+        const delBtn = $('<div title="Удалить фото из альбома" style="position:absolute; top:5px; right:5px; width:26px; height:26px; border-radius:7px; background:rgba(20,16,28,0.82); color:#ff8a84; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.82em; border:1px solid rgba(255,255,255,0.18); z-index:2;"><i class="fa-solid fa-trash"></i></div>');
+        delBtn.on('click', async e => {
+            e.stopPropagation();
+            await deleteAlbumItem(st, it);
+        });
+        card.append(imgEl, delBtn);
+        card.on('click', () => showAlbumItem(it));
+        grid.append(card);
+    });
     det.append(grid);
     root.append(det);
 }
+
 async function showAlbum() {
-    const st = store();
-    if (!st) return toastr.warning('Сначала открой чат', 'Блокнот рассказчика');
-    const items = albumItems(st);
-    if (!items.length) return toastr.info('Пока пусто: здесь будут картинки сцен (🎬) и листы образов.', '🖼 Альбом');
-    const el = $('<div class="nnb-pop nnb-pop-visual"><h3>🖼 Альбом</h3></div>');
-    const grid = $('<div class="nnb-album"></div>');
-    items.forEach(it => grid.append($('<div class="nnb-album-thumb" tabindex="0"></div>').attr('title', it.title).css('background-image', `url("${String(it.url).replace(/"/g, '%22')}")`).on('click', () => { closePopupOf(el); showAlbumItem(it); })));
-    el.append(grid);
-    await openPopup(el, true);
+    openBook('album');
 }
 
 async function redrawSceneBySamePrompt(mesId, customMeta = null) {
@@ -5947,7 +6135,9 @@ async function generateOutfits(st, occasion, exclude = []) {
         toastr.warning('Модель не предложила образы по формату — загляни в «Последний ответ модели»', 'Блокнот рассказчика');
         return false;
     }
-    st.wardrobe.active = { occasion: occasion || '', options: looks.slice(0, 5), appearance: looks.appearance, accents: looks.accents || [], status: 'choosing', at: ctx().chat.length, date: st.time.date || '' };
+    const bestApp = st.wardrobe.customAppearanceEn || looks.appearance || st.wardrobe.appearance || '';
+    if (bestApp) st.wardrobe.appearance = bestApp;
+    st.wardrobe.active = { occasion: occasion || '', options: looks.slice(0, 5), appearance: bestApp, accents: looks.accents || [], status: 'choosing', at: ctx().chat.length, date: st.time.date || '' };
     return true;
 }
 
@@ -5999,7 +6189,9 @@ async function drawClosetSheetBatch(st, items) {
     if (!items.length) return false;
     const batch = items.slice(0, 5);
     const n = batch.length;
-    const who = getHeroineAppearanceEn(st);
+    const who = settings().imageSource === 'novelai'
+        ? await ensureHeroineAppearanceEnForNai(st)
+        : getHeroineAppearanceEn(st);
 
     if (settings().imageSource === 'novelai') {
         let drawnAny = false;
@@ -6497,6 +6689,9 @@ async function chooseOutfit(i, customText, extraSaveIndices = []) {
         const allToSave = new Set([i, ...(extraSaveIndices || [])].filter(idx => idx >= 0 && idx < a.options.length));
         allToSave.forEach(idx => addLookToCloset(st, a.options[idx], normalizeClosetCat(a.options[idx].category || a.occasion)));
         a.look = a.options[i];
+        if (a.look?.image) a.image = a.look.image;
+        delete a.individualImages;
+        delete a.imageHistory;
     }
     a.status = 'worn';
     await commit();
@@ -8896,6 +9091,38 @@ function renderWardrobe(st) {
     const w = st.wardrobe;
     const det = $('<details open class="nnb-section"><summary>👗 Гардероб</summary></details>');
     root.append(det);
+
+    // Поле точной внешности героини для примерочной NovelAI (цвет волос, глаз, фигура из Персоны)
+    const appBox = $('<div class="nnb-note" style="margin-bottom:8px; padding:8px 10px;"></div>');
+    appBox.append('<div style="font-weight:700; font-size:0.86em; margin-bottom:3px;">🎨 Моя внешность для примерочной NovelAI (цвет волос, глаз, рост и фигура на английском):</div>');
+    appBox.append('<div class="nnb-npc-status" style="font-size:0.8em; margin-bottom:5px;">Эти теги с весом <code>1.3::...::</code> подставляются в каждый из 5 запросов гардероба, чтобы NovelAI всегда рисовал именно твою героиню из Персоны:</div>');
+    const appRow = $('<div style="display:flex; gap:6px; align-items:flex-start; flex-wrap:wrap;"></div>');
+    const appInput = $('<textarea class="text_pole" rows="2" style="flex:1; min-width:200px; margin:0; font-size:0.84em;" placeholder="Напр.: adult woman, long wavy auburn hair, green eyes, tall, slender hourglass figure, medium breasts, fair skin…"></textarea>')
+        .val(w.customAppearanceEn || w.appearance || '');
+    appInput.on('change', async function () {
+        w.customAppearanceEn = String($(this).val() || '').trim();
+        if (w.customAppearanceEn) {
+            w.appearance = w.customAppearanceEn;
+            if (w.active) w.active.appearance = w.customAppearanceEn;
+        }
+        await commit();
+        toastr.success('Внешность для примерочной сохранена!', '👗 Гардероб');
+    });
+    const syncPersonaBtn = $('<div class="menu_button" style="margin:0; padding:6px 10px; font-size:0.82em; width:auto;" title="Автоматически вытащить цвет волос, глаз и фигуру из твоей анкеты Персоны и перевести в английские теги для NovelAI"><i class="fa-solid fa-wand-magic-sparkles"></i> Взять из Персоны</div>').on('click', async function () {
+        const btn = $(this);
+        btn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Перевожу…');
+        try {
+            w.customAppearanceEn = '';
+            const extracted = await ensureHeroineAppearanceEnForNai(st, w.active);
+            appInput.val(extracted || '');
+            toastr.success('Теги внешности из анкеты Персоны переведены и закреплены для гардероба!', '👗 Гардероб');
+        } finally {
+            btn.css({ opacity: 1, pointerEvents: 'auto' }).html('<i class="fa-solid fa-wand-magic-sparkles"></i> Взять из Персоны');
+        }
+    });
+    appRow.append(appInput, syncPersonaBtn);
+    appBox.append(appRow);
+    det.append(appBox);
     const a = w.active;
     if (a?.status === 'choosing') {
         const box = $('<div class="nnb-note nnb-event"><div class="nnb-event-title">Образы ждут выбора</div><div class="nnb-meta"></div></div>');
@@ -11500,6 +11727,7 @@ const BOOK_HTML = `
   <div class="nnb-book-head">
     <b>Блокнот</b>
     <span class="nnb-status"></span>
+    <div class="menu_button nnb-book-think" id="nnb_migrate_now" title="🚀 Переезд в новый чат (сохранить блокнот и сделать саммари истории)"><i class="fa-solid fa-suitcase-rolling"></i></div>
     <div class="menu_button nnb-book-think" id="nnb_world_now" title="Создание мира и стартового набора"><i class="fa-solid fa-earth-americas"></i></div>
     <div class="menu_button nnb-book-think" id="nnb_think_now" title="Подумать сейчас"><i class="fa-solid fa-feather"></i></div>
     <div class="menu_button nnb-book-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div>
@@ -11681,7 +11909,16 @@ function safeRender(name, fn, ...args) {
 }
 function bindBook() {
     $('#nnb_book .nnb-book-close').off('click').on('click', closeBook);
-    $('#nnb_book').off('click', '.nnb-tab').on('click', '.nnb-tab', function () { bookTab = String($(this).data('tab')); bookTabs(); $('#nnb_book .nnb-book-body').scrollTop(0); });
+    $('#nnb_migrate_now').off('click').on('click', () => openChatMigrationModal());
+    $('#nnb_book').off('click', '.nnb-tab').on('click', '.nnb-tab', function () {
+        bookTab = String($(this).data('tab'));
+        bookTabs();
+        if (bookTab === 'album') {
+            const st = store();
+            if (st) safeRender('альбом', renderAlbum, st);
+        }
+        $('#nnb_book .nnb-book-body').scrollTop(0);
+    });
 }
 function closeBook() {
     $('#nnb_book').hide();
@@ -11722,6 +11959,26 @@ function renderPanel() {
     if (!st) { closeBook(); return; }
     bookTabs();
 
+    // Блок быстрого переезда в новый чат и сводки прошлых глав (Саммари)
+    const migBar = $('<div class="nnb-note" style="margin-bottom:10px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;"></div>');
+    migBar.append($('<div style="font-size:0.86em;"><b>🚀 Чат разросся и тормозит?</b> Перенеси весь Блокнот и Саммари сюжета в новый чистый чат:</div>'));
+    migBar.append($('<div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em; width:auto;"><i class="fa-solid fa-suitcase-rolling"></i> Переезд в новый чат / Саммари</div>').on('click', () => openChatMigrationModal()));
+    list.append(migBar);
+
+    if (st.storySummary) {
+        const sumDet = $('<details class="nnb-section" style="margin-bottom:10px;"><summary style="font-weight:700; cursor:pointer;">📜 Сводка прошлых глав (Саммари — активно в памяти бота)</summary></details>');
+        const sumBox = $('<div style="margin-top:6px;"></div>');
+        const sumArea = $('<textarea class="text_pole" rows="5" style="width:100%; font-size:0.85em; line-height:1.4;"></textarea>').val(st.storySummary);
+        sumArea.on('change', async function () {
+            st.storySummary = String($(this).val() || '').trim();
+            await commit();
+            toastr.success('Сводка прошлых глав обновлена!', '📜 Саммари');
+        });
+        sumBox.append(sumArea);
+        sumDet.append(sumBox);
+        list.append(sumDet);
+    }
+
     list.append($('<div class="nnb-subhead"></div>').text(`🪶 Задумки (${st.notes.length})`));
     if (!st.notes.length) {
         list.append('<div class="nnb-empty">Пока пусто. Модель сама начнёт записывать задумки, или нажми 🪶 вверху, чтобы подумать сейчас.</div>');
@@ -11758,7 +12015,10 @@ function renderPanel() {
     safeRender('гардероб', renderWardrobe, st);
     safeRender('шкатулка', renderBox, st);
     safeRender('карта', renderMap, st);
-    safeRender('альбом', renderAlbum, st);
+    // Отрисовываем сетку картинок альбома только когда открыт сам Блокнот (или вкладка Альбома), чтобы не декодировать десятки картинок в фоне на каждом сообщении чата!
+    if ($('#nnb_book').is(':visible') && bookTab === 'album') {
+        safeRender('альбом', renderAlbum, st);
+    }
     safeRender('время', renderTime, st);
     safeRender('тайны', renderIntrigues, st, len);
     safeRender('NPC', renderNpcs, st);
@@ -12293,22 +12553,32 @@ async function openNpcCardPopup(n) {
         // 2c. Личность в духе Sims и постоянные теги внешности для NovelAI / иллюстраций
         const simsBox = $('<div class="nnb-note" style="margin:6px 0; padding:10px 12px;"></div>');
         simsBox.append('<div style="font-weight:700; margin-bottom:6px;">Личность в духе Sims и теги внешности для картинок (NovelAI)</div>');
+        const autoFitArea = elArea => {
+            try {
+                elArea.style.height = 'auto';
+                elArea.style.height = Math.max(44, elArea.scrollHeight + 2) + 'px';
+            } catch (e) { /* ignore */ }
+        };
         const appEnWrap = $('<div style="margin-bottom:8px;"><div style="font-size:0.82em; opacity:0.85; margin-bottom:2px;">🎨 Постоянные теги внешности на английском (автоматически передаются при рисовании сцен, 0 Anlas):</div></div>');
-        const appEnInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Напр.: 1boy, tall, dark messy hair, amber eyes, athletic build, scar on eyebrow…">').val(n.appearanceEn || '');
+        const appEnInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap; overflow-y:auto;" placeholder="Напр.: 1boy, tall, dark messy hair, amber eyes, athletic build, scar on eyebrow…"></textarea>').val(n.appearanceEn || '');
+        appEnInp.on('input', function () { autoFitArea(this); });
         appEnInp.on('change', async function () {
             n.appearanceEn = String($(this).val() || '').trim();
             await commit();
         });
+        setTimeout(() => autoFitArea(appEnInp[0]), 20);
         appEnWrap.append(appEnInp);
         simsBox.append(appEnWrap);
-        const simsGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:8px;"></div>');
+        const simsGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:10px;"></div>');
         const addSimsInput = (label, key, ph) => {
-            const c = $(`<div><div style="font-size:0.8em; opacity:0.8; margin-bottom:2px;">${label}</div></div>`);
-            const inp = $(`<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="${ph}">`).val(n[key] || '');
+            const c = $(`<div style="display:flex; flex-direction:column;"><div style="font-size:0.82em; font-weight:600; opacity:0.9; margin-bottom:3px;">${label}</div></div>`);
+            const inp = $(`<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap; overflow-y:auto;" placeholder="${ph}"></textarea>`).val(n[key] || '');
+            inp.on('input', function () { autoFitArea(this); });
             inp.on('change', async function () {
                 n[key] = String($(this).val() || '').trim();
                 await commit();
             });
+            setTimeout(() => autoFitArea(inp[0]), 20);
             c.append(inp);
             simsGrid.append(c);
         };
@@ -12359,6 +12629,471 @@ async function openNpcCardPopup(n) {
     };
 
     renderModalContent();
+    await openPopup(el, true);
+}
+
+// ---------- 🌌 Импорт и экспорт НПС между ролевыми (Общая вселенная) ----------
+function ensureUniverseRoster() {
+    const s = settings();
+    if (!Array.isArray(s.savedUniverseNpcs)) s.savedUniverseNpcs = [];
+    return s.savedUniverseNpcs;
+}
+
+function serializeNpcForUniverse(n, st) {
+    ensureNpcScales(n, st);
+    const rels = (st?.relationships || []).filter(r => normName(r.a) === normName(n.name) || normName(r.b) === normName(n.name));
+    return {
+        name: n.name,
+        card: n.card || '',
+        status: n.status || '',
+        appearanceEn: n.appearanceEn || '',
+        avatar: n.avatar || '',
+        dream: n.dream || '',
+        fear: n.fear || '',
+        likes: n.likes || '',
+        dislikes: n.dislikes || '',
+        turnOns: n.turnOns || '',
+        turnOffs: n.turnOffs || '',
+        petPeeves: n.petPeeves || '',
+        jealousyTriggers: n.jealousyTriggers || '',
+        greenLight: n.greenLight || 'emotional_trust',
+        bodyStyle: n.bodyStyle || 'soft_warm',
+        intimateRole: n.intimateRole || 'switch_equal',
+        intimateStyle: n.intimateStyle || 'tender_harmony',
+        intimateTags: Array.isArray(n.intimateTags) ? [...n.intimateTags] : [],
+        favorite: !!n.favorite,
+        friendship: Number(n.friendship) || 0,
+        romance: Number(n.romance) || 0,
+        spark: Number(n.spark) || 0,
+        relationships: structuredClone(rels),
+        savedAt: new Date().toISOString().slice(0, 10),
+    };
+}
+
+async function openNpcUniverseModal(st) {
+    if (!st) st = store();
+    if (!st) return toastr.warning('Сначала открой чат', '🌌 База НПС');
+    const el = $('<div class="nnb-pop"><h3>🌌 База персонажей вселенной (перенос НПС между ролевыми)</h3></div>');
+    el.append('<div class="nnb-pop-sub">Сохраняй любимых НПС (вместе с их внешностью для NovelAI, характером Sims, аватарками и отношениями) в общую память Таверны или в файл и добавляй их в любые новые чаты той же вселенной!</div>');
+
+    const bodyHost = $('<div></div>');
+    el.append(bodyHost);
+
+    const renderContent = () => {
+        bodyHost.empty();
+        const roster = ensureUniverseRoster();
+        const mc = ensureMainCharCard(st);
+        const chatHeroes = [ ...(mc ? [mc] : []), ...(st.npcs || []) ];
+
+        // 1. Сохранить из текущего чата в общую базу
+        const saveSec = $('<div class="nnb-note" style="margin-bottom:12px; padding:10px 12px;"></div>');
+        saveSec.append(`<div style="font-weight:700; margin-bottom:6px;">📥 Сохранить героев из ЭТОГО чата в общую базу Таверны (${chatHeroes.length})</div>`);
+        if (!chatHeroes.length) {
+            saveSec.append('<div class="nnb-npc-status">В этом чате пока нет карточек героев.</div>');
+        } else {
+            const chList = $('<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;"></div>');
+            const selectedSave = new Set(chatHeroes.map((_, idx) => idx));
+            chatHeroes.forEach((h, idx) => {
+                const chip = $('<div class="nnb-travel-chip active" tabindex="0" style="font-size:0.84em; padding:4px 10px;"></div>')
+                    .text(`${h.favorite ? '❤️ ' : ''}${h.name}${h.isMainChar ? ' (осн.)' : ''}`);
+                chip.on('click', () => {
+                    if (selectedSave.has(idx)) { selectedSave.delete(idx); chip.removeClass('active'); }
+                    else { selectedSave.add(idx); chip.addClass('active'); }
+                });
+                chList.append(chip);
+            });
+            saveSec.append(chList);
+            const saveBtns = $('<div style="display:flex; gap:8px; flex-wrap:wrap;"></div>');
+            saveBtns.append($('<div class="menu_button nnb-btn-primary" style="margin:0; width:auto;"><i class="fa-solid fa-floppy-disk"></i> Сохранить отмеченных в базу вселенной</div>').on('click', () => {
+                if (!selectedSave.size) return toastr.info('Отметь хотя бы одного персонажа', '🌌 База НПС');
+                let added = 0, updated = 0;
+                selectedSave.forEach(idx => {
+                    const h = chatHeroes[idx];
+                    if (!h) return;
+                    const data = serializeNpcForUniverse(h, st);
+                    const exIdx = roster.findIndex(x => normName(x.name) === normName(data.name));
+                    if (exIdx >= 0) { roster[exIdx] = data; updated++; }
+                    else { roster.push(data); added++; }
+                });
+                saveSettings();
+                renderContent();
+                toastr.success(`Готово! Добавлено новых: ${added}, обновлено: ${updated}. Теперь они доступны в любом чате!`, '🌌 База НПС');
+            }));
+            saveBtns.append($('<div class="menu_button" style="margin:0; width:auto;"><i class="fa-solid fa-file-export"></i> Скачать НПС этого чата файлом (.json)</div>').on('click', () => {
+                const payload = [...selectedSave].map(idx => serializeNpcForUniverse(chatHeroes[idx], st));
+                const blob = new Blob([JSON.stringify({ version: '2.0.17', npcs: payload }, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `npc_universe_${Date.now()}.json`;
+                a.click();
+            }));
+            saveSec.append(saveBtns);
+        }
+        bodyHost.append(saveSec);
+
+        // 2. Импортировать из общей базы Таверны в этот чат
+        const impSec = $('<div class="nnb-note" style="padding:10px 12px;"></div>');
+        impSec.append(`<div style="font-weight:700; margin-bottom:6px;">📤 Импортировать сохранённых персонажей вселенной в ЭТОТ чат (${roster.length})</div>`);
+        const selectedImp = new Set();
+
+        if (!roster.length) {
+            impSec.append('<div class="nnb-npc-status" style="margin-bottom:8px;">В общей базе пока пусто. Нажми кнопку выше в любой своей ролевой, чтобы сохранить оттуда персонажей, или загрузи их из файла `.json` ниже.</div>');
+        } else {
+            const rosList = $('<div style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; margin-bottom:8px;"></div>');
+            roster.forEach((rNpc, rIdx) => {
+                const alreadyInChat = !!findNpc(st, rNpc.name);
+                const row = $('<div class="nnb-note" style="margin:0; padding:6px 10px; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer;"></div>');
+                const left = $('<div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;"></div>');
+                const cb = $('<input type="checkbox" style="width:16px; height:16px; cursor:pointer;">');
+                cb.on('change', function (e) {
+                    e.stopPropagation();
+                    if ($(this).prop('checked')) selectedImp.add(rIdx);
+                    else selectedImp.delete(rIdx);
+                });
+                const info = $('<div style="flex:1; min-width:0;"></div>');
+                info.append($('<div style="font-weight:700; font-size:0.9em;"></div>').text(`${rNpc.favorite ? '❤️ ' : ''}${rNpc.name}${alreadyInChat ? ' (уже есть в этом чате — обновится)' : ''}`));
+                info.append($('<div class="nnb-npc-status" style="font-size:0.8em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>').text(rNpc.card || rNpc.appearanceEn || ''));
+                left.append(cb, info);
+                const delBtn = $('<i class="fa-solid fa-trash" style="cursor:pointer; opacity:0.7;" title="Удалить из общей базы"></i>').on('click', e => {
+                    e.stopPropagation();
+                    roster.splice(rIdx, 1);
+                    saveSettings();
+                    renderContent();
+                });
+                row.on('click', () => {
+                    cb.prop('checked', !cb.prop('checked')).trigger('change');
+                });
+                row.append(left, delBtn);
+                rosList.append(row);
+            });
+            impSec.append(rosList);
+
+            const doImport = async (keepScalesAndRels) => {
+                if (!selectedImp.size) return toastr.warning('Отметь галочками персонажей для импорта', '🌌 База НПС');
+                let impCount = 0;
+                selectedImp.forEach(rIdx => {
+                    const src = roster[rIdx];
+                    if (!src) return;
+                    let target = findNpc(st, src.name);
+                    if (!target) {
+                        target = { id: st.nextNpcId++, name: src.name, locked: true, at: ctx().chat.length };
+                        st.npcs.push(target);
+                    }
+                    target.card = src.card || target.card || '';
+                    target.appearanceEn = src.appearanceEn || target.appearanceEn || '';
+                    target.avatar = src.avatar || target.avatar || '';
+                    target.dream = src.dream || '';
+                    target.fear = src.fear || '';
+                    target.likes = src.likes || '';
+                    target.dislikes = src.dislikes || '';
+                    target.turnOns = src.turnOns || '';
+                    target.turnOffs = src.turnOffs || '';
+                    target.petPeeves = src.petPeeves || '';
+                    target.jealousyTriggers = src.jealousyTriggers || '';
+                    target.greenLight = src.greenLight || 'emotional_trust';
+                    target.bodyStyle = src.bodyStyle || 'soft_warm';
+                    target.intimateRole = src.intimateRole || 'switch_equal';
+                    target.intimateStyle = src.intimateStyle || 'tender_harmony';
+                    target.intimateTags = Array.isArray(src.intimateTags) ? [...src.intimateTags] : [];
+                    target.favorite = !!src.favorite;
+                    if (keepScalesAndRels) {
+                        target.status = src.status || '';
+                        target.friendship = Number(src.friendship) || 0;
+                        target.romance = Number(src.romance) || 0;
+                        target.spark = Number(src.spark) || 0;
+                        if (Array.isArray(src.relationships)) {
+                            src.relationships.forEach(rel => {
+                                const exists = (st.relationships || []).some(r => normName(r.a) === normName(rel.a) && normName(r.b) === normName(rel.b));
+                                if (!exists) {
+                                    st.relationships.push({ ...structuredClone(rel), id: st.nextRelId++, at: ctx().chat.length });
+                                }
+                            });
+                        }
+                    } else {
+                        target.status = '';
+                        target.friendship = 0;
+                        target.romance = 0;
+                        target.spark = 0;
+                    }
+                    ensureNpcScales(target, st);
+                    impCount++;
+                });
+                await commit();
+                renderContent();
+                toastr.success(`Импортировано в этот чат: ${impCount} перс.!`, '🌌 База НПС');
+            };
+
+            const impBtns = $('<div style="display:flex; gap:8px; flex-wrap:wrap;"></div>');
+            impBtns.append($('<div class="menu_button nnb-btn-primary" style="margin:0; width:auto;" title="Перенести внешность, описание и личность Sims, но начать шкалы отношений с нуля для новой истории"><i class="fa-solid fa-user-check"></i> Импорт для новой истории (шкалы с нуля)</div>').on('click', () => doImport(false)));
+            impBtns.append($('<div class="menu_button" style="margin:0; width:auto;" title="Перенести вместе со старыми шкалами дружбы/романтики, статусом и связями"><i class="fa-solid fa-heart"></i> Импорт со всеми старыми отношениями</div>').on('click', () => doImport(true)));
+            impSec.append(impBtns);
+        }
+
+        // Импорт из файла .json
+        const fileRow = $('<div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--SmartThemeBorderColor); display:flex; gap:8px; flex-wrap:wrap;"></div>');
+        const fileInp = $('<input type="file" accept=".json" style="display:none;">');
+        fileInp.on('change', function (e) {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                try {
+                    const parsed = JSON.parse(String(ev.target?.result || '{}'));
+                    const arr = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.npcs) ? parsed.npcs : []);
+                    if (!arr.length) throw new Error('В файле не найден список НПС');
+                    arr.forEach(item => {
+                        if (!item?.name) return;
+                        const exIdx = roster.findIndex(x => normName(x.name) === normName(item.name));
+                        if (exIdx >= 0) roster[exIdx] = item;
+                        else roster.push(item);
+                    });
+                    saveSettings();
+                    renderContent();
+                    toastr.success(`Загружено в базу вселенной из файла: ${arr.length} перс.!`, '🌌 База НПС');
+                } catch (err) {
+                    toastr.error(`Ошибка чтения файла: ${escapeHtml(err?.message || err)}`, '🌌 База НПС', { escapeHtml: false });
+                }
+            };
+            reader.readAsText(file);
+        });
+        fileRow.append(fileInp);
+        fileRow.append($('<div class="menu_button" style="margin:0; width:auto;"><i class="fa-solid fa-file-import"></i> Загрузить базу НПС из файла (.json)</div>').on('click', () => fileInp.trigger('click')));
+        impSec.append(fileRow);
+        bodyHost.append(impSec);
+    };
+
+    renderContent();
+    await openPopup(el, true);
+}
+
+// ---------- 🚀 Быстрый переезд в новый чат (продолжение истории с саммари и блокнотом) ----------
+function buildCleanNotebookStateForMigration(st, customSummary = '') {
+    const clone = structuredClone(st);
+    clone.storySummary = String(customSummary || st.storySummary || '').trim();
+    // Очищаем тяжёлые черновые истории картинок при переезде, оставляя только выбранные кадры
+    if (Array.isArray(clone.scenes)) {
+        const seen = new Set();
+        clone.scenes = clone.scenes.filter(sc => {
+            if (!sc?.url || seen.has(sc.url)) return false;
+            seen.add(sc.url);
+            return true;
+        }).slice(-30);
+    }
+    if (clone.wardrobe?.active) {
+        delete clone.wardrobe.active.individualImages;
+        delete clone.wardrobe.active.imageHistory;
+    }
+    return clone;
+}
+
+async function generateMigrationStorySummary(st) {
+    const names = storyNames();
+    const c = ctx();
+    const chat = Array.isArray(c.chat) ? c.chat.filter(m => m && !m.is_system && m.mes) : [];
+    const recentMsgs = chat.slice(-18).map(m => `${m.is_user ? names.user : (m.name || names.char)}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 800)}`).join('\n\n');
+    const prevSum = st?.storySummary ? `Предыдущая сводка прошлых глав:\n${st.storySummary}\n\n` : '';
+    const npcInfo = formatNpcs(st.npcs || [], false, st);
+    const relInfo = formatRelationships(st);
+    const timeInfo = st.time?.date ? `Текущая дата и место: ${formatDate(st.time.date)}, ${placeLine(st) || ''}` : '';
+    const wornInfo = st.wardrobe?.active?.status === 'worn' && st.wardrobe.active.look
+        ? `Сейчас на ${names.user} надето: «${st.wardrobe.active.look.title}» (${st.wardrobe.active.look.desc})`
+        : '';
+
+    const prompt = `[OOC: Пауза в ролевой игре. Мы переносим эту историю в новый чистый чат, чтобы разгрузить контекст. Составь подробное, структурированное САММАРИ (Сводку истории) на русском языке, которое будет передаваться модели в новом чате, чтобы она помнила всё произошедшее без потерь.
+${prevSum}${timeInfo}
+${wornInfo}
+Известные герои и их статус:
+${npcInfo}
+Связи:
+${relInfo}
+
+Последние сообщения текущего чата:
+${recentMsgs}
+
+Напиши сводку в 3 чётких разделах (без воды, только конкретные факты, имена, детали и события):
+1. ЧТО ПРОИЗОШЛО РАНЕЕ В ИСТОРИИ: главные события, завязка, важные решения, обещания и поворотные моменты.
+2. ОТНОШЕНИЯ И ДИНАМИКА ГЕРОЕВ: что сейчас между ${names.user}, ${names.char} и важными NPC (чувства, доверие, недавние ссоры или сближение).
+3. ТОЧКА ОСТАНОВКИ (ГДЕ МЫ СЕЙЧАС): точная дата, локация, обстановка, во что одеты герои и что именно произошло в самой последней сцене (на какой реплике или действии остановились прямо сейчас).]`;
+
+    const res = await withBusy('📝 Модель составляет подробное саммари истории для переезда…', () => quietGenerate(prompt));
+    return stripActionTags(cleanAnswer(res || '')).trim();
+}
+
+async function applyMigrationPackageToCurrentChat(pkg, insertBridgeMessage = true) {
+    const c = ctx();
+    if (!c.chatId || !c.chatMetadata) {
+        toastr.warning('Сначала открой целевой чат', '🚀 Переезд в новый чат');
+        return false;
+    }
+    const restored = structuredClone(pkg.notebookState);
+    if (pkg.storySummary) restored.storySummary = pkg.storySummary;
+    restored.lastThinkAt = c.chat?.length ?? 0;
+    c.chatMetadata[MODULE] = restored;
+    store();
+
+    // Если пользователь попросил вставить мостик из последнего сообщения старого чата в первое сообщение нового чата
+    if (insertBridgeMessage && pkg.lastSceneMessage && Array.isArray(c.chat) && c.chat.length > 0) {
+        const lastIdx = c.chat.length - 1;
+        if (!c.chat[lastIdx].is_user) {
+            c.chat[lastIdx].mes = pkg.lastSceneMessage;
+            try { if (typeof c.updateMessageBlock === 'function') c.updateMessageBlock(lastIdx, c.chat[lastIdx]); } catch (e) {}
+            await c.saveChat();
+        }
+    }
+
+    await c.saveMetadata();
+    updateInjection();
+    renderPanel();
+    toastr.success('Весь Блокнот, карточки героев, гардероб и Саммари прошлых глав успешно перенесены в этот чат!', '🚀 Переезд завершён', { timeOut: 7000 });
+    return true;
+}
+
+async function openChatMigrationModal() {
+    const st = store();
+    if (!st) return toastr.warning('Сначала открой чат', '🚀 Переезд в новый чат');
+    const c = ctx();
+    const s = settings();
+    const chatMsgs = Array.isArray(c.chat) ? c.chat.filter(m => m && !m.is_system && m.mes) : [];
+    const lastCharMsg = [...chatMsgs].reverse().find(m => !m.is_user) || chatMsgs[chatMsgs.length - 1];
+    const defaultLastScene = lastCharMsg ? stripActionTags(String(lastCharMsg.mes || '')).trim() : '';
+
+    const el = $('<div class="nnb-pop"><h3>🚀 Переезд в новый чат (продолжить историю с того же места)</h3></div>');
+    el.append('<div class="nnb-pop-sub">Когда чат разросся и начал тормозить, здесь можно в пару кликов собрать <b>Саммари истории</b> и перенести <b>весь Блокнот со всеми героями, гардеробом, календарём и задумками</b> в новый чистый чат!</div>');
+
+    // Если в буфере Таверны УЖЕ лежит готовый пакет переезда — показываем заметный баннер «Применить в этом чате» в самом верху!
+    const pendingBox = $('<div></div>');
+    const renderPendingBanner = () => {
+        pendingBox.empty();
+        const pend = s.pendingChatMigration;
+        if (!pend || !pend.notebookState) return;
+        const ban = $('<div class="nnb-note" style="margin-bottom:12px; padding:10px 12px; border:2px solid var(--SmartThemeQuoteColor, #e0c068); background:color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 14%, transparent);"></div>');
+        ban.append(`<div style="font-weight:700; margin-bottom:4px;">📥 В памяти готов пакет переезда (от ${escapeHtml(pend.savedAt || 'сейчас')}, героев: ${(pend.notebookState.npcs || []).length}, записей: ${(pend.notebookState.notes || []).length})</div>`);
+        ban.append('<div class="nnb-npc-status" style="margin-bottom:8px;">Если ты уже создала и открыла новый чат — нажми кнопку ниже, чтобы развернуть в нём весь Блокнот, Саммари и последнюю сцену:</div>');
+        const applyRow = $('<div style="display:flex; gap:8px; flex-wrap:wrap;"></div>');
+        applyRow.append($('<div class="menu_button nnb-btn-primary" style="margin:0; width:auto;"><i class="fa-solid fa-wand-magic-sparkles"></i> Развернуть Блокнот + Саммари + последнее сообщение в ЭТОМ чате</div>').on('click', async () => {
+            await applyMigrationPackageToCurrentChat(pend, true);
+            closePopupOf(el);
+        }));
+        applyRow.append($('<div class="menu_button" style="margin:0; width:auto;"><i class="fa-solid fa-book"></i> Развернуть только Блокнот и Саммари (без замены приветствия)</div>').on('click', async () => {
+            await applyMigrationPackageToCurrentChat(pend, false);
+            closePopupOf(el);
+        }));
+        ban.append(applyRow);
+        pendingBox.append(ban);
+    };
+    renderPendingBanner();
+    el.append(pendingBox);
+
+    // Шаг 1: Саммари истории
+    const sumSec = $('<div class="nnb-note" style="margin-bottom:10px; padding:10px 12px;"></div>');
+    sumSec.append('<div style="font-weight:700; margin-bottom:4px;">1️⃣ Сводка прошлых глав (Саммари для памяти бота в новом чате)</div>');
+    sumSec.append('<div class="nnb-npc-status" style="margin-bottom:6px; font-size:0.82em;">Этот текст автоматически вшивается в память Блокнота: в новом чате бот будет знать всё, что было раньше, без необходимости пересказывать ему сюжет.</div>');
+    const sumArea = $('<textarea class="text_pole" rows="6" style="width:100%; font-size:0.86em; line-height:1.4;" placeholder="Нажми «✨ Сгенерировать саммари по чату» или впиши сводку основных событий и отношений…"></textarea>')
+        .val(st.storySummary || s.pendingChatMigration?.storySummary || '');
+    const genSumBtn = $('<div class="menu_button" style="margin-top:6px; width:auto; display:inline-flex;"><i class="fa-solid fa-wand-magic-sparkles"></i> ✨ Сгенерировать саммари по текущему чату</div>').on('click', async function () {
+        const btn = $(this);
+        btn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Составляю саммари…');
+        try {
+            const generated = await generateMigrationStorySummary(st);
+            if (generated) {
+                sumArea.val(generated);
+                st.storySummary = generated;
+                await commit();
+                toastr.success('Саммари истории готово! Можешь проверить или дополнить текст.', '📝 Саммари');
+            }
+        } finally {
+            btn.css({ opacity: 1, pointerEvents: 'auto' }).html('<i class="fa-solid fa-wand-magic-sparkles"></i> ✨ Сгенерировать саммари по текущему чату');
+        }
+    });
+    sumSec.append(sumArea, genSumBtn);
+    el.append(sumSec);
+
+    // Шаг 2: Последний пост сцены (с которого продолжится новый чат)
+    const bridgeSec = $('<div class="nnb-note" style="margin-bottom:10px; padding:10px 12px;"></div>');
+    bridgeSec.append('<div style="font-weight:700; margin-bottom:4px;">2️⃣ Последний пост текущей сцены (мостик для старта нового чата)</div>');
+    bridgeSec.append('<div class="nnb-npc-status" style="margin-bottom:6px; font-size:0.82em;">При развёртывании в новом чате этот текст можно автоматически подставить вместо стандартного приветствия карточки, чтобы продолжить диалог ровно с той же секунды:</div>');
+    const bridgeArea = $('<textarea class="text_pole" rows="4" style="width:100%; font-size:0.85em; line-height:1.38;" placeholder="Последнее сообщение персонажа, на котором вы остановились…"></textarea>')
+        .val(defaultLastScene);
+    bridgeSec.append(bridgeArea);
+    el.append(bridgeSec);
+
+    const buildCurrentPkg = () => {
+        const summaryVal = String(sumArea.val() || '').trim();
+        st.storySummary = summaryVal;
+        return {
+            version: '2.0.17',
+            savedAt: new Date().toLocaleTimeString().slice(0, 5),
+            storySummary: summaryVal,
+            lastSceneMessage: String(bridgeArea.val() || '').trim(),
+            notebookState: buildCleanNotebookStateForMigration(st, summaryVal),
+        };
+    };
+
+    // Шаг 3: Кнопки сохранения и автоматического переезда
+    const actSec = $('<div class="nnb-note" style="padding:10px 12px;"></div>');
+    actSec.append('<div style="font-weight:700; margin-bottom:6px;">3️⃣ Перенос в новый чат</div>');
+    const actBtns = $('<div style="display:flex; gap:8px; flex-wrap:wrap;"></div>');
+
+    actBtns.append($('<div class="menu_button nnb-btn-primary" style="margin:0; width:auto;"><i class="fa-solid fa-suitcase-rolling"></i> 📦 Запомнить этот Блокнот и Саммари для нового чата</div>').on('click', async () => {
+        const pkg = buildCurrentPkg();
+        s.pendingChatMigration = pkg;
+        saveSettings();
+        await commit();
+        renderPendingBanner();
+        toastr.success('Пакет переезда сохранён! Теперь открой новый чат (Start new chat), зайди в это окно и нажми «Развернуть в ЭТОМ чате»!', '🚀 Готово к переезду', { timeOut: 8000 });
+    }));
+
+    actBtns.append($('<div class="menu_button" style="margin:0; width:auto;"><i class="fa-solid fa-rocket"></i> 🚀 Создать новый чат и перенести автоматически</div>').on('click', async () => {
+        const pkg = buildCurrentPkg();
+        s.pendingChatMigration = pkg;
+        saveSettings();
+        await commit();
+        const newChatBtn = $('#option_start_new_chat');
+        if (newChatBtn.length) {
+            closePopupOf(el);
+            closeBook();
+            s._autoApplyMigrationOnNextChat = true;
+            newChatBtn.trigger('click');
+        } else {
+            toastr.info('Пакет сохранён! Нажми «Start new chat» в меню Таверны, а затем кнопку «Развернуть» в этом окне.', '🚀 Переезд');
+        }
+    }));
+
+    actBtns.append($('<div class="menu_button" style="margin:0; width:auto;"><i class="fa-solid fa-file-export"></i> 💾 Скачать файлом (.json)</div>').on('click', () => {
+        const pkg = buildCurrentPkg();
+        const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `notebook_migration_${Date.now()}.json`;
+        a.click();
+    }));
+
+    const migFileInp = $('<input type="file" accept=".json" style="display:none;">');
+    migFileInp.on('change', function (e) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async ev => {
+            try {
+                const parsed = JSON.parse(String(ev.target?.result || '{}'));
+                if (!parsed?.notebookState) throw new Error('Неверный формат файла переезда');
+                s.pendingChatMigration = parsed;
+                saveSettings();
+                renderPendingBanner();
+                await applyMigrationPackageToCurrentChat(parsed, true);
+                closePopupOf(el);
+            } catch (err) {
+                toastr.error(`Ошибка загрузки файла переезда: ${escapeHtml(err?.message || err)}`, '🚀 Переезд', { escapeHtml: false });
+            }
+        };
+        reader.readAsText(file);
+    });
+    actBtns.append(migFileInp);
+    actBtns.append($('<div class="menu_button" style="margin:0; width:auto;"><i class="fa-solid fa-file-import"></i> 📂 Загрузить и развернуть из файла (.json)</div>').on('click', () => migFileInp.trigger('click')));
+
+    actSec.append(actBtns);
+    el.append(actSec);
+
     await openPopup(el, true);
 }
 
@@ -12508,7 +13243,8 @@ function renderNpcs(st) {
         st.relationships.push({ id: st.nextRelId++, a, b, arrow, type: tp.trim(), desc: ds.trim(), locked: true, at: ctx().chat.length });
         await commit();
     });
-    btnsRow.append(add, addRel);
+    const uniBtn = $('<div class="menu_button"><i class="fa-solid fa-earth-americas"></i> 🌌 Импорт / экспорт НПС между ролевыми</div>').on('click', () => openNpcUniverseModal(st));
+    btnsRow.append(add, addRel, uniBtn);
     det.append(btnsRow);
 
     // 🏘 Соседские истории (автономная жизнь NPC за кадром)
@@ -13496,6 +14232,27 @@ function placeMesButtons() {
                 }
             });
             navRow.append(prevBtn, promptToggleBtn, nextBtn);
+            if (hist.length > 1) {
+                const keepOnlyBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Удалить остальные ${hist.length - 1} черновых вариантов этой сцены и оставить только текущий кадр (освобождает память чата)"><i class="fa-solid fa-broom"></i> Оставить только этот</div>`).on('click', async e => {
+                    e.stopPropagation();
+                    const removedCount = hist.length - 1;
+                    sceneMeta.history = [curUrl];
+                    sceneMeta.url = curUrl;
+                    if (Array.isArray(c.chat?.[mId]?.extra?.media)) {
+                        c.chat[mId].extra.media = c.chat[mId].extra.media.filter(x => x.url === curUrl || x.source !== 'generated');
+                        c.chat[mId].extra.media_index = Math.max(0, c.chat[mId].extra.media.length - 1);
+                    }
+                    const st2 = store();
+                    if (st2 && Array.isArray(st2.scenes)) {
+                        st2.scenes = st2.scenes.filter(x => x.mesId !== mId && !hist.includes(x.url));
+                        st2.scenes.push({ url: curUrl, mesId: mId, at: mId + 1, date: st2.time?.date || '', desc: sceneMeta.desc || '', extraNeg: sceneMeta.extraNeg || '', cast: sceneMeta.cast || [], camMode: sceneMeta.camMode || 'third', prompt: sceneMeta.prompt || '', pov: !!sceneMeta.pov });
+                    }
+                    await attachToLastMessage(curUrl, mId, sceneMeta, true);
+                    await ctx().saveMetadata();
+                    toastr.success(`Удалено черновых вариантов: ${removedCount}. В посте и альбоме оставлен только выбранный кадр!`, '🖼 Чистка сцены');
+                });
+                navRow.append(keepOnlyBtn);
+            }
             bar.append(navRow);
 
             const promptBox = $('<div class="nnb-inline-scene-prompt" style="display:none; width:100%; margin-top:6px;"></div>');
@@ -13572,6 +14329,7 @@ function addMenuItems() {
         const item = (id, icon, text, fn) => $(`<div id="${id}" class="list-group-item flex-container flexGap5 interactable" tabindex="0"><div class="fa-solid ${icon} extensionsMenuExtensionButton"></div><span></span></div>`)
             .find('span').text(text).end().on('click', fn);
         menu.append(item('nnb_menu_book', 'fa-book-open', 'Блокнот рассказчика', () => openBook()));
+        menu.append(item('nnb_menu_migrate', 'fa-suitcase-rolling', 'Переезд в новый чат (саммари + блокнот)', () => openChatMigrationModal()));
         menu.append(item('nnb_menu_world', 'fa-earth-americas', 'Мир и карточка героини', () => openWorldOverviewOrCreator()));
         menu.append(item('nnb_menu_home', 'fa-house-chimney', 'Мой дом: комната и предметы', () => openHomeModal()));
         menu.append(item('nnb_menu_topics', 'fa-comments', 'Темы для разговора', () => openTopicsPopup()));
@@ -14022,7 +14780,15 @@ jQuery(async () => {
     for (const e of [ev.MESSAGE_SENT, ev.CHAT_CHANGED, ev.MESSAGE_DELETED]) {
         if (e) c.eventSource.on(e, () => { updateInjection(); renderPanel(); });
     }
-    c.eventSource.on(ev.CHAT_CHANGED, renderDirection);
+    c.eventSource.on(ev.CHAT_CHANGED, () => {
+        renderDirection();
+        if (settings()._autoApplyMigrationOnNextChat && settings().pendingChatMigration) {
+            settings()._autoApplyMigrationOnNextChat = false;
+            setTimeout(async () => {
+                await applyMigrationPackageToCurrentChat(settings().pendingChatMigration, true);
+            }, 450);
+        }
+    });
     for (const e of ['CHAT_CHANGED', 'MESSAGE_RECEIVED', 'MESSAGE_SENT', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MORE_MESSAGES_LOADED']) {
         if (ev[e]) c.eventSource.on(ev[e], placeMesButtonsSoon);
     }
