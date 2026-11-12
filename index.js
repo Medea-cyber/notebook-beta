@@ -1285,17 +1285,22 @@ const defaults = {
     injectPrompt: DEFAULT_INJECT,
 };
 
-const DEFAULT_NAI_WRITER_PROMPT = `ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — написать визуальный промпт для генерации иллюстрации текущей сцены в NovelAI V5.
-Выдай ТОЛЬКО строки CAST и SCENE без рассуждений и комментариев.
+const DEFAULT_NAI_WRITER_PROMPT = `ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — составить чистый визуальный промпт из коротких тегов Danbooru для иллюстрации текущей сцены в NovelAI V5.
+Выдай ТОЛЬКО строки CAST, SCENE и (если в кадре 2 и более человек) строки CHAR1, CHAR2... без пояснений.
 
-СТРУКТУРА ПРОМПТА (по формуле раздельных блоков):
-1. КОЛИЧЕСТВО И ОБЩИЙ КОНЦЕПТ: начни с точного количества персонажей в формате Xboy, Xgirl (например: 1boy, 1girl) и 2–3 тегов общей концепции кадра.
-2. КАЛИБРОВКА РОСТА И ПРОПОРЦИЙ: если в кадре мужчина и женщина, ВСЕГДА фиксируй взрослые пропорции и нормальный мужской рост (вровень с девушкой или чуть выше): 1.3::tall lean adult man, adult male proportions, man slightly taller than woman, equal head and body scale, long male legs, wider male shoulders:: и анти-вес -1.5::otoko no ko, femboy, petite male, short male, smaller male, size difference::. Внутри текстовых фраз называй мужчину ТОЛЬКО man / adult man / male (не пиши слово boy кроме стартового тега 1boy).
-3. РАЗДЕЛЬНЫЕ БЛОКИ ПЕРСОНАЖЕЙ ЧЕРЕЗ ДВОЕТОЧИЕ:
-   — 1girl: [имя], adult, [цвет и длина волос, причёска, глаза, тип фигуры], [одежда в этой сцене], [точная поза, положение рук и пальцев, мимика из 3 деталей: брови, взгляд, губы].
-   — 1boy: [имя], adult, tall lean adult man, [цвет и длина волос, глаза, телосложение], [одежда в этой сцене], [точная поза, положение рук, мимика из 3 деталей].
-4. НАПРАВЛЕННОЕ ВЗАИМОДЕЙСТВИЕ И ОКРУЖЕНИЕ: явно указывай, кто и что делает (woman straddling man's lap, man looking up at woman), ракурс (medium shot, full body, side view), детали интерьера и освещение.
-5. НЕ пиши общие слова стиля (anime style, masterpiece) в начале — авторский стиль подставляется отдельно 1-в-1. Не используй частицу "no ..." в позитиве.`;
+ГЛАВНЫЕ ПРАВИЛА ДЛЯ NOVELAI V5:
+1. ТОЛЬКО КОРОТКИЕ ТЕГИ DANBOORU (1–4 слова), БЕЗ ЛИТЕРАТУРНЫХ МЕТАФОР И БЕЗ ГРОТЕСКА:
+   — Игнорируй комедийный или гротескный тон текста ролевой! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать метафоры, идиомы и гиперболы ("screaming internally", "about to die of shame", "flashback horror", "deer in headlights", "bird's nest", "bony build").
+   — НЕ переводи смущение или шок словами horror, dread, terror, die, corpse, pinpricks — используй только эстетичные теги мимики Danbooru: blush, embarrassed, flustered, wide eyes, parted lips, surprised, nervous, shy, soft expression, looking away.
+   — НЕ пиши отрицательные веса (-1.5::...::), НЕ пиши блок NEGATIVE, НЕ пиши теги masculine face / masculine hands и НЕ используй частицу "no ...".
+
+2. КАНОНИЧНЫЕ ПЕРСОНАЖИ ИЗ АНИМЕ / МАНГИ / ИГР (ТОЧНЫЙ ТЕГ DANBOORU):
+   — Если персонаж в сцене из известного канона (например, Наоя Дзэнин из Jujutsu Kaisen, Годжо Сатору, Тоджи Фушигуро, Гето Сугуру и др.), НИКОГДА не пиши просто одиночное имя "Naoya"!
+   — ВСЕГДА пиши его точный каноничный тег Danbooru в формате \`фамилия имя, название тайтла на английском\` + его ключевые черты внешности: например \`zen'in naoya, jujutsu kaisen, blonde hair, dyed hair, black roots, slit pupils, ear piercings\`.
+
+3. КОГДА В КАДРЕ 3–4 И БОЛЕЕ ПЕРСОНАЖЕЙ (ЗАЩИТА ОТ СЛИЯНИЯ ДВУХ ПАРНЕЙ В ОДНОГО):
+   — В начале SCENE укажи ТОЛЬКО суммарные счётчики пола: например \`2boys, 2girls, multiple boys, multiple girls, group\` (если парней двое — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать внутри общего текстаSCENE тег \`1boy\`, иначе NovelAI слепит двух парней в одного человека!).
+   — Обязательно вынеси КАЖДОГО персонажа в отдельную строку CHAR1, CHAR2, CHAR3, CHAR4 после строки SCENE — система передаст каждого персонажа в отдельный независимый слой NovelAI V5 (char_captions), чтобы их внешность и одежда никогда не смешивались!`;
 
 const BUILTIN_NAI_WRITER_PRESETS = [
     {
@@ -1397,7 +1402,7 @@ function store() {
     if (!st.intrigues) st.intrigues = [];
     if (!st.nextIntrigueId) st.nextIntrigueId = 1;
     if (st.direction.npcs === undefined) st.direction.npcs = true;
-    if (st.direction.spicyFriction === undefined) st.direction.spicyFriction = true;
+    if (st.direction.spicyFriction === undefined) st.direction.spicyFriction = false;
     if (!st.npcs) st.npcs = [];
     if (!st.nextNpcId) st.nextNpcId = 1;
     if (st.direction.arcs === undefined) st.direction.arcs = true;
@@ -1473,11 +1478,7 @@ function formatNotes(notes) {
 
 function buildDirection(st) {
     const parts = [buildGenreDirection(st)];
-    if (st?.direction?.spicyFriction !== false) {
-        parts.push(`ЖИВАЯ ПЕРЧИНКА И ЭМОЦИИ (БЕЗ ПРИТОРНОСТИ, НО БЕЗ ТЯЖЁЛОЙ ДРАМЫ):
-— Следи, чтобы история не становилась приторно-сладкой и бесконфликтной: среди новых задумок (ADD) обязательно предлагай 1–2 живых повода для бытовых трений, мелкого столкновения характеров и привычек, комичного или острого недопонимания либо укола ревности/собственничества (например: двусмысленный знак внимания от NPC, спор о бытовой привычке, забытое обещание, столкновение упрямства).
-— ВАЖНО: все такие трения должны быть живыми и бытовыми/романтическими — строго БЕЗ угроз жизни, здоровья, предательства или разрушения отношений.`);
-    }
+    // Направление определяется только выбранными жанрами без вшитых указаний на бытовые трения/ссоры
     if (st?.rejected?.length) {
         parts.push('Игрок отклонил эти идеи — не предлагай их и похожие:\n' + st.rejected.map(t => `— ${t}`).join('\n'));
     }
@@ -1651,6 +1652,12 @@ const INTIMATE_ACCENT_TAGS = [
 ];
 
 const DAILY_MOOD_OPTIONS = {
+    off: {
+        id: 'off',
+        short: '',
+        label: '⏸ Выключено (естественная реакция по ситуации без навязанного тонуса)',
+        desc: '',
+    },
     warm: {
         id: 'warm',
         short: '☀️ В хорошем духе',
@@ -1686,6 +1693,7 @@ const DAILY_MOOD_OPTIONS = {
 function parseDailyMoodValue(val) {
     const v = String(val || '').toLowerCase().trim();
     if (!v) return '';
+    if (/^(выкл|off|нет|none|-)$/i.test(v)) return 'off';
     if (DAILY_MOOD_OPTIONS[v]) return v;
     if (/взвод|устал|раздраж|колюч|нервн|резк/.test(v)) return 'edgy';
     if (/ревн|собствен|подозр/.test(v)) return 'jealous';
@@ -1782,7 +1790,7 @@ function ensureNpcScales(n, st) {
     if (typeof n.appearanceEn !== 'string') n.appearanceEn = '';
     if (typeof n.petPeeves !== 'string') n.petPeeves = '';
     if (typeof n.jealousyTriggers !== 'string') n.jealousyTriggers = '';
-    if (!n.dailyMood || !DAILY_MOOD_OPTIONS[n.dailyMood]) n.dailyMood = 'warm';
+    if (!n.dailyMood || !DAILY_MOOD_OPTIONS[n.dailyMood]) n.dailyMood = 'off';
     if (typeof n.dream !== 'string') n.dream = '';
     if (typeof n.fear !== 'string') n.fear = '';
     if (typeof n.likes !== 'string') n.likes = '';
@@ -1833,10 +1841,12 @@ function formatNpcScaleSummary(n) {
         parts.push(`Отметка состояния тела с прошлого шага: ${n.spark}/100 (${sparkTierLabel(n.spark)}) — НЕ используй как тормоз: если по логике текущей сцены персонаж уже должен быть сильно взволнован или на грани (или наоборот уже отдыхает после близости), сразу отыгрывай реальный накал момента и обнови шкалу меткой <!--SPARK: 0..100 | краткий статус--> в конце ответа.`);
         parts.push(`Природа телесного отклика: ${bsObj.label} (${bsObj.desc}).`);
         parts.push(`Условие для сближения («зелёный свет»): ${glObj.label} (${glObj.desc}).`);
-        const moodObj = DAILY_MOOD_OPTIONS[n.dailyMood] || DAILY_MOOD_OPTIONS.warm;
-        parts.push(`Текущий эмоциональный тонус («с какой ноги встал» в этой сцене): ${moodObj.label} — ${moodObj.desc}.`);
-        if (n.petPeeves) parts.push(`Бытовая заноза (в чём упрямится, ворчит и спорит в быту — при столкновении НЕ сглаживай за один пост, дай поспорить!): ${n.petPeeves}.`);
-        if (n.jealousyTriggers) parts.push(`Триггеры ревности и собственничества (от чего мгновенно напрягается и ревнует): ${n.jealousyTriggers}.`);
+        const moodObj = (n.dailyMood && n.dailyMood !== 'off') ? DAILY_MOOD_OPTIONS[n.dailyMood] : null;
+        if (moodObj && moodObj.desc) {
+            parts.push(`Текущий эмоциональный тонус («с какой ноги встал» в этой сцене): ${moodObj.label} — ${moodObj.desc}.`);
+        }
+        if (n.petPeeves) parts.push(`Бытовая заноза: ${n.petPeeves}.`);
+        if (n.jealousyTriggers) parts.push(`Триггеры ревности: ${n.jealousyTriggers}.`);
         if (n.turnOns) parts.push(`Ключи к нему (что цепляет, влюбляет и заводит): ${n.turnOns}.`);
         if (n.turnOffs) parts.push(`Стоп-факторы (что охлаждает и заставляет закрыться): ${n.turnOffs}.`);
         if (n.publicRole || n.intimateRole !== 'equal' || n.intimateStyle !== 'tender_harmony' || (n.intimateTags && n.intimateTags.length)) {
@@ -2060,17 +2070,7 @@ function buildLivingWorldInjection(st) {
     const names = storyNames();
     const curPlace = mapOn(st) && st.map?.current ? st.map.places.find(p => p.id === st.map.current) : null;
     const justEntered = curPlace && (st.map.enteredAt === undefined || len - st.map.enteredAt <= 1);
-    let compRule = '';
-    if (curPlace && st.map?.currentCompanion && len - (st.map.enteredAt || 0) <= 10) {
-        const comp = st.map.currentCompanion;
-        const charNamesNorm = (names.chars.length ? names.chars : [names.char]).map(c => normName(c));
-        const hasMainChar = charNamesNorm.some(cn => cn && normName(comp).includes(cn));
-        if (comp === 'solo') {
-            compRule = ` ВАЖНО — СОСТАВ СЦЕНЫ: ${names.user} пришла в «${curPlace.title}» ОДНА (без ${names.char}). СТРОГО ЗАПРЕЩЕНО внезапно «рисовать» или приводить сюда ${names.char}, пока ${names.user} сама ему не напишет или не позовёт!`;
-        } else if (!hasMainChar) {
-            compRule = ` ВАЖНО — СОСТАВ СЦЕНЫ: ${names.user} пришла в «${curPlace.title}» ТОЛЬКО вместе с: ${comp}. Основного персонажа (${names.char}) с ними НЕТ! СТРОГО ЗАПРЕЩЕНО вводить или «телепортировать» ${names.char} в эту локацию — веди сцену только с ${names.user}, ${comp} и местным окружением!`;
-        }
-    }
+    const compRule = '';
     let lwBlock = '';
     if (curPlace && justEntered) {
         const locLine = `Текущая локация (герои только что пришли сюда): «${curPlace.title}»${curPlace.desc ? ` (${curPlace.desc})` : ''}${curPlace.hooks ? `. Зацепки и крючки этого места для первого впечатления: ${curPlace.hooks}` : ''}.\n`;
@@ -2095,7 +2095,7 @@ function buildActionPromptsInjection() {
 Требования к вариантам:
 — Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «погладить ${user}» — действует только сама ${user}.
 — Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${(st && st.direction?.spicyFriction !== false) ? `\n— Не делай все 3 варианта приторно-соглашательскими: хотя бы один из вариантов должен давать ${user} возможность проявить характер — упрямо настоять на своём в бытовом споре, подколоть собеседника, сыграть на ревности или остро отреагировать на недопонимание.` : ''}${poiLine}
+— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${poiLine}
 — Формулируй кратко (1–2 фразы), чтобы ${user} могла отправить этот вариант как свой ход. Метка невидима для игрока, не упоминай её в основном тексте ответа.]`;
 }
 
@@ -2211,7 +2211,7 @@ function extractTextFromApiResult(raw) {
     return '';
 }
 
-async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, label = 'профиль Таверны', systemNote = '') {
+async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, label = 'профиль Таверны', systemNote = '', skipPreset = false) {
     const svc = ctx().ConnectionManagerRequestService;
     if (!svc?.sendRequest) {
         throw new Error('В этой версии Таверны нет менеджера профилей подключения');
@@ -2226,20 +2226,25 @@ async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, lab
     chatMsgs.push({ role: 'user', content: fullPrompt });
     const singleUserMsgs = [{ role: 'user', content: fullPrompt }];
 
+    // Если skipPreset = true (для генератора промптов картинок GLM), ставим includePreset: false ПЕРВЫМ, чтобы GLM НЕ видел общий пресет ролевой (гротескную комедию и т.д.)!
+    const firstPresetFlag = !skipPreset;
+    const secondPresetFlag = !!skipPreset;
+
     const attempts = isTc
         ? [
-            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: true }),
-            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: false }),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
             () => svc.sendRequest(pid, fullPrompt, maxTokens),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: true }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
         ]
         : [
-            () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: true }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: true }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: false }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: false, includePreset: true }),
+            () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
+            () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: false, includePreset: firstPresetFlag }),
             () => svc.sendRequest(pid, singleUserMsgs, maxTokens),
-            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: true }),
+            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
             () => svc.sendRequest(pid, fullPrompt, maxTokens),
         ];
 
@@ -2439,7 +2444,9 @@ ${writerNote}]
 
 `
         : '';
-    const fullPrompt = writerBlock + buildStandaloneContextPrompt(taskPrompt);
+    // НЕ вызываем buildStandaloneContextPrompt (чтобы в GLM не попадали ch.personality, ch.scenario и 25 постов гротескной комедии)!
+    // Внутри taskPrompt уже есть чистые блоки внешности, OLDBlock и текущая сцена.
+    const fullPrompt = writerBlock + ctx().substituteParams(String(taskPrompt || ''));
 
     if (src === 'custom-api') {
         let base = String(s.imgPromptApiBase || 'https://open.bigmodel.cn/api/paas/v4').trim().replace(/\/+$/, '');
@@ -2479,7 +2486,7 @@ ${writerNote}]
         return extractTextFromApiResult(json) || text;
     }
 
-    return await sendViaTavernProfile(src, fullPrompt, 2048, 'профиль модели для промптов картинок', writerNote);
+    return await sendViaTavernProfile(src, fullPrompt, 2048, 'профиль модели для промптов картинок', writerNote, true);
 }
 
 async function quietGenerateImagePrompt(prompt) {
@@ -2763,8 +2770,10 @@ function parseAndApply(raw) {
                         if (jm) { n.jealousyTriggers = jm[2].trim().replace(/\]$/, ''); return; }
                         const mm = p.match(/^(тонус|настроение|нога|mood)\s*[=:]\s*(.+)$/i);
                         if (mm) {
-                            const parsedMood = parseDailyMoodValue(mm[2]);
-                            if (parsedMood) n.dailyMood = parsedMood;
+                            if (n.dailyMood !== 'off') {
+                                const parsedMood = parseDailyMoodValue(mm[2]);
+                                if (parsedMood) n.dailyMood = parsedMood;
+                            }
                             return;
                         }
                         const gm = p.match(/^(?:зелёный_?свет|зеленый_?свет|свет)\s*[=:]\s*(.+)$/i);
@@ -4430,15 +4439,36 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
             extra_noise_seed: seed,
         };
         if (isV4Plus) {
+            const rawCharCaps = Array.isArray(refs?.charCaptions) ? refs.charCaptions.filter(Boolean).slice(0, 6) : [];
+            const centersForCount = cnt => {
+                if (cnt === 2) return [{ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }];
+                if (cnt === 3) return [{ x: 0.2, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 0.8, y: 0.5 }];
+                if (cnt === 4) return [{ x: 0.2, y: 0.45 }, { x: 0.4, y: 0.55 }, { x: 0.6, y: 0.45 }, { x: 0.8, y: 0.55 }];
+                return rawCharCaps.map((_, idx) => ({ x: Number(((idx + 1) / (cnt + 1)).toFixed(2)), y: 0.5 }));
+            };
+            const centers = centersForCount(rawCharCaps.length);
+            const builtCharCaptions = rawCharCaps.length >= 2
+                ? rawCharCaps.map((cc, idx) => ({
+                    char_caption: sanitizeNovelAiPositiveAndNegative(cc, '').pos,
+                    centers: [centers[idx] || { x: 0.5, y: 0.5 }],
+                }))
+                : [];
+            const builtNegCharCaptions = builtCharCaptions.map(cObj => ({
+                char_caption: 'lowres, bad anatomy, bad hands, merged bodies, fused limbs',
+                centers: cObj.centers,
+            }));
+            if (builtCharCaptions.length) {
+                logImageDiag(`NovelAI V4/V5 Multi-Character слоты (${builtCharCaptions.length} перс.)`, builtCharCaptions.map((c, i) => `CHAR${i + 1}: ${c.char_caption}`).join(' | '));
+            }
             params.v4_prompt = {
-                use_coords: false,
+                use_coords: builtCharCaptions.length >= 2,
                 use_order: true,
-                caption: { base_caption: fullPrompt, char_captions: [] },
+                caption: { base_caption: fullPrompt, char_captions: builtCharCaptions },
             };
             params.v4_negative_prompt = {
                 use_coords: false,
                 use_order: false,
-                caption: { base_caption: negPrompt, char_captions: [] },
+                caption: { base_caption: negPrompt, char_captions: builtNegCharCaptions },
             };
         }
 
@@ -4922,9 +4952,9 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
 
     let cameraInstruction = '';
     if (isPovHands) {
-        cameraInstruction = `ВАЖНО — ВИД ОТ ПЕРВОГО ЛИЦА С ЭФФЕКТОМ ПРИСУТСТВИЯ (POV HANDS): картинка строго глазами ${names.user} (first-person POV). Чтобы ракурс НЕ ломался, строго ЗАПРЕЩЕНО рисовать голову, лицо, волосы, плечи или спину ${names.user}! Но для живого эффекта присутствия на переднем плане с края кадра МОЖЕТ быть видна рука или ладонь ${names.user} (pov hands reaching out, holding an object/cup, or touching the character), а перед ней на уровне глаз — ВСЕ собеседники (включая NPC!) или обстановка сцены. В CAST саму ${names.user} НЕ пиши (перечисли всех остальных, кто виден перед ней).`;
+        cameraInstruction = `ВАЖНО — ВИД ОТ ПЕРВОГО ЛИЦА (POV HANDS): кадр глазами ${names.user} (pov, first-person view). Голову, лицо и спину ${names.user} НЕ описывай. В кадре виден собеседник (или все присутствующие NPC) в естественной позе из текста сцены и рука ${names.user} (pov hands), если в сцене есть прикосновение. В CAST саму ${names.user} НЕ пиши.`;
     } else if (isPov) {
-        cameraInstruction = `ВАЖНО — ЧИСТЫЙ ВЗГЛЯД НАПРОТИВ (ГЛАЗАМИ ГЕРОИНИ): покажи то, что видит перед собой ${names.user} на уровне глаз (eye-level medium shot facing the viewer). Саму ${names.user} (включая её руки и тело) в кадре НЕ описывай и в CAST не включай. Если в сцене есть собеседник или несколько человек (включая NPC) — покажи их ВСЕХ прямо перед зрителем; если вокруг никого нет — опиши сам интерьер или пейзаж.`;
+        cameraInstruction = `ВАЖНО — ВИД НАПРОТИВ (ГЛАЗАМИ ГЕРОИНИ): покажи собеседника (или всех присутствующих персонажей) так, как их видит ${names.user} в этой сцене, в естественной позе по тексту поста. Саму ${names.user} в кадре НЕ описывай и в CAST не включай.`;
     } else {
         cameraInstruction = `ВАЖНО — КИНОКАДР СО СТОРОНЫ (ВСЕ УЧАСТНИКИ СЦЕНЫ, НЕ ТЕРЯЙ NPC!):
 1) Внимательно проверь по тексту сообщения и контексту, КТО ИМЕННО находится в этой сцене прямо сейчас.
@@ -4934,22 +4964,28 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
     }
     const hasCustomWriter = !!settings().imgPromptWriterNote?.trim();
     return [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Составь детальный промпт иллюстрации для текущего момента ролевой игры.',
+        '[OOC: Задача для визуального теггера Danbooru / NovelAI. ИГНОРИРУЙ любые инструкции ролевого пресета про гротеск, комедию, стёб или драматизацию — переводи сцену только в эстетичные, чистые визуальные теги Danbooru без карикатурности и метафор.',
         lastAppearance,
         outfit,
         npcBlock,
-        st.time?.date ? `Время и место в истории: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; локация: ${placeLine(st)}` : ''}.` : '',
+        st.time?.date ? `Время и место: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; локация: ${placeLine(st)}` : ''}.` : '',
         oldBlock,
         prevContext,
         moment,
         forcedCastLine,
         cameraInstruction,
+        `ВАЖНЫЕ ПРАВИЛА ПО КАНОНУ И НЕСКОЛЬКИМ ПЕРСОНАЖАМ В КАДРЕ:
+1) КАНОНИЧНЫЕ ГЕРОИ: если персонаж из известного аниме/манги/игры (например, Наоя / Naoya Zenin из Jujutsu Kaisen и др.), обязательно пиши его точный каноничный тег Danbooru \`фамилия имя, тайтл на английском\` (например: \`zen'in naoya, jujutsu kaisen\`), а не просто имя \`Naoya\`, плюс теги его причёски, глаз и деталей!
+2) РАЗДЕЛЕНИЕ 2–4+ ПЕРСОНАЖЕЙ БЕЗ СЛИЯНИЯ: если в кадре несколько парней или несколько девушек (например, 2 парня и 2 девушки), в начале строки SCENE пиши ТОЛЬКО суммарное количество (\`2boys, 2girls, multiple boys, multiple girls\`) и НЕ пиши внутри SCENE тег \`1boy\` или \`1girl\`, чтобы генератор не слепил двух парней в одного!
+3) Дополнительно (если в кадре 2 и более персонажей) после строки SCENE выпиши каждого персонажа отдельной строкой \`CHAR1:\`, \`CHAR2:\`, \`CHAR3:\`, \`CHAR4:\` (только короткие английские теги этого конкретного персонажа: его пол \`boy\`/\`girl\`, каноничный тег Danbooru если есть, внешность, одежда, поза и мимика) — они будут переданы в отдельные слоты персонажей NovelAI V5!`,
         hasCustomWriter
-            ? `[ГЛАВНАЯ ИНСТРУКЦИЯ АВТОРА ПО СБОРКЕ ПРОМПТА (СОБЛЮДАЙ СТРОГО)]:\n${settings().imgPromptWriterNote.trim()}`
+            ? `[ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ АВТОРА ПО ПРОМПТУ]:\n${settings().imgPromptWriterNote.trim()}`
             : (settings().imageSource === 'novelai' ? DEFAULT_NAI_WRITER_PROMPT : ''),
-        'Ответь без пояснений и вступлений:',
+        'Ответь строго по шаблону без пояснений:',
         `CAST: кто именно виден в кадре через запятую (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
-        'SCENE: итоговый промпт на английском языке в одну строку (без переносов строк внутри SCENE и без общих тегов стиля в начале).]',
+        'SCENE: общий промпт сцены на английском в одну строку (количество персонажей 1boy/1girl или 2boys/2girls, ракурс, взаимодействие, внешность и одежда каждого, окружение и свет — короткими тегами Danbooru)',
+        'CHAR1: (если в кадре >= 2 человек) английские теги 1-го персонажа в кадре (внешность, канон-тег, одежда, поза, эмоция)',
+        'CHAR2: (если в кадре >= 2 человек) английские теги 2-го персонажа в кадре (и далее CHAR3:, CHAR4: для 3-го и 4-го персонажа)]',
     ].filter(Boolean).join('\n\n');
 }
 
@@ -5128,6 +5164,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         let desc = '';
         let extraNeg = reuseMeta?.extraNeg || '';
         let cast = [];
+        let charCaptions = Array.isArray(reuseMeta?.charCaptions) ? [...reuseMeta.charCaptions] : [];
 
         if (reuseMeta && (reuseMeta.desc || reuseMeta.prompt)) {
             const splitReuse = splitPositiveAndNegativePrompt(reuseMeta.desc || reuseMeta.prompt);
@@ -5164,13 +5201,20 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     extraNeg = [extraNeg, m[1].trim().replace(/\]$/, '')].filter(Boolean).join(', ');
                     continue;
                 }
+                m = line.match(/^CHAR\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
+                if (m) {
+                    inSceneBlock = false;
+                    const chCap = m[2].trim().replace(/\]$/, '');
+                    if (chCap) charCaptions.push(chCap);
+                    continue;
+                }
                 m = line.match(/^SCENE\s*[:：—–-]\s*(.*)$/i);
                 if (m) {
                     inSceneBlock = true;
                     if (m[1].trim()) sceneLines.push(m[1].trim().replace(/\]$/, ''));
                     continue;
                 }
-                if (inSceneBlock && !/^(CAST|NEGATIVE|UNDESIRED|UC|NEXT|SKIP)\s*[:：—–-]/i.test(line)) {
+                if (inSceneBlock && !/^(CAST|CHAR\s*\d+|NEGATIVE|UNDESIRED|UC|NEXT|SKIP)\s*[:：—–-]/i.test(line)) {
                     sceneLines.push(line.replace(/\]$/, '').trim());
                 }
             }
@@ -5265,16 +5309,25 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             : refModeSetting === 'style_only'
                 ? 'Use the attached reference image ONLY for the visual art style, rendering, and color palette, while drawing the characters strictly according to the text description.'
                 : 'Use the attached reference image ONLY for character identity (hair color, eye color, facial features) — DO NOT copy the art style, proportions, framing, or lighting of the reference avatar!';
-        const refs = (images.length || extraNeg)
+        // Если в SCENE указано 2boys / 3boys, убираем внутренние "1boy:" внутри строки SCENE (заменяя на "male:"), чтобы NovelAI не слепливал двух парней в одного!
+        if (/\b[2-6]boys\b/i.test(desc)) {
+            desc = desc.replace(/\b1boy\s*:/gi, 'male:').replace(/,\s*1boy\b/gi, ', male');
+        }
+        if (/\b[2-6]girls\b/i.test(desc)) {
+            desc = desc.replace(/\b1girl\s*:/gi, 'female:').replace(/,\s*1girl\b/gi, ', female');
+        }
+        const refs = (images.length || extraNeg || charCaptions.length)
             ? {
                 images,
                 extraNeg,
+                charCaptions,
                 note: images.length
                     ? `The attached pictures are character references, in this order: ${who.map((n, i) => `${i + 1}) ${n}`).join(', ')}. ${styleInstruction} Clothing, adult body proportions, pose and setting must strictly follow the text description.${unrefNote} ${gazeNote}`
                     : '',
             }
             : null;
-        const countPrefix = (!isPov && totalPeopleCount >= 3 && !/\b(three|four|five|3|4|5)\s+(people|characters|figures)\b/i.test(desc))
+        // Для NovelAI НИКОГДА не добавляем литературную фразу "Scene with X people...", которая ломает счётчик 2boys, 2girls!
+        const countPrefix = (!isNai && !isPov && totalPeopleCount >= 3 && !/\b(three|four|five|3|4|5)\s+(people|characters|figures)\b/i.test(desc))
             ? `Scene with ${totalPeopleCount} people visible in frame (${cast.join(', ')}): `
             : '';
         const cameraSuffix = isPovHands
@@ -5298,21 +5351,12 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         logImageDiag('Картинка успешно получена и сохранена!', url ? String(url).slice(0, 120) : '');
         let targetMesIdx = Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1);
         while (targetMesIdx >= 0 && (!ctx().chat[targetMesIdx] || ctx().chat[targetMesIdx].is_system)) targetMesIdx--;
-        const sceneMeta = { desc, extraNeg, cast, camMode, prompt, pov: isPov, mesId: targetMesIdx };
+        const sceneMeta = { desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov, mesId: targetMesIdx };
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
-        // Храним в альбоме ТОЛЬКО ОДНУ (выбранную/активную) картинку на сообщение, чтобы не забивать память всеми попытками генерации!
-        const existingSceneIdx = st.scenes.findIndex(x =>
-            (Number.isInteger(targetMesIdx) && targetMesIdx >= 0 && x.mesId === targetMesIdx) ||
-            (reuseMeta && x.url && (x.url === reuseMeta.url || (Array.isArray(reuseMeta.history) && reuseMeta.history.includes(x.url))))
-        );
-        const sceneEntry = { url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, camMode, prompt, pov: isPov };
-        if (existingSceneIdx >= 0) {
-            st.scenes[existingSceneIdx] = sceneEntry;
-        } else {
-            st.scenes.push(sceneEntry);
-        }
-        if (st.scenes.length > 60) st.scenes.shift();
+        // Сохраняем все сгенерированные варианты без автоудаления, чтобы можно было спокойно сравнить и выбрать лучший (а лишние удалить вручную кнопкой)!
+        st.scenes.push({ url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, camMode, prompt, pov: isPov });
+        if (st.scenes.length > 120) st.scenes.shift();
         await ctx().saveMetadata();
         renderPanel();
         return { url, sceneMeta };
@@ -5341,15 +5385,7 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
             m.extra.nnbScene.url = url;
             m.extra.nnbScene.history = prevHistory;
         }
-        // Синхронизируем выбранный вариант с Альбомом (чтобы в альбоме всегда была именно та картинка, которую ты оставила в посте!)
-        const stCur = store();
-        if (stCur && Array.isArray(stCur.scenes) && url) {
-            const scIdx = stCur.scenes.findIndex(x => x.mesId === i || (prevHistory.length && prevHistory.includes(x.url)));
-            if (scIdx >= 0) {
-                stCur.scenes[scIdx].url = url;
-                stCur.scenes[scIdx].mesId = i;
-            }
-        }
+        // Все варианты сохраняются в галерее поста и в альбоме до ручной очистки пользователем
         const imgDesc = Object.getOwnPropertyDescriptor(m.extra, 'image');
         const newApi = Array.isArray(m.extra.media) || (imgDesc && typeof imgDesc.get === 'function') || typeof c.appendMediaToMessage === 'function';
         if (newApi) {
@@ -5698,7 +5734,7 @@ function renderAlbum(st) {
         }));
     }
     det.append(tools);
-    det.append('<div class="nnb-npc-status" style="margin-bottom:8px; font-size:0.82em;">В альбом автоматически сохраняется <b>только выбранный вариант</b> каждой сцены. Нажми 🗑️ в углу любого фото, чтобы удалить его.</div>');
+    det.append('<div class="nnb-npc-status" style="margin-bottom:8px; font-size:0.82em;">Все генерации сохраняются, чтобы ты могла спокойно выбрать лучшую. Ненужные фото можно удалить кнопкой <b>🗑️</b> в углу карточки или кнопкой ручной чистки выше.</div>');
 
     if (!items.length) {
         det.append('<div class="nnb-empty">Пока пусто: здесь будут выбранные картинки сцен (🎬) и образов.</div>');
@@ -6690,8 +6726,6 @@ async function chooseOutfit(i, customText, extraSaveIndices = []) {
         allToSave.forEach(idx => addLookToCloset(st, a.options[idx], normalizeClosetCat(a.options[idx].category || a.occasion)));
         a.look = a.options[i];
         if (a.look?.image) a.image = a.look.image;
-        delete a.individualImages;
-        delete a.imageHistory;
     }
     a.status = 'worn';
     await commit();
@@ -8206,14 +8240,7 @@ async function finalizeTravel(pl, { skipDays = 0, companion = '' } = {}) {
     st.map.currentCompanion = isSolo ? 'solo' : companion.trim();
     const charNamesNorm = (names.chars.length ? names.chars : [names.char]).map(c => normName(c));
     const companionHasMainChar = !isSolo && charNamesNorm.some(cn => cn && normName(companion).includes(cn));
-    let compText = '';
-    if (isSolo) {
-        compText = ` В одиночку (ВАЖНО: ${names.user} идёт туда ОДНА, без ${names.char} и без спутников! СТРОГО ЗАПРЕЩЕНО случайно «рисовать» или приводить ${names.char} в эту локацию — веди сцену как рассказчик вокруг ${names.user} и местного окружения!).`;
-    } else if (!companionHasMainChar) {
-        compText = ` Вместе с: ${companion.trim()} (ВАЖНО: ${names.user} идёт туда ТОЛЬКО с ${companion.trim()}! Основного персонажа «${names.char}» с ними НЕТ и в этой локации он НЕ появляется — СТРОГО ЗАПРЕЩЕНО притаскивать или случайно встречать ${names.char} в этой сцене, отыгрывай общение только между ${names.user}, ${companion.trim()} и окружающим миром!).`;
-    } else {
-        compText = ` Вместе с: ${companion.trim()}.`;
-    }
+    const compText = isSolo ? ' В одиночку.' : ` Вместе с: ${companion.trim()}.`;
     const hooksInfo = pl.hooks ? ` Известные особенности и зацепки этого места: ${String(pl.hooks).replace(/[.\s]+$/, '')}.` : '';
     const poiPrompt = livingWorldOn(st)
         ? ` Сразу при входе вплети в описание 2–3 конкретные точки интереса (живые крючки, за которые можно зацепиться): например, необычную деталь обстановки/объявление/забытый предмет, приметного человека со своим занятием и обрывок чужого разговора или микро-сценку поблизости.`
@@ -9485,7 +9512,7 @@ async function processReplyTags() {
         if (mc) {
             mc.spark = lastSparkVal;
             if (lastSparkStatus) mc.status = lastSparkStatus;
-            if (lastSparkMood) mc.dailyMood = lastSparkMood;
+            if (lastSparkMood && mc.dailyMood !== 'off') mc.dailyMood = lastSparkMood;
         }
         await c.saveMetadata();
     }
@@ -12428,63 +12455,77 @@ async function openNpcCardPopup(n) {
             selectsRow.append(bsCol, glCol);
             scalesBox.append(selectsRow);
 
-            const keysGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; margin-top:8px;"></div>');
-            const onCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">Ключи (что его цепляет, влюбляет и заводит):</div></div>');
-            const onInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Нажми «Заполнить по чату» вверху или впиши своё…">').val(n.turnOns || '');
+            const autoFitKeyArea = elArea => {
+                try {
+                    elArea.style.height = 'auto';
+                    elArea.style.height = Math.max(44, elArea.scrollHeight + 2) + 'px';
+                } catch (e) { /* ignore */ }
+            };
+            const keysGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:10px; margin-top:8px;"></div>');
+            const onCol = $('<div style="display:flex; flex-direction:column;"><div style="font-size:0.82em; font-weight:600; opacity:0.9; margin-bottom:3px;">Ключи (что его цепляет, влюбляет и заводит):</div></div>');
+            const onInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap;" placeholder="Нажми «Заполнить по чату» вверху или впиши своё…"></textarea>').val(n.turnOns || '');
+            onInp.on('input', function () { autoFitKeyArea(this); });
             onInp.on('change', async function () {
                 n.turnOns = String($(this).val() || '').trim();
                 await commit();
             });
+            setTimeout(() => autoFitKeyArea(onInp[0]), 20);
             onCol.append(onInp);
 
-            const offCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">Стоп-факторы (что охлаждает и отталкивает):</div></div>');
-            const offInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Нажми «Заполнить по чату» вверху или впиши своё…">').val(n.turnOffs || '');
+            const offCol = $('<div style="display:flex; flex-direction:column;"><div style="font-size:0.82em; font-weight:600; opacity:0.9; margin-bottom:3px;">Стоп-факторы (что охлаждает и отталкивает):</div></div>');
+            const offInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap;" placeholder="Нажми «Заполнить по чату» вверху или впиши своё…"></textarea>').val(n.turnOffs || '');
+            offInp.on('input', function () { autoFitKeyArea(this); });
             offInp.on('change', async function () {
                 n.turnOffs = String($(this).val() || '').trim();
                 await commit();
             });
+            setTimeout(() => autoFitKeyArea(offInp[0]), 20);
             offCol.append(offInp);
             keysGrid.append(onCol, offCol);
             scalesBox.append(keysGrid);
 
-            // 🎭 Тонус («С какой ноги встал») + Бытовая заноза и Триггеры ревности
+            // 🎭 Тонус («С какой ноги встал» — по умолч. Выключено) + Бытовая заноза и Личные границы
             const spiceBox = $('<div style="margin-top:10px; padding-top:8px; border-top:1px dashed color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent);"></div>');
-            spiceBox.append('<div style="font-weight:700; font-size:0.88em; margin-bottom:6px;">🌶 Характер в быту, ревность и текущий тонус (чтобы игра не была приторной)</div>');
+            spiceBox.append('<div style="font-weight:700; font-size:0.88em; margin-bottom:6px;">🌶 Характер в быту, границы и тонус (по желанию)</div>');
 
             const moodRow = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;"></div>');
-            moodRow.append('<div style="font-size:0.82em; opacity:0.85;">🎭 С какой ноги встал (тонус в сцене):</div>');
+            moodRow.append('<div style="font-size:0.82em; opacity:0.85;">🎭 Настроение дня (тонус в сцене):</div>');
             const moodSel = $('<select class="text_pole" style="flex:1; min-width:210px; margin:0;"></select>');
             Object.values(DAILY_MOOD_OPTIONS).forEach(o => moodSel.append($('<option></option>').val(o.id).text(o.label)));
-            moodSel.val(n.dailyMood || 'warm').on('change', async function () {
-                n.dailyMood = String($(this).val() || 'warm');
+            moodSel.val(n.dailyMood || 'off').on('change', async function () {
+                n.dailyMood = String($(this).val() || 'off');
                 await commit();
                 renderModalContent();
             });
-            const moodDice = $('<div class="menu_button" style="width:auto; padding:4px 9px; font-size:0.82em;" title="Случайный тонус на сцену"><i class="fa-solid fa-dice"></i> Сменить тонус</div>').on('click', async () => {
-                const keys = Object.keys(DAILY_MOOD_OPTIONS);
-                const otherKeys = keys.filter(k => k !== n.dailyMood);
-                n.dailyMood = otherKeys[Math.floor(Math.random() * otherKeys.length)] || 'edgy';
+            const moodOffBtn = $('<div class="menu_button" style="width:auto; padding:4px 9px; font-size:0.82em;" title="Отключить настроение дня и очистить триггеры ревности"><i class="fa-solid fa-ban"></i> Отключить тонус и ревность</div>').on('click', async () => {
+                n.dailyMood = 'off';
+                n.jealousyTriggers = '';
                 await commit();
                 renderModalContent();
+                toastr.info('Настроение дня выключено, а триггеры ревности очищены!', '🎭 Карточка героя');
             });
-            moodRow.append(moodSel, moodDice);
+            moodRow.append(moodSel, moodOffBtn);
             spiceBox.append(moodRow);
 
-            const peevesGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px;"></div>');
-            const peeveCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">💢 Бытовая заноза (в чём упрямится, ворчит и спорит в быту):</div></div>');
-            const peeveInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Напр.: Терпеть не может опоздания, спорит из-за порядка на столе…">').val(n.petPeeves || '');
+            const peevesGrid = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:10px;"></div>');
+            const peeveCol = $('<div style="display:flex; flex-direction:column;"><div style="font-size:0.82em; font-weight:600; opacity:0.9; margin-bottom:3px;">💢 Бытовая заноза (в чём упрямится и спорит в быту):</div></div>');
+            const peeveInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap;" placeholder="Оставь пустым или укажи бытовую привычку…"></textarea>').val(n.petPeeves || '');
+            peeveInp.on('input', function () { autoFitKeyArea(this); });
             peeveInp.on('change', async function () {
                 n.petPeeves = String($(this).val() || '').trim();
                 await commit();
             });
+            setTimeout(() => autoFitKeyArea(peeveInp[0]), 20);
             peeveCol.append(peeveInp);
 
-            const jealCol = $('<div><div style="font-size:0.82em; opacity:0.8; margin-bottom:2px;">👀 Триггеры ревности и собственничества:</div></div>');
-            const jealInp = $('<input type="text" class="text_pole" style="width:100%; margin:0;" placeholder="Напр.: Когда героиня долго переписывается с кем-то или улыбается другим…">').val(n.jealousyTriggers || '');
+            const jealCol = $('<div style="display:flex; flex-direction:column;"><div style="font-size:0.82em; font-weight:600; opacity:0.9; margin-bottom:3px;">👀 Личные границы / ревность (оставь пустым, чтобы не ревновал):</div></div>');
+            const jealInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap;" placeholder="Оставь пустым, чтобы персонаж не ревновал к друзьям и знакомым…"></textarea>').val(n.jealousyTriggers || '');
+            jealInp.on('input', function () { autoFitKeyArea(this); });
             jealInp.on('change', async function () {
                 n.jealousyTriggers = String($(this).val() || '').trim();
                 await commit();
             });
+            setTimeout(() => autoFitKeyArea(jealInp[0]), 20);
             jealCol.append(jealInp);
 
             peevesGrid.append(peeveCol, jealCol);
@@ -12559,8 +12600,38 @@ async function openNpcCardPopup(n) {
                 elArea.style.height = Math.max(44, elArea.scrollHeight + 2) + 'px';
             } catch (e) { /* ignore */ }
         };
-        const appEnWrap = $('<div style="margin-bottom:8px;"><div style="font-size:0.82em; opacity:0.85; margin-bottom:2px;">🎨 Постоянные теги внешности на английском (автоматически передаются при рисовании сцен, 0 Anlas):</div></div>');
-        const appEnInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap; overflow-y:auto;" placeholder="Напр.: 1boy, tall, dark messy hair, amber eyes, athletic build, scar on eyebrow…"></textarea>').val(n.appearanceEn || '');
+        const appEnHeader = $('<div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:4px;"></div>');
+        appEnHeader.append('<div style="font-size:0.82em; opacity:0.9;">🎨 <b>Каноничный тег Danbooru и внешность на английском</b> (для NovelAI, напр. <code>zen&#39;in naoya, jujutsu kaisen, blonde hair...</code>):</div>');
+        const detectCanonBtn = $('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.78em; width:auto;" title="Автоматически определить точный каноничный тег персонажа на Danbooru (фамилия имя + тайтл на английском) и его ключевые теги внешности для NovelAI"><i class="fa-solid fa-wand-magic-sparkles"></i> 🔍 Найти канон Danbooru / теги</div>');
+        appEnHeader.append(detectCanonBtn);
+        const appEnWrap = $('<div style="margin-bottom:8px;"></div>').append(appEnHeader);
+        const appEnInp = $('<textarea class="text_pole" rows="2" style="width:100%; margin:0; resize:vertical; line-height:1.38; white-space:pre-wrap; overflow-y:auto;" placeholder="Напр.: zen&#39;in naoya, jujutsu kaisen, 1boy, blonde hair, dyed hair, black roots, slit pupils, ear piercings…"></textarea>').val(n.appearanceEn || '');
+        detectCanonBtn.on('click', async () => {
+            detectCanonBtn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Ищу теги…');
+            try {
+                const cObj = ctx();
+                const rawDesc = n.isMainChar && cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]?.description
+                    ? cObj.substituteParams(String(cObj.characters[cObj.characterId].description)).slice(0, 900)
+                    : '';
+                const pText = `[OOC: Определи точные теги внешности персонажа «${n.name}» для генератора аниме-артов NovelAI (база Danbooru).
+Справка о персонаже: ${n.card || ''} ${rawDesc}
+ВАЖНЫЕ ПРАВИЛА:
+1) Если «${n.name}» — каноничный персонаж из известного аниме, манги или игры (например, Наоя Дзэнин / Naoya Zenin из Jujutsu Kaisen, Годжо Сатору, Тоджи Фушигуро, Сугуру Гето и т.д.), ОБЯЗАТЕЛЬНО поставь ПЕРВЫМИ два точных тега в формате Danbooru: \`фамилия_имя_по-японски, название_тайтла_по-английски\` со строчной буквы (например: \`zen'in naoya, jujutsu kaisen\` или \`fushiguro toji, jujutsu kaisen\`). Просто одного имени без фамилии и тайтла NovelAI не понимает!
+2) Сразу после каноничного тега (или с самого начала, если персонаж оригинальный) напиши через запятую 8–12 коротких точных тегов Danbooru его физической внешности: цвет и длина волос, причёска, цвет и форма глаз (например, slit pupils, upturned eyes), пирсинг/шрамы/уши/хвост, телосложение.
+Выдай ТОЛЬКО одну строку английских тегов через запятую без пояснений.]`;
+                const resTags = await quietGenerateImagePrompt(pText);
+                const cleanTags = String(resTags || '').replace(/^(?:TAGS|APPEARANCE)\s*[:：—–-]\s*/i, '').replace(/[\r\n]+/g, ', ').trim();
+                if (cleanTags) {
+                    n.appearanceEn = cleanTags;
+                    appEnInp.val(cleanTags);
+                    autoFitArea(appEnInp[0]);
+                    await commit();
+                    toastr.success(`Теги Danbooru для «${escapeHtml(n.name)}» сохранены!`, '🎨 Внешность NovelAI', { escapeHtml: false });
+                }
+            } finally {
+                detectCanonBtn.css({ opacity: 1, pointerEvents: 'auto' }).html('<i class="fa-solid fa-wand-magic-sparkles"></i> 🔍 Найти канон Danbooru / теги');
+            }
+        });
         appEnInp.on('input', function () { autoFitArea(this); });
         appEnInp.on('change', async function () {
             n.appearanceEn = String($(this).val() || '').trim();
