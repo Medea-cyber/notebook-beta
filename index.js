@@ -289,16 +289,13 @@ const ARC_INJECT_HEADER = '[Развитие персонажей. Карточ�
 
 const NPC_INJECT_HEADER = `[Персонажи истории, их ключи к сближению и живое состояние тела — это канон:
 1) ОРИЕНТИР ПО ЛОГИКЕ СЦЕНЫ (БЕЗ ИСКУССТВЕННЫХ ТОРМОЗОВ): записанная в карточке цифра состояния тела — это лишь отметка с прошлого шага, а НЕ ограничение и НЕ потолок! Всегда определяй физическое состояние и накал по тому, что РЕАЛЬНО происходит прямо сейчас в сцене:
-   — Если по логике текущего момента (страстные поцелуи, откровенные ласки, близость или сильное попадание в его «ключи») персонаж уже должен быть сильно взволнован или НА ГРАНИ — ни в коем случае не застревай на «лёгком ветерке», сразу отыгрывай реальный высокий накал (60–84 = сильное волнение и сбившееся дыхание; 85–100 = на грани / пик страсти и желания)!
-   — Если же сцена сейчас обычная, бытовая или только зарождается лёгкий флирт — не пиши шаблонное «болезненное желание» на пустом месте, а отыгрывай спокойствие (0–14), лёгкий ветерок (15–34) или мягкое, уютное тепло без спешки (35–59).
-   — Когда интимная сцена завершилась и герои перешли к отдыху, душу или разговору — естественно переводи тело в мягкое расслабленное послевкусие (0–15).
-2) ЖИВЫЕ ЭМОЦИИ, БЫТОВЫЕ ССОРЫ, РЕВНОСТЬ И НЕДОПОНИМАНИЯ (БЕЗ ПРИТОРНОСТИ И БЕЗ УГРОЗЫ ОТНОШЕНИЯМ):
-   — Персонажи живые, со своим характером и гордостью: они НЕ должны быть приторно-покладистыми и мгновенно во всём соглашаться с {{user}}.
-   — Если в сцене задета «бытовая заноза» персонажа (в чём он упрямится), сработал его триггер ревности/собственничества, возникло двусмысленное недопонимание или у него сейчас непростой тонус («на взводе», «ревнивый», «упрямый», «задетый») — НЕ сглаживай острый угол за один пост! Позволь ему упереться, поворчать, поспорить по бытовому поводу, ревниво прищуриться или показать характер на протяжении всей сцены, пока герои сами эмоционально не разрядят обстановку.
-   — ЖЕЛЕЗНОЕ ПРАВИЛО БЕЗОПАСНОСТИ: любые бытовые ссоры, ревность, упрямство и недопонимания происходят ТОЛЬКО внутри надёжной привязанности — без угроз жизни, без жестокости/абьюза, без измен и без реальной угрозы разрыва отношений. Это живая перчинка, которая подогревает химию и ведёт к яркому примирению.
-3) ЖИВОЕ АВТО-ОБНОВЛЕНИЕ ШКАЛЫ И ТОНУСА В КАЖДОМ ПОСТЕ: в самом конце своего ответа добавь короткую скрытую метку с актуальным состоянием тела (от 0 до 100), текущим статусом и (по желанию) текущим эмоциональным тонусом основного персонажа прямо в этой сцене:
-<!--SPARK: число_от_0_до_100 | краткий статус в 3–6 словах | тонус: тёплый/взвод/ревность/упрямый/задетый-->
-(например: <!--SPARK: 92 | на грани в твоих руках | тёплый--> в разгар страсти, <!--SPARK: 25 | спорит из-за планов на вечер | упрямый--> в бытовой перепалке, или <!--SPARK: 40 | хмуро косится на твоего собеседника | ревность--> при вспышке ревности). Метка невидима для игрока.]`;
+   — Если по логике текущего момента (страстные поцелуи, откровенные ласки, близость или сильное попадание в его «ключи») персонаж уже должен быть сильно взволнован или НА ГРАНИ — сразу отыгрывай реальный высокий накал (60–84 = сильное волнение и сбившееся дыхание; 85–100 = на грани / пик страсти и желания)!
+   — Когда интимная сцена завершилась и герои перешли к отдыху или разговору — естественно переводи тело в мягкое расслабленное послевкусие (0–15).
+2) БЕЗ ЗАЦИКЛИВАНИЯ НА МЕЛКИХ ДЕТАЛЯХ И ПРИВЫЧКАХ:
+   — Упомянутые в карточках аксессуары, украшения (вроде браслетов/колец), напитки (вроде кофе) и вкусы — это пассивный справочник образа, а НЕ чек-лист на каждый ответ! СТРОГО ЗАПРЕЩЕНО приплетать и мусолить один и тот же аксессуар, напиток или деталь внешности персонажа в каждом посте подряд.
+3) АВТО-ОБНОВЛЕНИЕ ШКАЛЫ В КОНЦЕ ПОСТА: в самом конце ответа добавь короткую скрытую метку с актуальным состоянием тела (от 0 до 100) и текущим статусом основного персонажа прямо в этой сцене:
+<!--SPARK: число_от_0_до_100 | краткий статус в 3–6 словах-->
+Метка невидима для игрока.]`;
 
 const INTRIGUE_INJECT_HEADER = '[Тайны и интриги — секрет автора, игрок правды не знает. Раскрывай постепенно: через намёки, улики, оговорки NPC, слухи (в том числе ложные). Не выдавай правду целиком раньше времени и не форсируй.]';
 
@@ -708,11 +705,11 @@ const GENRE_HINTS = {
           }
       }
       lines.push('');
-      lines.push('Команды для времени и места:');
+      lines.push('Команды для времени и места (ВАЖНО: сначала запиши EVENT для текущего дня, и только если после этих событий герои легли спать и наступил новый день — ниже напиши TIME +N дней!):');
+      lines.push('EVENT: краткая хроника ключевых сцен, разговоров, встреч и событий, произошедших в чате с прошлой проверки (1–2 предложения в одну строку — пиши ОБЯЗАТЕЛЬНО при каждой проверке, чтобы в летописи текущего дня не пропадали события!). Дату плагин поставит сам; если событие было в другой день — EVENT ДД.ММ: текст.');
       lines.push('TIME +N дней / недель / месяцев — сколько сюжетного времени прошло в чате с последней известной даты (оцени по событиям: ночёвки, «на следующий день», таймскипы). Если прошло меньше суток — не пиши ничего.');
       lines.push('DATE ДД.ММ.ГГГГ — если в чате прямо названа дата или нужно задать её впервые.');
       lines.push('PLACE Страна: Город — если место задано впервые или персонажи переехали.');
-      lines.push('EVENT: важное событие из чата с прошлой проверки — знакомство, ссора, признание, первый поцелуй, переезд, поездка, праздник. Одна строка, кратко. Дату плагин поставит сам; если событие было не сегодня — EVENT ДД.ММ: текст. Не повторяй то, что уже есть в хронике.');
       const recent = chronicleLines(st, 6);
       if (recent.length) { lines.push('Последнее в хронике:'); recent.forEach(l => lines.push(l)); }
       return lines.join('\n');
@@ -727,6 +724,7 @@ const GENRE_HINTS = {
           const dur = parseDuration(m[1]);
           if (dur && (dur.days > 0 || dur.months > 0)) {
               const before = t.date;
+              if (res && !res._dateBeforeMove) res._dateBeforeMove = before;
               t.date = applyDuration(t.date, dur);
               res.timeMoved = daysBetween(before, t.date);
           }
@@ -763,14 +761,16 @@ const GENRE_HINTS = {
           t.city = city.trim();
           return true;
       }
-      if ((m = line.match(/^EVENT\s*\[?(\d{1,2}[.\-/]\d{1,2}(?:[.\-/]\d{2,4})?)?\]?\s*[:：—–-]\s*(.+)$/i))) {
+      if ((m = line.match(/^EVENT(?:\s+\[?([^\]:：—–-]{1,30}?)\]?)?\s*[:：—–-]\s*(.+)$/i))) {
           if (!st.direction.time || !t.date) return true;
-          let date = t.date;
-          if (m[1]) {
-              const d = parseDateText(m[1].replace(/[-/]/g, '.'), '1900-01-01');
+          // Если в этом же размышлении перед EVENT сработала команда TIME +N дней, привязываем события прошедших сообщений к дате ДО сдвига (если дата не указана явно)
+          let date = res?._dateBeforeMove || t.date;
+          if (m[1] && /\d/.test(m[1])) {
+              const rawDateStr = m[1].trim();
+              const d = parseDateText(rawDateStr.replace(/[-/]/g, '.'), '1900-01-01');
               if (d) {
-                  // год не указан — берём ближайшую такую дату не позже текущей
-                  date = /\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4}/.test(m[1]) ? d : `${t.date.slice(0, 4)}${d.slice(4)}`;
+                  const hasExplicitYear = /\b\d{4}\b|\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4}/.test(rawDateStr);
+                  date = hasExplicitYear ? d : `${t.date.slice(0, 4)}${d.slice(4)}`;
                   if (date > t.date) date = `${Number(t.date.slice(0, 4)) - 1}${d.slice(4)}`;
               }
           }
@@ -1855,9 +1855,9 @@ function formatNpcScaleSummary(n) {
             parts.push(`Контраст в жизни и наедине: ${pubText}Роль в близости: ${irObj.label} (${irObj.desc}). Атмосфера близости: ${isObj.label} (${isObj.desc}).${tagsText}`);
         }
     }
-    if (n.dream) parts.push(`Личная мечта / цель в жизни: ${n.dream}.`);
+    if (n.dream) parts.push(`Личная мечта и цель в жизни (время от времени может естественно всплывать в его разговорах, планах и поступках по ходу ролевой): ${n.dream}.`);
     if (n.fear) parts.push(`Скрытый страх / уязвимость: ${n.fear}.`);
-    if (n.likes) parts.push(`Любит (цвета, стиль одежды, еда — замечает это у {{user}}): ${n.likes}.`);
+    if (n.likes) parts.push(`Вкусы и предпочтения (фоновая справка, не упоминать в каждом посте): ${n.likes}.`);
     if (n.dislikes) parts.push(`Не любит: ${n.dislikes}.`);
     return parts.join(' ');
 }
@@ -1876,8 +1876,9 @@ function formatNpcs(list, forThink = false, st = store()) {
     return all.map(n => {
         ensureNpcScales(n, st);
         const favTag = n.favorite ? ' [❤️ ГЛАВНЫЙ ФАВОРИТ ИГРОКА]' : '';
-        let line = `— ${n.name}${favTag}: ${n.card}`;
-        if (forThink && n.locked) line += ' (карточку правил игрок — не меняй её, только NPCSTATE и SCALE)';
+        const formattedCard = String(n.card || '').trim().replace(/\n+/g, '\n   ');
+        let line = `— ${n.name}${favTag}: ${formattedCard}`;
+        if (forThink) line += ' (существующий текст описания НЕ сокращай и НЕ переписывай — если в чате открылись важные новые факты об этом герое, добавь их через NPCFACT)';
         if (n.status) line += `\n   Сейчас: ${n.status}`;
         line += `\n   ${formatNpcScaleSummary(n)}`;
         return line;
@@ -1896,10 +1897,11 @@ ${formatNpcs(st.npcs, true, st)}
 ${formatRelationships(st, true)}
 
 Команды для них (с новой строки, вместе с остальными):
-NPC [Имя]: кто это, внешность, характер, отношение к {{user}} — 1–3 предложения.
+NPC [Имя]: развёрнутое, подробное описание для НОВЫХ персонажей, которых ещё нет в списке выше (впиши ВСЕ важные детали внешности, биографии, характера, профессии и фактов, которые дал игрок, в одну строку без лимита по числу предложений).
+NPCFACT [Имя]: новый важный факт для УЖЕ СУЩЕСТВУЮЩЕГО персонажа (1–4 предложения в одну строку). Используй ТОЛЬКО когда в последних сообщениях игрок или сюжет раскрыл существенную деталь биографии, внешности, прошлого, характера или важный поворот в отношениях, которых ещё нет в его карточке. Старое описание при этом НЕ стирается — новый факт аккуратно добавится к нему в конец (мелкую бытовую ерунду на одну сцену НЕ записывай!).
 NPCSTATE [Имя]: что персонаж делает ПРЯМО СЕЙЧАС в последних 1–2 сообщениях чата (обязательно обновляй для ${charName} и присутствующих в сцене NPC! Если прежняя сцена — например, близость, спор или поездка — уже закончилась несколько постов назад, замени старый статус на то, чем персонаж занят прямо сейчас).
-KEYS [${charName}]: цепляет=2–3 конкретные вещи, жеста или черты поведения, от которых он тает или загорается | охлаждает=1–2 вещи, которые его отталкивают | заноза=1–2 бытовые привычки или темы, в которых он упрямится, ворчит и спорит с {{user}} | ревность=1–2 ситуации, от которых в нём просыпается ревность и собственничество | тонус=тёплый/взвод/ревность/упрямый/задетый | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс — заполни и обновляй ТОЛЬКО для основного персонажа (${charName}).
-PROFILE [Имя]: мечта=к чему стремится в жизни сам по себе | страх=чего боится | любит=любимые цвета, стиль одежды, еда, погода | не_любит=что не переносит — личные цели и вкусы для ${charName} и важных NPC.
+KEYS [${charName}]: цепляет=общие постоянные черты и жесты, которые его привлекают в целом | охлаждает=общие стоп-факторы характера | заноза=общая постоянная черта характера и привычка, в которой он обычно упрямится или ворчит в быту В ЦЕЛОМ (СТРОГО ЗАПРЕЩЕНО вписывать сюда разовые предметы или мелочи из последнего поста вроде конкретного свитера или чашки!) | ревность=общее отношение к личным границам и ревности В ЦЕЛОМ по характеру (БЕЗ привязки к сиюминутным перепискам или именам из последней сцены!) | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс — заполняй ТОЛЬКО если эти поля у ${charName} ещё пустые.
+PROFILE [Имя]: мечта=к чему стремится в жизни сам по себе (чтобы персонаж время от времени вспоминал о ней или делал к ней шаги в самой ролевой) | страх=чего боится | любит=любимые цвета, стиль одежды, еда, погода | не_любит=что не переносит — постоянные личные цели и вкусы для ${charName} и важных NPC.
 SCALE [Имя]: дружба=число_или_сдвиг | романтика=число_или_сдвиг | тело=число_или_сдвиг — обнови шкалы:
 — Для обычных NPC меняй ТОЛЬКО «дружба=...» (романтику и состояние тела обычным NPC НЕ ставь!).
 — Для ${charName} (и отмеченных ❤️ фаворитов) обновляй дружбу, романтику и «тело» ТОЧНЫМ ЧИСЛОМ от 0 до 100 по тому, что реально происходит в последних 1–2 сообщениях чата:
@@ -2264,8 +2266,13 @@ async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, lab
     throw lastErr || new Error(`Профиль «${prof?.name || pid}» вернул пустой ответ`);
 }
 
+const SELF_CONTAINED_PROMPT_MARKER = '<!--SELF_CONTAINED_CONTEXT-->';
 function buildStandaloneContextPrompt(taskPrompt) {
     const c = ctx();
+    const rawStr = String(taskPrompt || '');
+    if (rawStr.includes(SELF_CONTAINED_PROMPT_MARKER)) {
+        return c.substituteParams(rawStr.replace(SELF_CONTAINED_PROMPT_MARKER, '').trim());
+    }
     const s = settings();
     const names = storyNames();
     const parts = [];
@@ -2343,12 +2350,16 @@ async function generateViaStandaloneTextSource(taskPrompt) {
     return await sendViaTavernProfile(src, fullPrompt, 4096, 'профиль подключения блокнота');
 }
 
+let ownPromptIsSelfContained = false;
 async function quietGenerateOnce(prompt) {
     const c = ctx();
     const s = settings();
     const fn = c.generateQuietPrompt;
+    const rawPromptStr = String(prompt || '');
+    ownPromptIsSelfContained = rawPromptStr.includes(SELF_CONTAINED_PROMPT_MARKER);
+    const cleanPromptForChat = c.substituteParams(rawPromptStr.replace(SELF_CONTAINED_PROMPT_MARKER, '').trim());
     ownRequest = true;
-    ownPrompt = String(prompt || '');
+    ownPrompt = cleanPromptForChat;
     // Временно отключаем инъекцию вариантов хода и перемотки/тренда, чтобы они не попадали в фоновые запросы блокнота
     c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
     if (ffPending) c.setExtensionPrompt(INJECT_FF_KEY, '', POS_IN_CHAT, 0);
@@ -2365,12 +2376,13 @@ async function quietGenerateOnce(prompt) {
             }
         }
         if (fn.length === 0) {
-            return await fn({ quietPrompt: prompt });
+            return await fn({ quietPrompt: cleanPromptForChat });
         }
-        return await fn(prompt, false, false);
+        return await fn(cleanPromptForChat, false, false);
     } finally {
         ownRequest = false;
         ownPrompt = '';
+        ownPromptIsSelfContained = false;
         const st = store();
         if (s.enabled && s.actionPrompts && st && !busy) {
             c.setExtensionPrompt(ACTION_INJECT_KEY, buildActionPromptsInjection(), POS_IN_CHAT, 0, false, Number(s.role) || 0);
@@ -2408,6 +2420,13 @@ function fixOwnPromptRole(data) {
         const m = msgs[i];
         const contentStr = msgContentText(m?.content);
         if (!contentStr || !contentStr.includes(marker)) continue;
+        if (ownRequest && ownPromptIsSelfContained) {
+            // Для самодостаточных запросов (Саммари всей истории, Дневник НПС, Досье героя) оставляем в запросе ТОЛЬКО сам собранный промпт,
+            // чтобы 50 сырых сообщений чата и пресет персонажа не переполняли контекст и не сбивали модель!
+            const selfContent = typeof m.content === 'string' ? m.content : contentStr;
+            msgs.splice(0, msgs.length, { role: 'user', content: selfContent });
+            return;
+        }
         if (m.role !== 'system') return;
         const prev = msgs[i - 1];
         if (prev && prev.role === 'user' && typeof prev.content === 'string' && typeof m.content === 'string') {
@@ -2554,7 +2573,24 @@ function parseAndApply(raw) {
 
     if (!text || /^NONE[.!]?$/i.test(text)) return res;
 
-    for (let line of text.split('\n')) {
+    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|TASK_?DONE|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|NONE)(?:\b|[\s\[:：—–-])/i;
+    const mergedLines = [];
+    for (const rawLine of text.split(/\r?\n/)) {
+        const cleaned = bracketTag(rawLine.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, '')).trim();
+        if (!cleaned || /^\[OOC:/i.test(cleaned) || /^\]$/.test(cleaned) || /^#+$/.test(cleaned)) continue;
+        if (CMD_START_RE.test(cleaned) || !mergedLines.length) {
+            mergedLines.push(cleaned);
+        } else {
+            const prev = mergedLines[mergedLines.length - 1];
+            if (/[:：—–-]\s*$/.test(prev)) {
+                mergedLines[mergedLines.length - 1] = `${prev} ${cleaned}`;
+            } else {
+                mergedLines[mergedLines.length - 1] = `${prev} // ${cleaned}`;
+            }
+        }
+    }
+
+    for (let line of mergedLines) {
         line = bracketTag(line.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, ''));
         if (!line) continue;
         if (applyTimeCommand(st, line, res)) continue;
@@ -2720,19 +2756,63 @@ function parseAndApply(raw) {
             continue;
         }
 
-        m = line.match(/^NPC(?!STATE)(?=[\s\[:：])\s*[:：]?\s*\[?([^\]:：—–\n]{1,60}?)\]?\s*(?:[:：]|\s[—–-]\s)\s*(.+)$/i);
+        m = line.match(/^NPCFACT\s*[:：]?\s*(?:\[([^\]]{1,60})\]|([^:：—–\n]{1,45}?))\s*(?:[:：]|\s+[—–-]\s+)\s*(.+)$/i);
         if (m) {
             if (npcsOn) {
-                const name = m[1].trim();
-                const n = findNpc(st, name);
+                const name = (m[1] || m[2] || '').trim();
+                const factText = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
+                if (!name || !factText || /^\(?нет\)?$/i.test(factText) || /^пусто$/i.test(factText)) continue;
+                const mc = ensureMainCharCard(st);
+                const n = findNpc(st, name) || (mc && normName(mc.name) === normName(name) ? mc : null);
+                if (n) {
+                    const oldCard = String(n.card || '').trim();
+                    const normOld = oldCard.toLowerCase().replace(/\s+/g, ' ');
+                    const normFact = factText.toLowerCase().replace(/\s+/g, ' ');
+                    if (!oldCard) {
+                        n.card = factText;
+                        res.npcUpd++;
+                    } else if (!normOld.includes(normFact.slice(0, Math.min(45, normFact.length)))) {
+                        n.card = `${oldCard}\n${factText}`.trim();
+                        res.npcUpd++;
+                    }
+                }
+            }
+            continue;
+        }
+
+        m = line.match(/^NPC(?!STATE|FACT)\s*[:：]?\s*(?:\[([^\]]{1,60})\]|([^:：—–\n]{1,45}?))\s*(?:[:：]|\s+[—–-]\s+)\s*(.+)$/i);
+        if (m) {
+            if (npcsOn) {
+                const name = (m[1] || m[2] || '').trim();
+                const incomingCard = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
+                if (!name || !incomingCard) continue;
+                const mc = ensureMainCharCard(st);
+                const n = findNpc(st, name) || (mc && normName(mc.name) === normName(name) ? mc : null);
                 if (!n) {
                     if (st.npcs.length < (Number(s.maxNpcs) || 20)) {
-                        st.npcs.push({ id: st.nextNpcId++, name, card: m[2].trim(), status: '', locked: false, at: len });
+                        st.npcs.push({ id: st.nextNpcId++, name, card: incomingCard, status: '', locked: true, at: len });
                         res.npcNew++;
                     }
+                } else if (n._replaceCardFull) {
+                    if (incomingCard.length >= String(n.card || '').trim().length * 0.8 || String(n.card || '').trim().length < 50) {
+                        n.card = incomingCard;
+                        res.npcUpd++;
+                    } else {
+                        n.card = `${String(n.card || '').trim()}\n${incomingCard}`.trim();
+                        res.npcUpd++;
+                    }
                 } else if (!n.locked) {
-                    n.card = m[2].trim();
-                    res.npcUpd++;
+                    const oldCard = String(n.card || '').trim();
+                    // Защита от потери и размывания описания: никогда не заменяем уже существующее описание более коротким куском!
+                    if (!oldCard || oldCard.length < 35) {
+                        if (incomingCard.length > oldCard.length) {
+                            n.card = incomingCard;
+                            res.npcUpd++;
+                        }
+                    } else if (incomingCard.length > oldCard.length * 1.15 && !oldCard.toLowerCase().includes(incomingCard.slice(0, 40).toLowerCase())) {
+                        n.card = `${oldCard}\n${incomingCard}`.trim();
+                        res.npcUpd++;
+                    }
                 }
             }
             continue;
@@ -2761,13 +2841,13 @@ function parseAndApply(raw) {
                     const parts = m[2].split('|').map(x => x.trim());
                     parts.forEach(p => {
                         const km = p.match(/^(цепляет|ключи|нравится|turnons?)\s*[=:]\s*(.+)$/i);
-                        if (km) { n.turnOns = km[2].trim().replace(/\]$/, ''); return; }
+                        if (km && (!n.turnOns || n._allowOverwriteKeys)) { n.turnOns = km[2].trim().replace(/\]$/, ''); return; }
                         const om = p.match(/^(охлаждает|отталкивает|стоп|turnoffs?)\s*[=:]\s*(.+)$/i);
-                        if (om) { n.turnOffs = om[2].trim().replace(/\]$/, ''); return; }
+                        if (om && (!n.turnOffs || n._allowOverwriteKeys)) { n.turnOffs = om[2].trim().replace(/\]$/, ''); return; }
                         const pm = p.match(/^(заноза|упрямство|пунктик|раздражает|быт|petpeeves?)\s*[=:]\s*(.+)$/i);
-                        if (pm) { n.petPeeves = pm[2].trim().replace(/\]$/, ''); return; }
+                        if (pm && (!n.petPeeves || n._allowOverwriteKeys)) { n.petPeeves = pm[2].trim().replace(/\]$/, ''); return; }
                         const jm = p.match(/^(ревность|собственничество|ревнует|jealousy)\s*[=:]\s*(.+)$/i);
-                        if (jm) { n.jealousyTriggers = jm[2].trim().replace(/\]$/, ''); return; }
+                        if (jm && (!n.jealousyTriggers || n._allowOverwriteKeys)) { n.jealousyTriggers = jm[2].trim().replace(/\]$/, ''); return; }
                         const mm = p.match(/^(тонус|настроение|нога|mood)\s*[=:]\s*(.+)$/i);
                         if (mm) {
                             if (n.dailyMood !== 'off') {
@@ -3423,6 +3503,68 @@ function parseFastForward(raw) {
     return out;
 }
 
+// ---------- 🎬 За кадром: что происходит у остальных героев ----------
+async function offscreenCutaway() {
+    const s = settings();
+    if (!s.enabled) return toastr.info('Блокнот выключен', 'Блокнот рассказчика');
+    const c = ctx();
+    const st = store();
+    if (!st || !c.chat?.length) return toastr.warning('Сначала открой чат', '🎬 За кадром');
+
+    const names = storyNames();
+    const mc = ensureMainCharCard(st);
+    const allHeroes = [...(mc ? [mc] : []), ...(st.npcs || [])];
+    if (!allHeroes.length) {
+        return toastr.info('В Блокноте пока нет записанных героев или НПС', '🎬 За кадром');
+    }
+
+    // Смотрим последние 2 сообщения чата, чтобы понять, кто сейчас в кадре, а кого в текущей сцене нет
+    const recentText = c.chat
+        .filter(m => m && !m.is_system && m.mes)
+        .slice(-2)
+        .map(m => stripTags(stripActionTags(String(m.mes || ''))))
+        .join(' ')
+        .toLowerCase()
+        .replace(/ё/g, 'е');
+
+    const absentHeroes = allHeroes.filter(h => {
+        const nNorm = normName(h.name);
+        if (!nNorm) return false;
+        const firstWord = nNorm.split(/\s+/)[0];
+        return !recentText.includes(nNorm) && (!firstWord || firstWord.length < 3 || !recentText.includes(firstWord));
+    });
+
+    const targetList = absentHeroes.length ? absentHeroes : allHeroes.filter(h => !h.isMainChar);
+    if (!targetList.length) {
+        return toastr.info('Все известные герои сейчас находятся прямо в текущей сцене!', '🎬 За кадром');
+    }
+
+    const rosterBrief = targetList.slice(0, 8).map(h => {
+        const parts = [`• ${h.name}: ${h.card || 'знакомый персонаж'}`];
+        if (h.status) parts.push(`(последний статус: ${h.status})`);
+        if (h.dream) parts.push(`(личная цель/мечта: ${h.dream})`);
+        return parts.join(' ');
+    }).join('\n');
+
+    const whenStr = (st.direction.time && st.time?.date)
+        ? `Сейчас в истории: ${weekday(st.time.date)}, ${formatDate(st.time.date)}${placeLine(st) ? `, ${placeLine(st)}` : ''}. `
+        : '';
+
+    const promptText = `${FF_MARKER} игрок нажал кнопку «🎬 За кадром». ${whenStr}В следующем ответе сделай атмосферную параллельную зарисовку «Тем временем за кадром…» и коротко (по 1 маленькому абзацу из 2–3 живых предложений на каждого) покажи, чем прямо в эту самую минуту заняты остальные герои, которых сейчас нет рядом с ${names.user} в текущей сцене:
+${rosterBrief}
+Покажи их собственную жизнь за кадром: их текущие дела, быт, работу, личные стремления, разговоры друг с другом или мимолётную мысль о происходящем, не телепортируя их в комнату к ${names.user}. В конце зарисовки плавно верни фокус обратно в текущую сцену к ${names.user}. Пиши художественно, как часть повествования.]`;
+
+    setSceneAdvancePrompt(promptText);
+    toastr.info(
+        `В следующем посте будет показано, что сейчас происходит за кадром у: <b>${targetList.slice(0, 8).map(h => escapeHtml(h.name)).join(', ')}</b>`,
+        '🎬 За кадром',
+        { escapeHtml: false, timeOut: 6500 }
+    );
+    const send = $('#send_but');
+    if (send.length) send.trigger('click');
+    else if (typeof c.generate === 'function') c.generate('normal');
+}
+
 async function fastForward() {
     const s = settings();
     if (!s.enabled) return toastr.info('Блокнот выключен', 'Блокнот рассказчика');
@@ -3878,7 +4020,7 @@ function wardrobePrompt(st, occasion, exclude = []) {
         lines.push(`APPEARANCE: точная внешность ${names.user} из анкеты Персоны по-английски — точный цвет и длина волос (hair color, hair length, hairstyle), точный цвет глаз (eye color), рост, тип фигуры и телосложение (body type, figure, breast size, waist, hips), тон кожи и заметные черты (НЕ выдумывай чужой цвет волос или глаз!)`);
         lines.push('Затем по три строки на образ, без пояснений:');
         lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
-        lines.push('EN: этот же наряд коротко по-английски, только одежда, обувь и причёска');
+        lines.push('EN: этот же наряд коротко по-английски, только одежда, обувь и причёска (БЕЗ тегов мимики, БЕЗ blush/shy/embarrassed)');
     } else {
         lines.push('Формат — по две строки на образ, без пояснений:');
         lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
@@ -4732,9 +4874,14 @@ async function ensureHeroineAppearanceEnForNai(st, activeWardrobe = null) {
 }
 
 function buildSingleOutfitPromptForNai(who, outfitObj) {
-    const outfitText = String(outfitObj?.en || outfitObj?.desc || outfitObj?.title || 'stylish outfit').trim();
-    const cleanWho = String(who || 'adult woman').replace(/^1girl\s*,\s*/i, '').trim();
-    return cleanForCommand(`1girl, solo, full body, standing, simple background, 1.3::${cleanWho}::, 1.2::wearing ${outfitText}::, single character, adult proportions, anatomically correct hands, no text, no captions`);
+    // Убираем случайные теги смущения/румянца (blush, shy, embarrassed, flustered), которые модель или NovelAI часто лепят на примерке одежды
+    const stripBlush = s => String(s || '')
+        .replace(/\b(?:full-face\s+blush|deep\s+blush|heavy\s+blush|light\s+blush|blushing|blush|embarrassed|flustered|shy\s+smile|shy\s+expression|shy|timid)\b\s*,?\s*/gi, '')
+        .replace(/,\s*,+/g, ', ')
+        .trim();
+    const outfitText = stripBlush(outfitObj?.en || outfitObj?.desc || outfitObj?.title || 'stylish outfit');
+    const cleanWho = stripBlush(String(who || 'adult woman').replace(/^1girl\s*,\s*/i, ''));
+    return cleanForCommand(`1girl, solo, full body, standing, simple background, 1.3::${cleanWho}::, 1.2::wearing ${outfitText}::, calm confident expression, relaxed neutral face, single character, adult proportions, anatomically correct hands, no text, no captions`);
 }
 
 function buildSingleAccentPromptForNai(who, accentObj) {
@@ -4768,7 +4915,7 @@ async function ensurePicture(kind, force, onDone) {
                 setStatus(`🎨 NovelAI рисует наряд ${i + 1} из ${count} («${opt.title}»)…`);
                 logImageDiag(`Гардероб NovelAI: запрос наряда ${i + 1}/${count}`, opt.title);
                 const singlePrompt = buildSingleOutfitPromptForNai(who, opt);
-                const singleUrl = await drawViaNovelAi(singlePrompt, 'portrait', null);
+                const singleUrl = await drawViaNovelAi(singlePrompt, 'portrait', { extraNeg: 'blush, blushing, nose blush, full-face blush, heavy blush, embarrassed, shy, flustered, timid, awkward smile' });
                 if (singleUrl) {
                     opt.image = singleUrl;
                     opt.imageLayout = { rows: 1, cols: 1 };
@@ -5688,10 +5835,29 @@ async function cleanupBloatedAlbumAndChat(st) {
         delete st.wardrobe.active.imageHistory;
     }
 
+    // 4. Выгружаем застрявшие тяжёлые base64-картинки (data:image/...) из метаданных на диск Таверны, чтобы чат перестал тормозить!
+    let offloadedCount = 0;
+    const offloadField = async (obj, key) => {
+        if (obj && typeof obj[key] === 'string' && obj[key].startsWith('data:image/')) {
+            const saved = await storeImage(obj[key]);
+            if (saved && !saved.startsWith('data:image/')) {
+                obj[key] = saved;
+                offloadedCount++;
+            }
+        }
+    };
+    for (const sc of (st.scenes || [])) await offloadField(sc, 'url');
+    for (const cl of (st.wardrobe?.closet || [])) await offloadField(cl, 'image');
+    for (const bx of (st.wardrobe?.box || [])) await offloadField(bx, 'image');
+    for (const hs of (st.wardrobe?.history || [])) await offloadField(hs, 'image');
+    for (const np of (st.npcs || [])) await offloadField(np, 'avatar');
+    if (st.mainCharCard) await offloadField(st.mainCharCard, 'avatar');
+    if (st.home) await offloadField(st.home, 'image');
+
     await c.saveChat();
     await commit();
     placeMesButtonsSoon();
-    toastr.success(`Память очищена! Убрано лишних дублей из альбома: ${removedAlbum}, черновых вариантов из постов: ${removedVariants}.`, '🧹 Очистка альбома и чата', { timeOut: 7000 });
+    toastr.success(`Память очищена и ускорена! Убрано дублей из альбома: ${removedAlbum}, черновых вариантов из постов: ${removedVariants}${offloadedCount ? `, сжато тяжёлых картинок в файлы: ${offloadedCount}` : ''}.`, '🧹 Очистка и ускорение Таверны', { timeOut: 7000 });
 }
 
 async function showAlbumItem(item) {
@@ -6235,7 +6401,7 @@ async function drawClosetSheetBatch(st, items) {
             const it = batch[i];
             setStatus(`🎨 NovelAI рисует наряд для шкафа ${i + 1} из ${n} («${it.title}»)…`);
             const singlePrompt = buildSingleOutfitPromptForNai(who, it);
-            const singleUrl = await drawViaNovelAi(singlePrompt, 'portrait', null);
+            const singleUrl = await drawViaNovelAi(singlePrompt, 'portrait', { extraNeg: 'blush, blushing, nose blush, full-face blush, heavy blush, embarrassed, shy, flustered, timid, awkward smile' });
             if (!singleUrl) continue;
             drawnAny = true;
             it.image = singleUrl;
@@ -7867,7 +8033,7 @@ async function showWardrobePopup() {
                     redrawOneBtn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Рисую…');
                     try {
                         const who = getHeroineAppearanceEn(st, a);
-                        const newSingleUrl = await drawViaNovelAi(buildSingleOutfitPromptForNai(who, o), 'portrait', null);
+                        const newSingleUrl = await drawViaNovelAi(buildSingleOutfitPromptForNai(who, o), 'portrait', { extraNeg: 'blush, blushing, nose blush, full-face blush, heavy blush, embarrassed, shy, flustered, timid, awkward smile' });
                         if (newSingleUrl) {
                             o.image = newSingleUrl;
                             o.imageLayout = { rows: 1, cols: 1 };
@@ -9728,7 +9894,7 @@ MAP: название места | что это за место (1 предло
 (ровно 5 строк MAP)
 
 3) 4 стартовых NPC из окружения ${names.user} (например: коллега/поставщик/постоянный клиент по работе «${cfg.job}», подруга или сосед, знакомый по хобби «${hobbiesStr}», интересный незнакомец/потенциальный фаворит) и их связи с ${names.user}:
-NPC [Имя]: кто это, возраст, внешность, характер и отношение к ${names.user} (1–2 предложения)
+NPC [Имя]: кто это, возраст, подробная внешность, характер, биография и отношение к ${names.user} (3–6 предложений в одну строку)
 REL [${names.user} ↔ Имя]: тип связи | что между ними сейчас
 (4 пары строк NPC и REL)
 
@@ -9764,7 +9930,18 @@ COUNTER: редкость (common|rare|epic) | название товара | �
 
 function applyWorldCreationResult(st, cfg, raw) {
     const counts = { places: 0, npcs: 0, closet: 0, perfumes: 0, accessories: 0, counter: 0 };
-    const lines = answerLines(raw);
+    const rawLines = answerLines(raw);
+    const WORLD_CMD_RE = /^(?:FLAVOR|APPEARANCE|MAP|NPC|REL|CLOSET|PERF_?ITEM|ACC_?ITEM|BOX|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE)(?:\b|[\s\[:：—–-])/i;
+    const lines = [];
+    for (const rl of rawLines) {
+        if (WORLD_CMD_RE.test(rl) || !lines.length) {
+            lines.push(rl);
+        } else if (/[:：—–-]\s*$/.test(lines[lines.length - 1])) {
+            lines[lines.length - 1] = `${lines[lines.length - 1]} ${rl}`;
+        } else {
+            lines[lines.length - 1] = `${lines[lines.length - 1]} // ${rl}`;
+        }
+    }
     const len = ctx().chat?.length ?? 0;
 
     for (const line of lines) {
@@ -9787,12 +9964,12 @@ function applyWorldCreationResult(st, cfg, raw) {
             }
             continue;
         }
-        m = line.match(/^NPC(?!STATE)\s*[:：]?\s*\[?([^\]:：—–\n]{1,60}?)\]?\s*(?:[:：]|\s[—–-]\s)\s*(.+)$/i);
+        m = line.match(/^NPC(?!STATE)\s*[:：]?\s*(?:\[([^\]]{1,60})\]|([^:：—–\n]{1,45}?))\s*(?:[:：]|\s+[—–-]\s+)\s*(.+)$/i);
         if (m) {
-            const name = m[1].trim();
-            const desc = m[2].trim();
-            if (name && !findNpc(st, name)) {
-                st.npcs.push({ id: st.nextNpcId++, name, card: desc, status: '', locked: false, at: len });
+            const name = (m[1] || m[2] || '').trim();
+            const desc = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
+            if (name && desc && !findNpc(st, name)) {
+                st.npcs.push({ id: st.nextNpcId++, name, card: desc, status: '', locked: true, at: len });
                 counts.npcs++;
             }
             continue;
@@ -10760,8 +10937,8 @@ async function generateNpcDiaryForDate(n, targetDate = '') {
         .map(e => e.text)
         .filter(Boolean);
     const eventsLine = dayEvents.length
-        ? `События этого дня в истории (${dateLabel}): ${dayEvents.join('; ')}.`
-        : `Дата записи: ${dateLabel}. Опирайся на события чата и жизнь персонажа в этот период.`;
+        ? `Зафиксированные события за ${dateLabel}: ${dayEvents.join('; ')}.`
+        : `Дата записи: ${dateLabel}.`;
 
     const toastNote = toastr.info(
         `Окно свернулось, пока ${escapeHtml(n.name)} делает запись за ${escapeHtml(dateLabel)}… Дневник откроется сам, когда будет готово!`,
@@ -10772,12 +10949,38 @@ async function generateNpcDiaryForDate(n, targetDate = '') {
     let ok = false;
     try {
         await withBusy(`📓 ${n.name} пишет в дневнике (${dateLabel})…`, async s2 => {
-            const prompt = `[OOC: Пауза в ролевой игре. Напиши одну живую, искреннюю страницу из личного дневника персонажа «${n.name}» от ПЕРВОГО ЛИЦА («Я...») за дату: ${dateLabel}.
+            const c = ctx();
+            const heroDigest = collectHeroHistoryDigest(n, s2);
+            const recentChat = (c.chat || [])
+                .filter(m => m && !m.is_system && m.mes)
+                .slice(-8)
+                .map(m => `${m.is_user ? names.user : (m.name || names.char)}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 1200)}`)
+                .join('\n\n');
+            const extraHeroContext = [
+                heroDigest.summaryBlock ? heroDigest.summaryBlock.slice(0, 1800) : '',
+                heroDigest.mentionsText ? `[Сцены с участием ${n.name} из истории чата]:\n${heroDigest.mentionsText}` : '',
+            ].filter(Boolean).join('\n\n');
+
+            const prevDiaryTexts = (n.diary || []).slice(-3).map(d => d.text.slice(0, 180)).join(' | ');
+            const antiRepeatLine = prevDiaryTexts
+                ? `Предыдущие записи дневника (СТРОГО ЗАПРЕЩЕНО повторять их темы, метафоры, рассуждения про озеро/поездки или старые фразы!): ${prevDiaryTexts}`
+                : '';
+
+            const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
+[OOC: Пауза в ролевой игре. Напиши страницу из личного дневника персонажа «${n.name}» от ПЕРВОГО ЛИЦА («Я...») за дату: ${dateLabel}.
 ${eventsLine}
-Информация о персонаже: ${n.card}. ${formatNpcScaleSummary(n)}
-Важные требования:
-— Персонаж не должен думать ТОЛЬКО о ${names.user}! Обязательно отрази его собственную жизнь в этот день: личные дела, работу/учёбу, бытовые мелочи, отношения с семьёй или другими NPC, его собственную мечту (${n.dream || 'личную цель'}) или скрытое беспокойство (${n.fear || 'сомнения'}), и лишь затем — его честные, сокровенные мысли о ${names.user} и событиях дня.
-— Пиши в характерной для ${n.name} манере речи, 1–2 абзаца, строго без кавычек, без служебных меток и БЕЗ вариантов действий (никаких ACTIONS).]`;
+Кто ведёт дневник: ${n.name} (${n.card || 'персонаж истории'}). Чем занят сейчас: ${n.status || 'свои дела'}. Отношение к ${names.user}: дружба ${n.friendship}/100${isRomanticTarget(n) ? `, романтика ${n.romance}/100` : ''}.
+Реальные сцены из чата и истории (опирайся ТОЛЬКО на реальные факты и диалоги из них, КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО додумывать несуществующие сцены, детали или отсебятину!):
+${extraHeroContext ? `${extraHeroContext}\n\n[Последние посты текущей сцены]:\n` : ''}${recentChat}
+${antiRepeatLine}
+
+СТРОГИЕ ПРАВИЛА ДЛЯ ЖИВОГО ДНЕВНИКА:
+1) ОБЪЁМ И ФОРМАТ: напиши 1–2 абзаца (в сумме около 6–8 предложений — не раздувай в длинную поэму, но и не пиши совсем сухой телеграф).
+2) ТОЛЬКО РЕАЛЬНЫЙ КАНОН БЕЗ «СЛОПА» И ОТСЕБЯТИНЫ: пиши строго по реальным мотивам персонажа и тому, что действительно было в чате и его описании. Не придумывай несуществующие события и не пересказывай собственную внешность, цвет глаз/волос или одежду.
+3) СВОЯ ГОЛОВА НА ПЛЕЧАХ (БЕЗ СЛЕПОГО ОПРАВДАНИЯ ${names.user}):
+   — Мир ${n.name} не крутится вокруг ${names.user} 24/7: основная часть записи — это его собственные дела, работа, мотивы, выгода/принципы и взгляд на ситуацию.
+   — Избегай типичной ошибки ИИ, когда все персонажи поголовно восхищаются каждым шагом игрока: даже если ${n.name} хорошо относится к ${names.user} или искренне выступает её союзником, у него есть собственное критическое мышление. То, где ${names.user} сработала круто и хладнокровно — он отметит с уважением, но если какие-то её поступки или слова выглядят импульсивно, странно или как откровенный кринж — он честно так и подумает про себя в дневнике, не пытаясь её слепо выгораживать!
+4) НЕ вставляй пафосные рассуждения о «главной мечте жизни» и НЕ упоминай озеро. Пиши живо, в характерной манере речи ${n.name}, без кавычек и без служебных меток.]`;
             const raw = await quietGenerate(prompt);
             const text = stripActionTags(raw);
             if (text) {
@@ -11909,7 +12112,7 @@ function openBook(tab) {
     book.css({ display: 'flex', 'background-color': solidThemeColor() });
     fillImageSources();
     safeRender('направление', renderDirection);
-    safeRender('блокнот', renderPanel);
+    safeRender('блокнот', renderPanel, true);
     bookTabs();
     $('#nnb_book .nnb-book-body').scrollTop(0);
 }
@@ -11976,14 +12179,21 @@ async function askText(title, initial = '') {
     return window.prompt(title, initial);
 }
 
-function renderPanel() {
+function renderPanel(forceFull = false) {
     const s = settings();
-    $('.nnb-scope').toggleClass('nnb-spoiler', !!s.hideSpoilers);
-    const list = $('#nnb_list').empty();
-    const extra = $('#nnb_extra_list').empty();
     const st = store();
     if (!busy) setStatus('');
     if (!st) { closeBook(); return; }
+    // ГЛАВНАЯ ОПТИМИЗАЦИЯ ПРОТИВ ЗАВИСАНИЙ ТАВЕРНЫ:
+    // Если само окно Блокнота (#nnb_book) сейчас закрыто, НЕ пересоздаём сотни DOM-элементов всех вкладок на каждом сообщении чата!
+    // Полная отрисовка сработает мгновенно в момент открытия Блокнота (openBook).
+    const isBookOpen = $('#nnb_book').is(':visible');
+    if (!isBookOpen && !forceFull) {
+        return;
+    }
+    $('.nnb-scope').toggleClass('nnb-spoiler', !!s.hideSpoilers);
+    const list = $('#nnb_list').empty();
+    const extra = $('#nnb_extra_list').empty();
     bookTabs();
 
     // Блок быстрого переезда в новый чат и сводки прошлых глав (Саммари)
@@ -12259,45 +12469,148 @@ async function promptNpcAvatar(n) {
     await openPopup(el);
 }
 
-async function syncHeroFromChat(n) {
+function collectHeroHistoryDigest(n, st) {
+    const names = storyNames();
+    const allChat = (ctx().chat || []).filter(m => m && !m.is_system && m.mes);
+    const total = allChat.length;
+    const heroStem = normName(n.name || '').slice(0, Math.max(3, normName(n.name || '').length - 1));
+    const mentioned = [];
+    for (let i = 0; i < total; i++) {
+        const m = allChat[i];
+        const rawTxt = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+        if (!rawTxt) continue;
+        if (n.isMainChar || (heroStem && rawTxt.toLowerCase().includes(heroStem))) {
+            const who = m.is_user ? names.user : (m.name || names.char);
+            mentioned.push(`[Пост #${i + 1}] ${who}: ${rawTxt.slice(0, 480)}`);
+        }
+    }
+    // Если упоминаний очень много в длинной ролевой — берём равномерную выборку из начала, середины и конца (до 24 сцен)
+    let sampledMentions = [];
+    if (mentioned.length <= 24) {
+        sampledMentions = mentioned;
+    } else {
+        const firstPart = mentioned.slice(0, 6);
+        const lastPart = mentioned.slice(-10);
+        const midPool = mentioned.slice(6, -10);
+        const midCount = 8;
+        const step = Math.max(1, Math.floor(midPool.length / midCount));
+        const midPart = [];
+        for (let i = 0; i < midPool.length && midPart.length < midCount; i += step) {
+            midPart.push(midPool[i]);
+        }
+        sampledMentions = [...firstPart, ...midPart, ...lastPart];
+    }
+
+    const lastSceneLines = allChat.slice(-4).map((m, idx) => {
+        const who = m.is_user ? names.user : (m.name || names.char);
+        return `[Пост #${total - Math.min(4, total) + idx + 1}] ${who}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 550)}`;
+    }).join('\n');
+
+    const timelineHits = (st?.time?.timeline || [])
+        .filter(e => !heroStem || String(e.text || '').toLowerCase().includes(heroStem))
+        .slice(-15)
+        .map(e => `• ${e.date ? formatDate(e.date, false) + ': ' : ''}${e.text}`)
+        .join('\n');
+    const archiveHits = (st?.archive || [])
+        .filter(a => a.status === 'done' && (!heroStem || String(a.text || '').toLowerCase().includes(heroStem)))
+        .slice(-15)
+        .map(a => `• ${a.text}`)
+        .join('\n');
+    const relHits = (st?.relationships || [])
+        .filter(r => normName(r.a) === normName(n.name) || normName(r.b) === normName(n.name))
+        .map(r => `• ${r.a} ${r.arrow || '↔'} ${r.b}${r.type ? ` [${r.type}]` : ''}: ${r.desc}`)
+        .join('\n');
+    const arcHits = [
+        ...(st?.arcs || []).filter(a => normName(a.who) === normName(n.name)).map(a => `• Арка: ${a.text}${a.current ? ` (${a.current})` : ''}`),
+        ...(st?.evolved || []).filter(ev => normName(ev.who) === normName(n.name)).map(ev => `• Развитие характера: ${ev.text}`),
+    ].join('\n');
+    const diaryHits = (n?.diary || []).slice(-4).map(d => `• Запись дневника (${d.date || ''}): ${String(d.text || '').slice(0, 350)}`).join('\n');
+    const extraMeta = [
+        relHits ? `[Связи и отношения ${n.name}]:\n${relHits}` : '',
+        arcHits ? `[Развитие и арки ${n.name}]:\n${arcHits}` : '',
+        diaryHits ? `[Из прошлых записей дневника ${n.name}]:\n${diaryHits}` : '',
+    ].filter(Boolean).join('\n');
+    const summaryBlock = [
+        st?.storySummary ? `[Из Саммари прошлых глав]:\n${String(st.storySummary).slice(0, 3000)}` : '',
+        extraMeta,
+    ].filter(Boolean).join('\n\n');
+
+    return {
+        mentionsText: sampledMentions.join('\n'),
+        lastSceneLines,
+        timelineHits,
+        archiveHits,
+        summaryBlock,
+    };
+}
+
+async function syncHeroFromChat(n, cardMode = 'auto') {
     const st = store();
     if (!st || !n) return false;
+    ensureNpcScales(n, st);
     const names = storyNames();
     const isRom = isRomanticTarget(n);
     const toast = toastr.info(
-        `Анализируем последние сообщения чата и обновляем карточку «${escapeHtml(n.name)}»… Окно откроется само!`,
+        `Собираем факты, историю и текущее состояние «${escapeHtml(n.name)}» по всей ролевой…`,
         'Обновление героя',
         { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true, escapeHtml: false }
     );
     let ok = false;
     try {
-        await withBusy(`Обновляем профиль и текущее состояние ${n.name}…`, async s2 => {
-            const lastChatLines = (ctx().chat || []).filter(m => m && !m.is_system && m.mes).slice(-3).map(m => {
-                const who = m.is_user ? names.user : (m.name || names.char);
-                return `${who}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 600)}`;
-            }).join('\n');
-            const prompt = `[OOC: Пауза в ролевой игре. Проанализируй карточку и САМЫЕ ПОСЛЕДНИЕ сообщения чата для персонажа «${n.name}» (взаимодействие с ${names.user}):
-${lastChatLines}
+        await withBusy(`Обновляем досье, профиль и состояние ${n.name}…`, async s2 => {
+            const digest = collectHeroHistoryDigest(n, s2);
+            const cObj = ctx();
+            const charCardDesc = (n.isMainChar && cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]?.description)
+                ? cObj.substituteParams(String(cObj.characters[cObj.characterId].description)).slice(0, 1800)
+                : '';
+            const curCard = String(n.card || '').trim();
+            const needFullRebuild = cardMode === 'rebuild' || !curCard || curCard.length < 60;
+
+            const cardInstruction = needFullRebuild
+                ? `NPC [${n.name}]: развёрнутое, подробное досье персонажа в 8–16 предложений (БЕЗ сжатия до 2–4 предложений! Пиши всё в одну строку после двоеточия, разделяя смысловые абзацы знаком « // »: 1) кто это, возраст, профессия/статус, подробная внешность и манера держаться; 2) характер, привычки, прошлое и биография, включая ВСЕ факты, которые задавал игрок; 3) ключевые совместные события с ${names.user} за время ролевой и нынешнее отношение к ней)`
+                : `NPCFACT [${n.name}]: подробное дополнение к существующему описанию (3–10 предложений в одну строку, разделяя абзацы через « // ») — выпиши ВСЕ важные факты биографии, внешности, характера и значимые события из ролевой/саммари, которых ЕЩЁ НЕТ в текущем описании (старые факты не повторяй и мелкую разовую бытовуху не пиши; если абсолютно всё важное уже записано — напиши «нет»)`;
+
+            const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
+[OOC: Пауза в ролевой игре. Проанализируй персонажа «${n.name}» по всей истории ролевой, Саммари прошлых глав и последним сценам:
+
+Текущее описание персонажа в Блокноте (его факты святы, ничего из них терять нельзя!):
+${curCard || '(пока пусто или обрезано)'}
+${charCardDesc ? `\nОписание из карточки чата:\n${charCardDesc}` : ''}
+
+${digest.summaryBlock ? `${digest.summaryBlock}\n` : ''}${digest.timelineHits ? `[События из Календаря с участием ${n.name}]:\n${digest.timelineHits}\n` : ''}${digest.archiveHits ? `[Свершившиеся вехи из Архива]:\n${digest.archiveHits}\n` : ''}
+[Выборка сцен с участием и упоминанием ${n.name} по всему чату]:
+${digest.mentionsText || '(прямых упоминаний в тексте мало)'}
+
+[Последние сообщения текущей сцены (для определения NPCSTATE и SCALE прямо сейчас)]:
+${digest.lastSceneLines}
+
+ВАЖНЫЕ ПРАВИЛА ДЛЯ ПОЛЕЙ PROFILE И KEYS:
+— В полях «заноза», «ревность», «цепляет», «охлаждает», «мечта», «страх», «любит», «не_любит» пиши ТОЛЬКО ОБЩИЕ, ПОСТОЯННЫЕ черты характера персонажа В ЦЕЛОМ!
+— КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО записывать в «занозу» или «ревность» разовые ситуации, предметы одежды или конкретные имена из последних постов (например, НЕ пиши «требует отдать кардиган» или «переписка с Этель вечером» — вместо этого формулируй общие направления характера).
 
 ВАЖНО — КАЛИБРОВКА «тело=0..100» (состояние тела ПРЯМО СЕЙЧАС в последнем сообщении чата):
-— 0–14 = спокойное тело (обычный разговор, дела, сон или расслабленный отдых ПОСЛЕ того, как близость уже завершилась);
-— 15–34 = лёгкий ветерок (мимолётный флирт, случайный взгляд);
-— 35–59 = мягкое, уютное тепло (нежные объятия, тёплая томность без спешки);
-— 60–84 = сильное волнение (страстные поцелуи, откровенные ласки, сбившееся дыхание);
-— 85–100 = НА ГРАНИ / ПИК ЖЕЛАНИЯ (разгар интимной близости, предельное физическое напряжение, судорожные объятия — если в последнем посте происходит именно это, ставь точное высокое число 85–100, НЕ занижай до 20–30!).
+— 0–14 = спокойное тело (обычный разговор, дела, сон или отдых ПОСЛЕ близости);
+— 15–34 = лёгкий ветерок (мимолётный флирт);
+— 35–59 = мягкое тепло (нежные объятия);
+— 60–84 = сильное волнение (страстные поцелуи, откровенные ласки);
+— 85–100 = НА ГРАНИ / ПИК ЖЕЛАНИЯ (разгар интимной близости).
 
-Ответь строками по шаблону без пояснений:
+Ответь строками по шаблону без пояснений (каждая команда строго на одной строке):
+${cardInstruction}
 NPCSTATE [${n.name}]: где он и что делает ПРЯМО СЕЙЧАС в последнем сообщении (1 короткая фраза)
-PROFILE [${n.name}]: внешность_en=точные английские теги внешности для генератора картинок (например: 1boy, tall, short black hair, blue eyes, muscular build, sharp jawline) | мечта=его главная жизненная цель помимо ${names.user} | страх=скрытый страх или уязвимость | любит=любимые цвета, стиль одежды, еда, детали | не_любит=что не любит
-${isRom ? `KEYS [${n.name}]: цепляет=2–3 вещи в поведении ${names.user}, которые его восхищают и заводят | охлаждает=1–2 стоп-фактора | заноза=1–2 бытовые привычки или темы, в которых он упрямится и ворчит | ревность=1–2 ситуации, от которых он ревнует и собственничает | тонус=тёплый/взвод/ревность/упрямый/задетый | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
+PROFILE [${n.name}]: внешность_en=точные английские теги внешности для Danbooru/NovelAI (если персонаж из известного аниме/игры — начни с каноничного тега фамилия имя, тайтл на английском!) | мечта=его глобальная жизненная цель или стремление в жизни (без зацикливания на одном месте отдыха) | страх=глубинный страх или уязвимость характера | любит=любимые вещи, стиль, еда, привычки в целом | не_любит=что не любит в целом в жизни и людях
+${isRom ? `KEYS [${n.name}]: цепляет=общие черты поведения и ласки, которые его цепляют в целом | охлаждает=общие стоп-факторы характера | заноза=в чём он обычно упрямится или ворчит по характеру В ЦЕЛОМ (без разовых мелочей из последнего поста!) | ревность=что вызывает у него ревность В ЦЕЛОМ по характеру (без конкретных переписок/имён из последнего поста!) | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
 SCALE [${n.name}]: дружба=точное_число_от_-100_до_100 | романтика=точное_число_от_0_до_100 | тело=точное_число_от_0_до_100_по_последнему_посту` : `SCALE [${n.name}]: дружба=точное_число_от_-100_до_100`}]`;
             const raw = await quietGenerate(prompt);
             const wasLocked = n.locked;
             n.locked = false;
-            // Разрешаем перезаписать пустые или устаревшие поля
+            if (needFullRebuild) n._replaceCardFull = true;
+            n._allowOverwriteKeys = true;
             n.dream = ''; n.fear = ''; n.likes = ''; n.dislikes = '';
             parseAndApply(raw);
-            n.locked = wasLocked;
+            delete n._replaceCardFull;
+            delete n._allowOverwriteKeys;
+            n.locked = wasLocked !== undefined ? wasLocked : true;
             await commit();
             ok = true;
         });
@@ -12371,32 +12684,57 @@ async function openNpcCardPopup(n) {
         topRow.append(quickTopBtns);
         el.append(topRow);
 
-        // 1. Описание и актуальный статус
+        // 1. Описание и актуальный статус (полноразмерное многострочное поле без обрезки + авто-защита замочком)
         const cardSec = $('<div class="nnb-note" style="margin:8px 0; padding:10px 12px;"></div>');
-        const cardHead = $('<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;"><b>Описание и характер</b></div>');
-        const editCardBtn = $('<span style="cursor:pointer; font-size:0.85em; opacity:0.8;"><i class="fa-solid fa-pen"></i> Изменить</span>').on('click', async () => {
-            if (!n.isMainChar) {
+        const cardHead = $('<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px;"><b>Описание, внешность, биография и характер (защищено от стирания)</b></div>');
+        const headBtns = $('<div style="display:flex; gap:10px; align-items:center;"></div>');
+        if (!n.isMainChar) {
+            const editNameBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.85;"><i class="fa-solid fa-pen"></i> Переименовать</span>').on('click', async () => {
                 const newName = await askText('Имя персонажа', n.name);
-                if (newName === null) return;
-                if (newName.trim()) n.name = newName.trim();
-            }
-            const newCard = await askText(`Описание: ${n.name}`, n.card);
-            if (newCard === null) return;
-            if (newCard.trim()) n.card = newCard.trim();
-            n.locked = true;
-            await commit();
-            renderModalContent();
-        });
-        const editStatusBtn = $('<span style="cursor:pointer; font-size:0.85em; opacity:0.8; margin-left:10px;"><i class="fa-solid fa-comment-dots"></i> Сменить статус</span>').on('click', async () => {
+                if (newName && newName.trim()) {
+                    n.name = newName.trim();
+                    await commit();
+                    renderModalContent();
+                }
+            });
+            headBtns.append(editNameBtn);
+        }
+        const editStatusBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.85;"><i class="fa-solid fa-comment-dots"></i> Сменить статус</span>').on('click', async () => {
             const stText = await askText(`Что сейчас происходит с ${n.name}? (Оставь пустым, чтобы сбросить старый статус)`, n.status || '');
             if (stText === null) return;
             n.status = stText.trim();
             await commit();
             renderModalContent();
         });
-        cardHead.append($('<div></div>').append(editCardBtn, editStatusBtn));
+        const expandCardBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.92; color:var(--SmartThemeQuoteColor, #e0c068);" title="Сохранить весь текущий текст слово в слово и дописать в конец новые важные факты и события из всей ролевой и саммари"><i class="fa-solid fa-file-circle-plus"></i> Дополнить фактами из ролевой</span>').on('click', async () => {
+            if (await syncHeroFromChat(n, 'append')) renderModalContent();
+        });
+        const rebuildCardBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.88;" title="Собрать большое развёрнутое досье (8–16+ предложений) по всему чату, саммари и календарю (удобно, если описание потерялось при старом переезде)"><i class="fa-solid fa-book-medical"></i> Собрать полное досье</span>').on('click', async () => {
+            if (n.card && n.card.length >= 60) {
+                if (!confirm(`Пересобрать полное развёрнутое досье «${n.name}» (8–16 предложений) на основе текущего описания, саммари и всей ролевой? (Если хочешь просто дописать новые факты в конец без перефразирования старых — нажми «Отмена» и выбери «Дополнить фактами из ролевой»)`)) return;
+            }
+            if (await syncHeroFromChat(n, 'rebuild')) renderModalContent();
+        });
+        headBtns.append(expandCardBtn, rebuildCardBtn, editStatusBtn);
+        cardHead.append(headBtns);
         cardSec.append(cardHead);
-        cardSec.append($('<div class="nnb-npc-text" style="line-height:1.45;"></div>').text(n.card || 'Описание пока не заполнено.'));
+
+        const cardArea = $('<textarea class="text_pole" rows="6" style="width:100%; margin:0; resize:vertical; line-height:1.45; font-size:0.9em; white-space:pre-wrap;" placeholder="Впиши сюда любое количество фактов о персонаже, его биографию, внешность, характер и историю (лимита на длину нет — можно писать хоть несколько абзацев). Блокнот сохранит их целиком и не сотрёт при обновлениях…"></textarea>').val(n.card || '');
+        const fitCardArea = elA => {
+            try {
+                elA.style.height = 'auto';
+                elA.style.height = Math.max(96, Math.min(540, elA.scrollHeight + 6)) + 'px';
+            } catch (e) {}
+        };
+        cardArea.on('input', function () { fitCardArea(this); });
+        cardArea.on('change', async function () {
+            n.card = String($(this).val() || '').trim();
+            n.locked = true; // Любая ручная правка автоматически ставит замочек, чтобы нейросеть не переписала твои факты!
+            await commit();
+            toastr.success(`Описание «${escapeHtml(n.name)}» сохранено и защищено замочком 🔒`, '👥 Герои', { escapeHtml: false });
+        });
+        setTimeout(() => fitCardArea(cardArea[0]), 20);
+        cardSec.append(cardArea);
         el.append(cardSec);
 
         // 2. Шкалы отношений (Для обычных NPC — только Дружба/отношение; Романтика, тело, ключи и близость — ТОЛЬКО для основного персонажа / фаворита!)
@@ -12845,11 +13183,13 @@ async function openNpcUniverseModal(st) {
                 selectedImp.forEach(rIdx => {
                     const src = roster[rIdx];
                     if (!src) return;
-                    let target = findNpc(st, src.name);
+                    const mcCard = ensureMainCharCard(st);
+                    let target = (mcCard && normName(mcCard.name) === normName(src.name)) ? mcCard : findNpc(st, src.name);
                     if (!target) {
                         target = { id: st.nextNpcId++, name: src.name, locked: true, at: ctx().chat.length };
                         st.npcs.push(target);
                     }
+                    target.locked = true;
                     target.card = src.card || target.card || '';
                     target.appearanceEn = src.appearanceEn || target.appearanceEn || '';
                     target.avatar = src.avatar || target.avatar || '';
@@ -12961,32 +13301,91 @@ async function generateMigrationStorySummary(st) {
     const names = storyNames();
     const c = ctx();
     const chat = Array.isArray(c.chat) ? c.chat.filter(m => m && !m.is_system && m.mes) : [];
-    const recentMsgs = chat.slice(-18).map(m => `${m.is_user ? names.user : (m.name || names.char)}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 800)}`).join('\n\n');
-    const prevSum = st?.storySummary ? `Предыдущая сводка прошлых глав:\n${st.storySummary}\n\n` : '';
+    const total = chat.length;
+
+    const fmtMsg = (m, idx, maxLen = 450) => {
+        const who = m.is_user ? names.user : (m.name || names.char);
+        const txt = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+        return `[Пост #${idx + 1}] ${who}: ${txt}`;
+    };
+
+    const curDateStr = st.time?.date ? formatDate(st.time.date) : 'текущий игровой день';
+
+    // Выделяем последние 20 постов как полный блок «СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ» без сокращений,
+    // а предыдущие посты берём равномерным срезом от самого первого сообщения
+    let earlierDigest = '';
+    let latestDayDigest = '';
+    const recentCount = Math.min(total, 24);
+    const latestSlice = chat.slice(-recentCount).map((m, i) => fmtMsg(m, total - recentCount + i, 700));
+    latestDayDigest = latestSlice.join('\n\n');
+
+    if (total > recentCount) {
+        const midEnd = total - recentCount;
+        const startCount = Math.min(6, midEnd);
+        const startSlice = chat.slice(0, startCount).map((m, i) => fmtMsg(m, i, 380));
+        const midSamples = [];
+        if (midEnd > startCount) {
+            const targetMidCount = 22;
+            const step = Math.max(1, Math.floor((midEnd - startCount) / targetMidCount));
+            for (let i = startCount; i < midEnd; i += step) {
+                midSamples.push(fmtMsg(chat[i], i, 360));
+            }
+        }
+        earlierDigest = [
+            `=== 1. НАЧАЛО И ЗАВЯЗКА ИСТОРИИ (посты 1–${startCount} из ${total}) ===\n` + startSlice.join('\n'),
+            midSamples.length ? `=== 2. РАЗВИТИЕ СОБЫТИЙ В ПРЕДЫДУЩИЕ ДНИ (срезы с ${startCount + 1} по ${midEnd} пост) ===\n` + midSamples.join('\n') : '',
+        ].filter(Boolean).join('\n\n');
+    }
+
+    const timelineLines = (st.time?.timeline || []).map(e => `• ${e.date ? formatDate(e.date, false) + ': ' : ''}${e.text}`).join('\n');
+    const archiveLines = (st.archive || []).filter(a => a.status === 'done').map(a => `• ${a.tag ? `[${a.tag}] ` : ''}${a.text}`).join('\n');
+    const evolvedLines = (st.evolved || []).map(ev => `• ${ev.who}: ${ev.text}`).join('\n');
+    const activeNotesLines = (st.notes || []).map(n => `• ${n.tag ? `[${n.tag}] ` : ''}${n.text}`).join('\n');
+    const intriguesLines = (st.intrigues || []).map(it => `• Тайна «${it.text}»${(it.clues || []).length ? ` (улики: ${it.clues.join('; ')})` : ''}`).join('\n');
+
+    const prevSum = st?.storySummary ? `[Предыдущая сводка прошлых глав (обязательно сохрани важные факты из неё!)]:\n${st.storySummary}\n\n` : '';
     const npcInfo = formatNpcs(st.npcs || [], false, st);
     const relInfo = formatRelationships(st);
-    const timeInfo = st.time?.date ? `Текущая дата и место: ${formatDate(st.time.date)}, ${placeLine(st) || ''}` : '';
+    const timeInfo = st.time?.date ? `Текущая дата и место: ${curDateStr}, ${placeLine(st) || ''}` : '';
     const wornInfo = st.wardrobe?.active?.status === 'worn' && st.wardrobe.active.look
         ? `Сейчас на ${names.user} надето: «${st.wardrobe.active.look.title}» (${st.wardrobe.active.look.desc})`
         : '';
 
-    const prompt = `[OOC: Пауза в ролевой игре. Мы переносим эту историю в новый чистый чат, чтобы разгрузить контекст. Составь подробное, структурированное САММАРИ (Сводку истории) на русском языке, которое будет передаваться модели в новом чате, чтобы она помнила всё произошедшее без потерь.
+    const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
+[OOC: Пауза в ролевой игре. Мы переносим эту историю (${total} сообщений) в новый чистый чат. Составь ПОДРОБНОЕ, ОБЪЁМНОЕ И ПОЛНОЕ САММАРИ (Летопись всей истории) на русском языке (не менее 500–900 слов), охватывающее ВСЮ ролевую от завязки и до ВСЕХ СОБЫТИЙ ПОСЛЕДНЕГО ДНЯ включительно!
+ВАЖНО: события текущего/последнего дня (${curDateStr}) ещё НЕ записаны в календарь ниже — они находятся в блоке «СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (посты ${total - recentCount + 1}–${total})»! Обязательно подробно прочитай и включи в сводку ВСЁ, что произошло за последний день!
+
 ${prevSum}${timeInfo}
 ${wornInfo}
-Известные герои и их статус:
+
+[ЛЕТОПИСЬ ПРЕДЫДУЩИХ ДНЕЙ ИЗ КАЛЕНДАРЯ]:
+${timelineLines || '(записей календаря нет)'}
+
+[АРХИВ УЖЕ СВЕРШИВШИХСЯ СОБЫТИЙ И СЮЖЕТНЫХ ВЕХ]:
+${archiveLines || '(пока пусто)'}
+
+[КАК ИЗМЕНИЛИСЬ ГЕРОИ ПО ХОДУ ИСТОРИИ]:
+${evolvedLines || '(без завершённых сдвигов)'}
+
+[ИЗВЕСТНЫЕ ГЕРОИ И ИХ СТАТУС]:
 ${npcInfo}
-Связи:
+[СВЯЗИ]:
 ${relInfo}
 
-Последние сообщения текущего чата:
-${recentMsgs}
+[АКТИВНЫЕ ЗАДУМКИ И ТАЙНЫ]:
+${activeNotesLines}
+${intriguesLines}
+${earlierDigest ? `\n${earlierDigest}\n` : ''}
+=== КУЛЬМИНАЦИЯ И ВСЕ СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}, последние посты ${total - recentCount + 1}–${total} из ${total}) — ПРОЧИТАЙ ВНИМАТЕЛЬНО И ОБЯЗАТЕЛЬНО ПОДРОБНО ОПИШИ В РАЗДЕЛЕ 2 И 4! ===
+${latestDayDigest}
 
-Напиши сводку в 3 чётких разделах (без воды, только конкретные факты, имена, детали и события):
-1. ЧТО ПРОИЗОШЛО РАНЕЕ В ИСТОРИИ: главные события, завязка, важные решения, обещания и поворотные моменты.
-2. ОТНОШЕНИЯ И ДИНАМИКА ГЕРОЕВ: что сейчас между ${names.user}, ${names.char} и важными NPC (чувства, доверие, недавние ссоры или сближение).
-3. ТОЧКА ОСТАНОВКИ (ГДЕ МЫ СЕЙЧАС): точная дата, локация, обстановка, во что одеты герои и что именно произошло в самой последней сцене (на какой реплике или действии остановились прямо сейчас).]`;
+Напиши подробную летопись в 4 развёрнутых разделах (перечисляй конкретные сцены, диалоги, поступки, подарки, споры, примирения и важные детали без пропусков):
+1. ЗАВЯЗКА И ПРЕДЫДУЩИЕ ДНИ ИСТОРИИ: с чего всё началось и какие ключевые события, поездки, встречи и повороты произошли в предыдущие дни ролевой.
+2. ПОДРОБНАЯ ХРОНИКА ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}): детально и по шагам опиши ВСЕ сцены, разговоры, события и действия, которые произошли за последний игровой день (по постам ${total - recentCount + 1}–${total}).
+3. ОТНОШЕНИЯ ГЕРОЕВ И КАНОНИЧНЫЕ ДЕТАЛИ: что сейчас между ${names.user}, ${names.char} и каждым важным NPC, какие есть общие секреты, договорённости, подарки и привычки.
+4. ТОЧКА ОСТАНОВКИ (ПРЯМО СЕЙЧАС): точная дата (${curDateStr}), локация, обстановка, во что одеты герои и на какой именно реплике или действии остановилась самая последняя сцена.]`;
 
-    const res = await withBusy('📝 Модель составляет подробное саммари истории для переезда…', () => quietGenerate(prompt));
+    const res = await withBusy(`📝 Модель составляет полную летопись всех ${total} сообщений (включая последний день)…`, () => quietGenerate(prompt));
     return stripActionTags(cleanAnswer(res || '')).trim();
 }
 
@@ -12998,6 +13397,10 @@ async function applyMigrationPackageToCurrentChat(pkg, insertBridgeMessage = tru
     }
     const restored = structuredClone(pkg.notebookState);
     if (pkg.storySummary) restored.storySummary = pkg.storySummary;
+    if (Array.isArray(restored.npcs)) {
+        restored.npcs.forEach(np => { if (np) np.locked = true; });
+    }
+    if (restored.mainCharCard) restored.mainCharCard.locked = true;
     restored.lastThinkAt = c.chat?.length ?? 0;
     c.chatMetadata[MODULE] = restored;
     store();
@@ -14231,144 +14634,155 @@ function renderNaiStyleAndWriterPresets() {
 }
 
 // 🎬 и 👗 у сообщений: сцена — на каждом сообщении, гардероб — у последнего
+let isPlacingMesButtons = false;
 function placeMesButtons() {
-    const on = !!settings().enabled;
-    const st = store();
-    const c = ctx();
-    const mes = $('#chat .mes');
-    if (!on || !st) { $('.nnb-mes-btn').remove(); return; }
-    mes.each(function () {
-        const box = $(this).find('.mes_buttons').first();
-        if (!box.length) return;
-        const mId = Number($(this).attr('mesid'));
-        const hasSavedPrompt = Number.isInteger(mId) && !!(c.chat?.[mId]?.extra?.nnbScene?.prompt || c.chat?.[mId]?.extra?.nnbScene?.desc);
-        if (!box.find('.nnb-mes-scene').length) {
-            box.prepend('<div class="mes_button nnb-mes-btn nnb-mes-scene fa-solid fa-image interactable" title="Нарисовать эту сцену (или перерисовать)" tabindex="0"></div>');
-        }
-        if (hasSavedPrompt && !box.find('.nnb-mes-scene-redraw').length) {
-            box.find('.nnb-mes-scene').after('<div class="mes_button nnb-mes-btn nnb-mes-scene-redraw fa-solid fa-rotate interactable" title="Перерисовать эту сцену по тому же промпту (без нового описания)" tabindex="0"></div>');
-        } else if (!hasSavedPrompt) {
-            box.find('.nnb-mes-scene-redraw').remove();
-        }
+    if (isPlacingMesButtons) return;
+    isPlacingMesButtons = true;
+    try {
+        const on = !!settings().enabled;
+        const st = store();
+        const c = ctx();
+        const mes = $('#chat .mes');
+        if (!on || !st) { $('.nnb-mes-btn, .nnb-inline-scene-bar').remove(); return; }
+        mes.each(function () {
+            const mesEl = $(this);
+            const box = mesEl.find('.mes_buttons').first();
+            if (!box.length) return;
+            const mId = Number(mesEl.attr('mesid'));
+            const sceneMeta = Number.isInteger(mId) ? c.chat?.[mId]?.extra?.nnbScene : null;
+            const hasSavedPrompt = !!(sceneMeta?.prompt || sceneMeta?.desc);
 
-        // Гарантируем, что блок с картинкой сцены всегда располагается ОТДЕЛЬНЫМ БЛОКОМ ПОД ТЕКСТОМ ПОСТА (не перекрывая текст!)
-        const mesEl = $(this);
-        const mesText = mesEl.find('.mes_text').first();
-        const mediaWrapper = mesEl.find('.mes_media_wrapper').first();
-        const imgCont = mesEl.find('.mes_img_container').first();
-        if (mediaWrapper.length && mesText.length) {
-            if (mediaWrapper.index() < mesText.index()) {
-                mesText.after(mediaWrapper);
+            if (!box.find('.nnb-mes-scene').length) {
+                box.prepend('<div class="mes_button nnb-mes-btn nnb-mes-scene fa-solid fa-image interactable" title="Нарисовать эту сцену (или перерисовать)" tabindex="0"></div>');
             }
-        } else if (imgCont.length && mesText.length && imgCont.parent().is(mesEl.find('.mes_block'))) {
-            if (imgCont.index() < mesText.index()) {
+            if (hasSavedPrompt && !box.find('.nnb-mes-scene-redraw').length) {
+                box.find('.nnb-mes-scene').after('<div class="mes_button nnb-mes-btn nnb-mes-scene-redraw fa-solid fa-rotate interactable" title="Перерисовать эту сцену по тому же промпту (без нового описания)" tabindex="0"></div>');
+            } else if (!hasSavedPrompt && box.find('.nnb-mes-scene-redraw').length) {
+                box.find('.nnb-mes-scene-redraw').remove();
+            }
+
+            // Переставляем блок картинки под текст только если он реально стоит выше текста
+            const mesText = mesEl.find('.mes_text').first();
+            const mediaWrapper = mesEl.find('.mes_media_wrapper').first();
+            const imgCont = mesEl.find('.mes_img_container').first();
+            if (mediaWrapper.length && mesText.length && mediaWrapper.index() < mesText.index()) {
+                mesText.after(mediaWrapper);
+            } else if (imgCont.length && mesText.length && imgCont.parent().is(mesEl.find('.mes_block')) && imgCont.index() < mesText.index()) {
                 mesText.after(imgCont);
             }
-        }
-        mesEl.find('.nnb-inline-scene-bar').remove();
-        const sceneMeta = Number.isInteger(mId) ? c.chat?.[mId]?.extra?.nnbScene : null;
-        if (imgCont.length && sceneMeta && (sceneMeta.prompt || sceneMeta.desc)) {
-            const hist = Array.isArray(sceneMeta.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta.url ? [sceneMeta.url] : []);
-            let cIdx = hist.indexOf(sceneMeta.url);
-            if (cIdx < 0) cIdx = hist.length - 1;
-            const curUrl = hist[cIdx] || sceneMeta.url || '';
-            if (curUrl) {
-                const imgEl = imgCont.find('img.mes_img').first();
-                if (imgEl.length && imgEl.attr('src') !== curUrl) {
-                    imgEl.attr('src', curUrl);
-                }
-            }
-            const isLastSlide = cIdx >= hist.length - 1;
 
-            const bar = $('<div class="nnb-inline-scene-bar"></div>');
-            const navRow = $('<div class="nnb-inline-scene-nav"></div>');
-            const prevBtn = $(`<div class="menu_button" style="padding:4px 12px; font-size:0.84em; margin:0; ${cIdx <= 0 ? 'opacity:0.35; pointer-events:none;' : ''}" title="Предыдущий вариант (◀)"><i class="fa-solid fa-chevron-left"></i></div>`).on('click', async e => {
-                e.stopPropagation();
-                if (cIdx <= 0) return;
-                const prevUrl = hist[cIdx - 1];
-                sceneMeta.url = prevUrl;
-                await attachToLastMessage(prevUrl, mId, sceneMeta, true);
-            });
-            const promptToggleBtn = $(`<div class="menu_button" style="padding:4px 10px; font-size:0.82em; margin:0;" title="Показать/подправить промпт этой сцены прямо под картинкой"><i class="fa-solid fa-pen-to-square"></i> Вариант ${cIdx + 1} / ${hist.length}</div>`);
-            const nextBtn = $(`<div class="menu_button ${isLastSlide ? 'nnb-btn-primary' : ''}" style="padding:4px 12px; font-size:0.84em; margin:0;" title="${isLastSlide ? 'Сгенерировать ещё одну картинку по тому же промпту прямо под постом (▶)' : 'Следующий вариант (▶)'}"><span>${isLastSlide ? '+ Ещё ' : ''}</span><i class="fa-solid fa-chevron-right"></i></div>`).on('click', async function (e) {
-                e.stopPropagation();
-                if (!isLastSlide) {
-                    const nextUrl = hist[cIdx + 1];
-                    sceneMeta.url = nextUrl;
-                    await attachToLastMessage(nextUrl, mId, sceneMeta, true);
-                } else {
-                    const btn = $(this);
-                    btn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Рисую…');
-                    await redrawSceneBySamePrompt(mId, sceneMeta);
+            if (imgCont.length && sceneMeta && (sceneMeta.prompt || sceneMeta.desc)) {
+                const hist = Array.isArray(sceneMeta.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta.url ? [sceneMeta.url] : []);
+                let cIdx = hist.indexOf(sceneMeta.url);
+                if (cIdx < 0) cIdx = hist.length - 1;
+                const curUrl = hist[cIdx] || sceneMeta.url || '';
+                if (curUrl) {
+                    const imgEl = imgCont.find('img.mes_img').first();
+                    if (imgEl.length && imgEl.attr('src') !== curUrl) {
+                        imgEl.attr('src', curUrl);
+                    }
                 }
-            });
-            navRow.append(prevBtn, promptToggleBtn, nextBtn);
-            if (hist.length > 1) {
-                const keepOnlyBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Удалить остальные ${hist.length - 1} черновых вариантов этой сцены и оставить только текущий кадр (освобождает память чата)"><i class="fa-solid fa-broom"></i> Оставить только этот</div>`).on('click', async e => {
+                const sig = `${mId}|${cIdx}|${hist.length}|${curUrl.slice(-40)}`;
+                const existingBar = mesEl.find('.nnb-inline-scene-bar').first();
+                if (existingBar.length && existingBar.attr('data-nnb-sig') === sig) {
+                    return; // Панель уже отрисована с теми же данными — не трогаем DOM!
+                }
+                existingBar.remove();
+
+                const isLastSlide = cIdx >= hist.length - 1;
+                const bar = $('<div class="nnb-inline-scene-bar"></div>').attr('data-nnb-sig', sig);
+                const navRow = $('<div class="nnb-inline-scene-nav"></div>');
+                const prevBtn = $(`<div class="menu_button" style="padding:4px 12px; font-size:0.84em; margin:0; ${cIdx <= 0 ? 'opacity:0.35; pointer-events:none;' : ''}" title="Предыдущий вариант (◀)"><i class="fa-solid fa-chevron-left"></i></div>`).on('click', async e => {
                     e.stopPropagation();
-                    const removedCount = hist.length - 1;
-                    sceneMeta.history = [curUrl];
-                    sceneMeta.url = curUrl;
-                    if (Array.isArray(c.chat?.[mId]?.extra?.media)) {
-                        c.chat[mId].extra.media = c.chat[mId].extra.media.filter(x => x.url === curUrl || x.source !== 'generated');
-                        c.chat[mId].extra.media_index = Math.max(0, c.chat[mId].extra.media.length - 1);
-                    }
-                    const st2 = store();
-                    if (st2 && Array.isArray(st2.scenes)) {
-                        st2.scenes = st2.scenes.filter(x => x.mesId !== mId && !hist.includes(x.url));
-                        st2.scenes.push({ url: curUrl, mesId: mId, at: mId + 1, date: st2.time?.date || '', desc: sceneMeta.desc || '', extraNeg: sceneMeta.extraNeg || '', cast: sceneMeta.cast || [], camMode: sceneMeta.camMode || 'third', prompt: sceneMeta.prompt || '', pov: !!sceneMeta.pov });
-                    }
-                    await attachToLastMessage(curUrl, mId, sceneMeta, true);
-                    await ctx().saveMetadata();
-                    toastr.success(`Удалено черновых вариантов: ${removedCount}. В посте и альбоме оставлен только выбранный кадр!`, '🖼 Чистка сцены');
+                    if (cIdx <= 0) return;
+                    const prevUrl = hist[cIdx - 1];
+                    sceneMeta.url = prevUrl;
+                    await attachToLastMessage(prevUrl, mId, sceneMeta, true);
                 });
-                navRow.append(keepOnlyBtn);
-            }
-            bar.append(navRow);
-
-            const promptBox = $('<div class="nnb-inline-scene-prompt" style="display:none; width:100%; margin-top:6px;"></div>');
-            const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой сцены (можно подправить теги вручную и нажать ▶)"></textarea>').val(sceneMeta.desc || sceneMeta.prompt || '');
-            promptArea.on('click', e => e.stopPropagation());
-            promptArea.on('input change', function () {
-                const val = String($(this).val() || '').trim();
-                if (val) {
-                    sceneMeta.desc = val;
-                    sceneMeta.prompt = '';
+                const promptToggleBtn = $(`<div class="menu_button" style="padding:4px 10px; font-size:0.82em; margin:0;" title="Показать/подправить промпт этой сцены прямо под картинкой"><i class="fa-solid fa-pen-to-square"></i> Вариант ${cIdx + 1} / ${hist.length}</div>`);
+                const nextBtn = $(`<div class="menu_button ${isLastSlide ? 'nnb-btn-primary' : ''}" style="padding:4px 12px; font-size:0.84em; margin:0;" title="${isLastSlide ? 'Сгенерировать ещё одну картинку по тому же промпту прямо под постом (▶)' : 'Следующий вариант (▶)'}"><span>${isLastSlide ? '+ Ещё ' : ''}</span><i class="fa-solid fa-chevron-right"></i></div>`).on('click', async function (e) {
+                    e.stopPropagation();
+                    if (!isLastSlide) {
+                        const nextUrl = hist[cIdx + 1];
+                        sceneMeta.url = nextUrl;
+                        await attachToLastMessage(nextUrl, mId, sceneMeta, true);
+                    } else {
+                        const btn = $(this);
+                        btn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Рисую…');
+                        await redrawSceneBySamePrompt(mId, sceneMeta);
+                    }
+                });
+                navRow.append(prevBtn, promptToggleBtn, nextBtn);
+                if (hist.length > 1) {
+                    const keepOnlyBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Удалить остальные ${hist.length - 1} черновых вариантов этой сцены и оставить только текущий кадр (освобождает память чата)"><i class="fa-solid fa-broom"></i> Оставить только этот</div>`).on('click', async e => {
+                        e.stopPropagation();
+                        const removedCount = hist.length - 1;
+                        sceneMeta.history = [curUrl];
+                        sceneMeta.url = curUrl;
+                        if (Array.isArray(c.chat?.[mId]?.extra?.media)) {
+                            c.chat[mId].extra.media = c.chat[mId].extra.media.filter(x => x.url === curUrl || x.source !== 'generated');
+                            c.chat[mId].extra.media_index = Math.max(0, c.chat[mId].extra.media.length - 1);
+                        }
+                        const st2 = store();
+                        if (st2 && Array.isArray(st2.scenes)) {
+                            st2.scenes = st2.scenes.filter(x => x.mesId !== mId && !hist.includes(x.url));
+                            st2.scenes.push({ url: curUrl, mesId: mId, at: mId + 1, date: st2.time?.date || '', desc: sceneMeta.desc || '', extraNeg: sceneMeta.extraNeg || '', cast: sceneMeta.cast || [], camMode: sceneMeta.camMode || 'third', prompt: sceneMeta.prompt || '', pov: !!sceneMeta.pov });
+                        }
+                        await attachToLastMessage(curUrl, mId, sceneMeta, true);
+                        await ctx().saveMetadata();
+                        toastr.success(`Удалено черновых вариантов: ${removedCount}. В посте и альбоме оставлен только выбранный кадр!`, '🖼 Чистка сцены');
+                    });
+                    navRow.append(keepOnlyBtn);
                 }
-            });
-            promptBox.append(promptArea);
-            bar.append(promptBox);
+                bar.append(navRow);
 
-            promptToggleBtn.on('click', e => {
-                e.stopPropagation();
-                promptBox.slideToggle(150);
-            });
+                const promptBox = $('<div class="nnb-inline-scene-prompt" style="display:none; width:100%; margin-top:6px;"></div>');
+                const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой сцены (можно подправить теги вручную и нажать ▶)"></textarea>').val(sceneMeta.desc || sceneMeta.prompt || '');
+                promptArea.on('click', e => e.stopPropagation());
+                promptArea.on('input change', function () {
+                    const val = String($(this).val() || '').trim();
+                    if (val) {
+                        sceneMeta.desc = val;
+                        sceneMeta.prompt = '';
+                    }
+                });
+                promptBox.append(promptArea);
+                bar.append(promptBox);
 
-            // Вставляем панель строго ПОСЛЕ контейнера картинки, чтобы она никогда не перекрывала ни текст поста, ни саму иллюстрацию!
-            imgCont.after(bar);
-        }
-    });
-    $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map, .nnb-mes-customer, .nnb-mes-actions-btn').remove();
-    const lastMes = mes.last();
-    const lastBox = lastMes.find('.mes_buttons').first();
-    if (lastBox.length && shopModeOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-customer fa-solid fa-bell-concierge interactable" title="Лавка: следующий покупатель" tabindex="0"></div>');
-    if (lastBox.length && mapOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-map fa-solid fa-map interactable" title="Карта: куда пойти" tabindex="0"></div>');
-    if (lastBox.length && gachaOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-gacha fa-solid fa-dice interactable" title="Находки: испытать удачу" tabindex="0"></div>');
-    if (lastBox.length && st.direction.wardrobe) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-ward fa-solid fa-shirt interactable" title="Гардероб: подобрать образ" tabindex="0"></div>');
-    if (lastBox.length && settings().actionPrompts && !lastMes.hasClass('is_user')) {
-        const actBtn = $('<div class="mes_button nnb-mes-btn nnb-mes-actions-btn fa-solid fa-lightbulb interactable" title="💡 Подсказать варианты действий" tabindex="0"></div>');
-        actBtn.on('click', function(e) {
-            e.stopPropagation();
-            generateActionPromptsNow();
+                promptToggleBtn.on('click', e => {
+                    e.stopPropagation();
+                    promptBox.slideToggle(150);
+                });
+
+                imgCont.after(bar);
+            } else {
+                mesEl.find('.nnb-inline-scene-bar').remove();
+            }
         });
-        lastBox.prepend(actBtn);
+        $('.nnb-mes-ward, .nnb-mes-gacha, .nnb-mes-map, .nnb-mes-customer, .nnb-mes-actions-btn').remove();
+        const lastMes = mes.last();
+        const lastBox = lastMes.find('.mes_buttons').first();
+        if (lastBox.length && shopModeOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-customer fa-solid fa-bell-concierge interactable" title="Лавка: следующий покупатель" tabindex="0"></div>');
+        if (lastBox.length && mapOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-map fa-solid fa-map interactable" title="Карта: куда пойти" tabindex="0"></div>');
+        if (lastBox.length && gachaOn(st)) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-gacha fa-solid fa-dice interactable" title="Находки: испытать удачу" tabindex="0"></div>');
+        if (lastBox.length && st.direction.wardrobe) lastBox.prepend('<div class="mes_button nnb-mes-btn nnb-mes-ward fa-solid fa-shirt interactable" title="Гардероб: подобрать образ" tabindex="0"></div>');
+        if (lastBox.length && settings().actionPrompts && !lastMes.hasClass('is_user')) {
+            const actBtn = $('<div class="mes_button nnb-mes-btn nnb-mes-actions-btn fa-solid fa-lightbulb interactable" title="💡 Подсказать варианты действий" tabindex="0"></div>');
+            actBtn.on('click', function(e) {
+                e.stopPropagation();
+                generateActionPromptsNow();
+            });
+            lastBox.prepend(actBtn);
+        }
+        renderActionPrompts();
+    } finally {
+        isPlacingMesButtons = false;
     }
-    renderActionPrompts();
 }
 let mesBtnTimer = null;
 function placeMesButtonsSoon() {
     clearTimeout(mesBtnTimer);
-    mesBtnTimer = setTimeout(placeMesButtons, 150);
+    mesBtnTimer = setTimeout(placeMesButtons, 280);
 }
 
 // ⏩ у поля ввода и пункты в меню «волшебной палочки»
@@ -14407,6 +14821,7 @@ function addMenuItems() {
         menu.append(item('nnb_menu_trends', 'fa-fire', 'Мода и тренды сезона', () => openTrendsModal()));
         menu.append(item('nnb_menu_customer', 'fa-bell-concierge', 'Лавка: следующий покупатель', () => nextShopCustomer()));
         menu.append(item('nnb_menu_ff', 'fa-forward', 'Дальше: следующее событие', fastForward));
+        menu.append(item('nnb_menu_offscreen', 'fa-clapperboard', 'За кадром: что у остальных героев', offscreenCutaway));
         menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена: нарисовать', () => showScenePopup()));
         menu.append(item('nnb_menu_map', 'fa-map', 'Карта: куда пойти', () => showMapPopup()));
         menu.append(item('nnb_menu_gacha', 'fa-dice', 'Находки: испытать удачу', () => startGacha()));
