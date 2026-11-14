@@ -726,6 +726,7 @@ const GENRE_HINTS = {
               const before = t.date;
               if (res && !res._dateBeforeMove) res._dateBeforeMove = before;
               t.date = applyDuration(t.date, dur);
+              t.dayStartedAtMsg = ctx().chat?.length ?? 0;
               res.timeMoved = daysBetween(before, t.date);
           }
           return true;
@@ -735,6 +736,7 @@ const GENRE_HINTS = {
           const iso = parseDateText(m[1], t.date);
           if (iso) {
               if (t.date && iso !== t.date) {
+                  t.dayStartedAtMsg = ctx().chat?.length ?? 0;
                   res.timeMoved = daysBetween(t.date, iso);
                   if (iso < t.date) handleDateRollback(st, t.date, iso);
               }
@@ -2020,25 +2022,27 @@ function livingWorldOn(st) {
 }
 
 function buildWorldProfileInjection(st) {
-    const wp = st?.worldProfile;
-    if (!wp) return '';
+    if (!st) return '';
+    const wp = st.worldProfile;
     const user = storyNames().user;
-    const parts = [`[Профиль мира и персонажа (${user}) — канон истории:`];
-    if (wp.home) parts.push(`— Жильё ${user}: ${wp.home}.`);
-    if (wp.startVibe) parts.push(`— Точка старта: ${wp.startVibe}.`);
-    if (wp.job) parts.push(`— Профессия / занятие ${user}: ${wp.job}.`);
-    if (Array.isArray(wp.hobbies) && wp.hobbies.length) parts.push(`— Хобби и увлечения ${user}: ${wp.hobbies.join(', ')}.`);
-    if (wp.wealth) parts.push(`— Достаток: ${wp.wealth}.`);
-    if (wp.pet && wp.pet !== 'Без питомца') parts.push(`— Домашний питомец: ${wp.pet}.`);
-    if (wp.freeWorld) {
-        const favs = (st.npcs || []).filter(n => n.favorite).map(n => n.name);
-        if (favs.length) {
-            parts.push(`— Свободная игра в мир: главный фокус и романтический/сюжетный интерес ${user} сейчас связан с фаворитом из блокнота (${favs.join(', ')}). Мир остаётся живым и открытым для исследования.`);
-        } else {
-            parts.push(`— Свободная игра в мир (без привязки к одному стартовому фавориту): не привязывай ${user} наручниками к одному персонажу в каждой сцене. Давай ${user} свободно исследовать мир, жить своей жизнью, общаться с разными людьми и встречать потенциальные симпатии по ходу сюжета.`);
+    const parts = [];
+    if (wp) {
+        if (wp.home) parts.push(`— Жильё ${user}: ${wp.home}.`);
+        if (wp.startVibe) parts.push(`— Точка старта: ${wp.startVibe}.`);
+        if (wp.job) parts.push(`— Профессия / занятие ${user}: ${wp.job}.`);
+        if (Array.isArray(wp.hobbies) && wp.hobbies.length) parts.push(`— Хобби и увлечения ${user}: ${wp.hobbies.join(', ')}.`);
+        if (wp.wealth) parts.push(`— Достаток: ${wp.wealth}.`);
+        if (wp.pet && wp.pet !== 'Без питомца') parts.push(`— Домашний питомец: ${wp.pet}.`);
+        if (wp.freeWorld) {
+            const favs = (st.npcs || []).filter(n => n.favorite).map(n => n.name);
+            if (favs.length) {
+                parts.push(`— Свободная игра в мир: главный фокус и романтический/сюжетный интерес ${user} сейчас связан с фаворитом из блокнота (${favs.join(', ')}). Мир остаётся живым и открытым для исследования.`);
+            } else {
+                parts.push(`— Свободная игра в мир (без привязки к одному стартовому фавориту): не привязывай ${user} наручниками к одному персонажу в каждой сцене. Давай ${user} свободно исследовать мир, жить своей жизнью, общаться с разными людьми и встречать потенциальные симпатии по ходу сюжета.`);
+            }
+        } else if (wp.charRel && wp.charRel !== 'По первому сообщению чата') {
+            parts.push(`— Стартовая связь с основным персонажем: ${wp.charRel}.`);
         }
-    } else if (wp.charRel && wp.charRel !== 'По первому сообщению чата') {
-        parts.push(`— Стартовая связь с основным персонажем: ${wp.charRel}.`);
     }
     if (st.dynasty?.userFamily) parts.push(`— Семья и родня ${user}: ${st.dynasty.userFamily}.`);
     if (st.dynasty?.charFamily) parts.push(`— Семья и близкий круг ${storyNames().char}: ${st.dynasty.charFamily}.`);
@@ -2062,7 +2066,8 @@ function buildWorldProfileInjection(st) {
     if (activeDreams.length) {
         parts.push(`— 🌙 Недавний сон/кошмар (может повлиять на утреннее настроение или всплыть в разговоре один раз): ${activeDreams.map(d => `${d.who} (${d.kind === 'nightmare' ? 'кошмар' : 'сон'}): ${d.text}`).join('; ')}.`);
     }
-    return parts.join('\n') + ']';
+    if (!parts.length) return '';
+    return `[Профиль мира, окружения и персонажа (${user}) — канон истории:\n` + parts.join('\n') + ']';
 }
 
 function buildLivingWorldInjection(st) {
@@ -2836,7 +2841,7 @@ function parseAndApply(raw) {
                 const targetName = m[1].trim();
                 const mc = ensureMainCharCard(st);
                 const n = findNpc(st, targetName) || (mc && normName(mc.name) === normName(targetName) ? mc : null);
-                if (n && !n.locked) {
+                if (n) {
                     ensureNpcScales(n, st);
                     const parts = m[2].split('|').map(x => x.trim());
                     parts.forEach(p => {
@@ -2893,13 +2898,13 @@ function parseAndApply(raw) {
                         const aem = p.match(/^(?:внешность_?en|теги_?внешности|appearance_?en|tags)\s*[=:]\s*(.+)$/i);
                         if (aem) { n.appearanceEn = aem[1].trim().replace(/\]$/, ''); return; }
                         const dm = p.match(/^(?:мечта|цель|стремление)\s*[=:]\s*(.+)$/i);
-                        if (dm && !n.dream) { n.dream = dm[1].trim().replace(/\]$/, ''); return; }
+                        if (dm && (!n.dream || n._allowOverwriteProfile)) { n.dream = dm[1].trim().replace(/\]$/, ''); return; }
                         const fm = p.match(/^(?:страх|боится)\s*[=:]\s*(.+)$/i);
-                        if (fm && !n.fear) { n.fear = fm[1].trim().replace(/\]$/, ''); return; }
+                        if (fm && (!n.fear || n._allowOverwriteProfile)) { n.fear = fm[1].trim().replace(/\]$/, ''); return; }
                         const lm = p.match(/^(?:любит|вкусы|предпочтения|нравится)\s*[=:]\s*(.+)$/i);
-                        if (lm && !n.likes) { n.likes = lm[1].trim().replace(/\]$/, ''); return; }
+                        if (lm && (!n.likes || n._allowOverwriteProfile)) { n.likes = lm[1].trim().replace(/\]$/, ''); return; }
                         const dlm = p.match(/^(?:не_?любит|не_?переносит)\s*[=:]\s*(.+)$/i);
-                        if (dlm && !n.dislikes) { n.dislikes = dlm[1].trim().replace(/\]$/, ''); }
+                        if (dlm && (!n.dislikes || n._allowOverwriteProfile)) { n.dislikes = dlm[1].trim().replace(/\]$/, ''); }
                     });
                     res.npcUpd++;
                 }
@@ -3236,18 +3241,6 @@ async function think(manual = false) {
             st.scenes.forEach(sc => { if (!sc.date) sc.date = st.time.date; });
         }
         report(res, manual, raw);
-        if (res.newBoxItems?.length && wantImages() && canDrawScene()) {
-            setStatus('🎨 Рисую картинки для новых предметов в шкатулке…');
-            try {
-                const newPerfumes = res.newBoxItems.filter(x => x.kind === 'perfume');
-                const newOthers = res.newBoxItems.filter(x => x.kind !== 'perfume');
-                if (newPerfumes.length) await drawBoxItemsSheetBatch(st, newPerfumes, 'perfume');
-                if (newOthers.length) await drawBoxItemsSheetBatch(st, newOthers, 'accessory');
-                toastr.success(`Нарисованы картинки для новых находок в шкатулке: ${res.newBoxItems.map(x => escapeHtml(x.title)).join(', ')}`, '🎁 Шкатулка', { escapeHtml: false });
-            } catch (errImg) {
-                console.warn('[npc_notebook] auto draw new story box items error:', errImg);
-            }
-        }
         if (st.direction.time) {
             await fillFlavor(st, false);
             await holidayStep(st);
@@ -3258,8 +3251,19 @@ async function think(manual = false) {
                 setStatus('🎭 Модель подводит итог образа…');
                 if (await revealOutfit(st)) afterBusy = showRevealPopup;
             } else if (res.outfit && !w.active) {
-                setStatus('👗 Модель подбирает образы…');
-                if (await generateOutfits(st, res.outfit)) afterBusy = presentLooks;
+                if (manual) {
+                    setStatus('👗 Модель подбирает образы…');
+                    if (await generateOutfits(st, res.outfit)) afterBusy = presentLooks;
+                } else {
+                    const occ = res.outfit;
+                    afterBusy = () => {
+                        toastr.info(
+                            `По сюжету намечается повод подобрать образ («${escapeHtml(occ)}»). Нажми сюда или на 👗, если хочешь открыть примерочную!`,
+                            '👗 Гардероб',
+                            { timeOut: 12000, extendedTimeOut: 5000, escapeHtml: false, onclick: () => promptGenerateNewOutfits(occ) }
+                        );
+                    };
+                }
             }
         }
     } catch (err) {
@@ -4941,7 +4945,7 @@ async function ensurePicture(kind, force, onDone) {
                 setStatus(`🎨 NovelAI рисует штрих ${i + 1} из ${items.length} («${ac.title}»)…`);
                 const singlePrompt = buildSingleAccentPromptForNai(who, ac);
                 const isMakeup = ac.kind === 'makeup' || /макияж|makeup|lipstick|тени|помад/i.test(ac.kind || ac.title);
-                const singleUrl = await drawViaNovelAi(singlePrompt, isMakeup ? 'portrait' : 'square', null);
+                const singleUrl = await drawViaNovelAi(singlePrompt, isMakeup ? 'portrait' : 'square', isMakeup ? { extraNeg: 'blush, blushing, nose blush, full-face blush, heavy blush, embarrassed, shy, flustered, timid' } : null);
                 if (singleUrl) {
                     ac.image = singleUrl;
                     ac.imageLayout = { rows: 1, cols: 1 };
@@ -5136,6 +5140,36 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
     ].filter(Boolean).join('\n\n');
 }
 
+function formatEditableScenePrompt(meta) {
+    if (!meta) return '';
+    const base = String(meta.desc || meta.prompt || '').trim();
+    const caps = Array.isArray(meta.charCaptions) ? meta.charCaptions.filter(Boolean) : [];
+    if (!caps.length) return base;
+    return [base, ...caps.map((c, idx) => `CHAR${idx + 1}: ${c}`)].filter(Boolean).join('\n');
+}
+
+function applyEditedScenePromptToMeta(meta, rawText) {
+    if (!meta) return;
+    const text = String(rawText || '').trim();
+    if (!text) return;
+    const baseLines = [];
+    const newCaps = [];
+    for (const line of text.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const m = trimmed.match(/^CHAR\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
+        if (m) {
+            const cap = m[2].trim().replace(/\]$/, '');
+            if (cap) newCaps.push(cap);
+        } else {
+            baseLines.push(trimmed.replace(/^SCENE\s*[:：—–-]\s*/i, ''));
+        }
+    }
+    meta.desc = baseLines.join(', ').replace(/,\s*,+/g, ', ').trim();
+    meta.prompt = '';
+    meta.charCaptions = newCaps;
+}
+
 function findSavedSceneMeta(mesId) {
     const c = ctx();
     const st = store();
@@ -5177,11 +5211,13 @@ async function askSceneCameraMode(existingMeta = null) {
                 finish({ mode: existingMeta.camMode || 'third', reuseMeta: existingMeta });
             });
             const editPromptBtn = $('<div class="menu_button" style="margin:0;"><i class="fa-solid fa-pen"></i> Подправить промпт и перерисовать</div>').on('click', async () => {
-                const edited = await askText('Промпт сцены на английском для генератора картинок:', existingMeta.desc || existingMeta.prompt);
+                const edited = await askText('Промпт сцены на английском (и слоты CHAR1 / CHAR2, если есть):', formatEditableScenePrompt(existingMeta));
                 if (edited && edited.trim()) {
+                    const cloned = structuredClone(existingMeta);
+                    applyEditedScenePromptToMeta(cloned, edited.trim());
                     finish({
                         mode: existingMeta.camMode || 'third',
-                        reuseMeta: { ...existingMeta, desc: edited.trim(), prompt: '' },
+                        reuseMeta: cloned,
                     });
                 }
             });
@@ -5502,7 +5538,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
         // Сохраняем все сгенерированные варианты без автоудаления, чтобы можно было спокойно сравнить и выбрать лучший (а лишние удалить вручную кнопкой)!
-        st.scenes.push({ url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, camMode, prompt, pov: isPov });
+        st.scenes.push({ url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov });
         if (st.scenes.length > 120) st.scenes.shift();
         await ctx().saveMetadata();
         renderPanel();
@@ -5733,12 +5769,11 @@ async function openSceneImageViewer(mesId, fallbackSceneObj = null) {
 
         // Раскрывающийся блок с промптом — можно подправить теги/описание прямо тут и нажать ▶!
         const promptDet = $('<details class="nnb-note" style="margin-top:8px; padding:8px 10px;"><summary style="cursor:pointer; font-weight:600; font-size:0.86em;">📝 Промпт этой картинки (можно подправить вручную и нажать ▶)</summary></details>');
-        const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; margin-top:6px; font-size:0.84em;"></textarea>').val(meta.desc || meta.prompt || '');
+        const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; margin-top:6px; font-size:0.84em;"></textarea>').val(formatEditableScenePrompt(meta));
         promptArea.on('input change', function () {
             const val = String($(this).val() || '').trim();
             if (val) {
-                meta.desc = val;
-                meta.prompt = '';
+                applyEditedScenePromptToMeta(meta, val);
             }
         });
         promptDet.append(promptArea);
@@ -5779,12 +5814,19 @@ async function cleanupBloatedAlbumAndChat(st) {
     let removedVariants = 0;
     const activeSceneByMes = new Map();
 
+    const discardedDraftUrls = new Set();
+    const chosenUrls = new Set();
+
     // 1. В каждом сообщении чата оставляем только текущий выбранный вариант картинки (удаляем невыбранные дубли из history и media)
     chat.forEach((m, idx) => {
         if (!m || !m.extra) return;
         const sc = m.extra.nnbScene;
         if (sc && sc.url) {
+            chosenUrls.add(sc.url);
             if (Array.isArray(sc.history) && sc.history.length > 1) {
+                sc.history.forEach(u => {
+                    if (u && u !== sc.url) discardedDraftUrls.add(u);
+                });
                 removedVariants += (sc.history.length - 1);
                 sc.history = [sc.url];
             }
@@ -5800,6 +5842,7 @@ async function cleanupBloatedAlbumAndChat(st) {
                 desc: sc.desc || '',
                 extraNeg: sc.extraNeg || '',
                 cast: sc.cast || [],
+                charCaptions: Array.isArray(sc.charCaptions) ? [...sc.charCaptions] : [],
                 camMode: sc.camMode || 'third',
                 prompt: sc.prompt || '',
                 pov: !!sc.pov,
@@ -5807,22 +5850,15 @@ async function cleanupBloatedAlbumAndChat(st) {
         }
     });
 
-    // 2. В самом альбоме (st.scenes) оставляем только по 1 выбранной картинке на сцену и убираем дубликаты
+    // 2. В альбоме (st.scenes) убираем только отвергнутые черновые варианты и дубликаты URL,
+    // но БЕРЕЖНО СОХРАНЯЕМ все памятные фото из прошлых глав (перенесённые при переезде чата)!
     const oldScenesCount = (st.scenes || []).length;
-    if (activeSceneByMes.size > 0) {
-        const keptUrls = new Set();
-        const deduped = [];
-        for (const [, val] of activeSceneByMes.entries()) {
-            if (val.url && !keptUrls.has(val.url)) {
-                keptUrls.add(val.url);
-                deduped.push(val);
-            }
-        }
-        st.scenes = deduped;
-    } else if (Array.isArray(st.scenes)) {
+    if (Array.isArray(st.scenes)) {
         const seen = new Set();
         st.scenes = st.scenes.filter(x => {
-            if (!x?.url || seen.has(x.url)) return false;
+            if (!x?.url) return false;
+            if (discardedDraftUrls.has(x.url) && !chosenUrls.has(x.url)) return false;
+            if (seen.has(x.url)) return false;
             seen.add(x.url);
             return true;
         });
@@ -6289,7 +6325,7 @@ function parseLooks(raw) {
     let last = null;
     for (const line of answerLines(raw)) {
         let m = line.match(/^APPEARANCE\s*[:：—–-]\s*(.+)$/i);
-        if (m) { appearance = m[1].trim(); continue; }
+        if (m) { appearance = m[1].trim().replace(/\]$/, '').trim(); continue; }
         m = line.match(/^EN\s*[:：—–-]\s*(.+)$/i);
         if (m) { if (last) last.en = m[1].trim().replace(/\]$/, ''); continue; }
         m = line.match(/^LOOK\s*\d*\s*[:：—–-]\s*(.+)$/i);
@@ -6452,6 +6488,23 @@ async function drawBoxItemsSheetBatch(st, items, kindGroup = 'perfume') {
     if (!items.length) return false;
     const batch = items.slice(0, 5);
     const n = batch.length;
+    if (settings().imageSource === 'novelai') {
+        let drawnAny = false;
+        for (let i = 0; i < n; i++) {
+            const x = batch[i];
+            setStatus(`🎨 NovelAI рисует предмет ${i + 1} из ${n} («${x.title}»)…`);
+            const itemDesc = x.en || x.desc || x.title;
+            const singlePrompt = cleanForCommand(`1item, solo, ${ITEM_STYLE}, solid plain light cream background, centered ${kindGroup === 'perfume' ? 'luxury glass perfume bottle' : 'object or accessory'}: ${itemDesc}, no people, no hands, no text, no captions`);
+            const singleUrl = await drawViaNovelAi(singlePrompt, 'square', null);
+            if (!singleUrl) continue;
+            drawnAny = true;
+            x.image = singleUrl;
+            x.imageLayout = { rows: 1, cols: 1 };
+            x.crop = { x: 0, y: 0, w: 1, h: 1 };
+            x.isSingleImage = true;
+        }
+        return drawnAny;
+    }
     const layout = { rows: 1, cols: n };
     const pos = ['first', 'second', 'third', 'fourth', 'fifth'];
     const groupDesc = kindGroup === 'perfume' ? 'luxury glass perfume bottles' : 'stylish vintage items, accessories and curiosities';
@@ -7216,7 +7269,17 @@ async function showAccentPopup() {
         el.append(boxRow);
     }
 
+    let accentActionHandled = false;
+    backToLooksBtn.off('click').on('click', async () => {
+        accentActionHandled = true;
+        closePopupOf(el);
+        a.status = 'choosing';
+        await commit();
+        await showWardrobePopup();
+    });
+
     confirmBtn.on('click', async () => {
+        accentActionHandled = true;
         closePopupOf(el);
         const wornFromNew = [...wearSet].map(idx => accents[idx]).filter(Boolean);
         const wornFromBox = [...boxWearSet].map(x => ({
@@ -7236,12 +7299,14 @@ async function showAccentPopup() {
     });
 
     noneBtn.on('click', async () => {
+        accentActionHandled = true;
         closePopupOf(el);
         const allSave = [...saveSet].map(idx => accents[idx]).filter(Boolean);
         await chooseAccent(null, [], allSave);
     });
 
     const bottomBackBtn = $('<div class="menu_button" style="padding:8px 12px;"><i class="fa-solid fa-arrow-left"></i> Назад к нарядам</div>').on('click', async () => {
+        accentActionHandled = true;
         closePopupOf(el);
         a.status = 'choosing';
         await commit();
@@ -7249,8 +7314,11 @@ async function showAccentPopup() {
     });
 
     el.append($('<div class="nnb-pop-row" style="margin-top:10px; gap:8px; flex-wrap:wrap;"></div>').append(bottomBackBtn, confirmBtn, noneBtn));
-    if (!(await openPopup(el, visual))) await chooseAccent(null);
-    if (st?.map?.pendingTravel) await chooseAccent(null);
+    if (!(await openPopup(el, visual))) {
+        if (!accentActionHandled) await chooseAccent(null);
+    } else if (!accentActionHandled && st?.map?.pendingTravel) {
+        await chooseAccent(null);
+    }
 }
 
 // ---------- 🎰 Находки и варианты (гача) ----------
@@ -7771,7 +7839,7 @@ function revealPrompt(st) {
         'Ответь строками, без пояснений:',
         'RESULT: итог в 1–2 предложениях, с юмором и теплом — кто как отреагировал и чем этот образ запомнится',
         st.direction.arcs && st.arcs.length ? 'STIMULUS #A1: что изменилось — только если наряд действительно подтолкнул чью-то арку (иначе не пиши)' : '',
-        st.direction.npcs && st.npcs.length ? 'NPCSTATE [Имя]: как изменилось отношение NPC — только если заметно изменилось (иначе не пиши)' : '',
+        st.direction.npcs && st.npcs.length ? 'SCALE [Имя]: дружба=+2 — только если наряд действительно заметно повлиял на отношение NPC (иначе не пиши)' : '',
         ']',
     ].filter(Boolean).join('\n');
 }
@@ -7785,7 +7853,7 @@ async function revealOutfit(st) {
         const m = line.match(/^RESULT\s*[:：—–-]\s*(.+)$/i);
         if (m) { result = m[1].trim().replace(/\]$/, ''); break; }
     }
-    const res = parseAndApply(raw.split('\n').filter(l => /STIMULUS|NPCSTATE/i.test(l)).join('\n'));
+    const res = parseAndApply(raw.split('\n').filter(l => /STIMULUS|SCALE/i.test(l)).join('\n'));
     const entry = {
         occasion: a.occasion, title: a.look.title, desc: a.look.desc, effects: a.look.effects,
         result: result || 'Сцена прошла — каждый запомнил этот образ по-своему.',
@@ -8032,7 +8100,7 @@ async function showWardrobePopup() {
                     e.stopPropagation();
                     redrawOneBtn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Рисую…');
                     try {
-                        const who = getHeroineAppearanceEn(st, a);
+                        const who = await ensureHeroineAppearanceEnForNai(st, a);
                         const newSingleUrl = await drawViaNovelAi(buildSingleOutfitPromptForNai(who, o), 'portrait', { extraNeg: 'blush, blushing, nose blush, full-face blush, heavy blush, embarrassed, shy, flustered, timid, awkward smile' });
                         if (newSingleUrl) {
                             o.image = newSingleUrl;
@@ -9671,6 +9739,7 @@ async function processReplyTags() {
             if (pm) lastSparkMood = pm;
         }
     }
+    const hadVisibleActionsText = /(?:\[\s*(?:ACTIONS|Варианты действий)|(?:^|\n)\s*ACTIONS\s*[:：])/i.test(msg.mes);
     if (lastSparkVal !== null) {
         msg.mes = msg.mes.replace(sparkRegex, '').trimEnd();
         modified = true;
@@ -9680,7 +9749,6 @@ async function processReplyTags() {
             if (lastSparkStatus) mc.status = lastSparkStatus;
             if (lastSparkMood && mc.dailyMood !== 'off') mc.dailyMood = lastSparkMood;
         }
-        await c.saveMetadata();
     }
 
     // 2. Process time/holiday tags
@@ -9689,18 +9757,25 @@ async function processReplyTags() {
         if (applyReplyTags(st, msg.mes, res)) {
             msg.mes = stripTags(msg.mes);
             modified = true;
+            if (res.timeMoved) st.time.dayStartedAtMsg = chat.length;
             const parts = holidaySummary(res);
             if (res.timeMoved) parts.unshift(`📅 прошло ${daysWord(res.timeMoved)} → ${formatDate(st.time.date)}`);
             if (parts.length && s.showToasts) toastr.success(parts.map(escapeHtml).join('<br>'), 'Блокнот рассказчика', { escapeHtml: false, timeOut: 8000 });
-            await c.saveMetadata();
-            if (res.timeMoved) await runHolidayStep();
+            if (res.timeMoved) setTimeout(() => runHolidayStep(), 200);
         }
     }
 
     if (modified) {
         try {
-            if (typeof c.updateMessageBlock === 'function') c.updateMessageBlock(id, msg);
-            await c.saveChat();
+            // Перестраиваем DOM-блок сообщения только если вырезались видимые текстовые метки [ACTIONS: ...],
+            // а для невидимых HTML-комментариев <!--SPARK:...--> не дёргаем тяжёлый updateMessageBlock!
+            if (hadVisibleActionsText && typeof c.updateMessageBlock === 'function') {
+                c.updateMessageBlock(id, msg);
+            }
+            if (typeof c.saveMetadataDebounced === 'function') c.saveMetadataDebounced();
+            else await c.saveMetadata();
+            if (typeof c.saveChatDebounced === 'function') c.saveChatDebounced();
+            else await c.saveChat();
         } catch (e) { /* ignore */ }
         renderActionPromptsSoon();
         return true;
@@ -10720,6 +10795,23 @@ async function drawTrendsSheetBatch(st, items = null) {
     const list = (items || st.trends || []).slice(0, 4);
     if (!list.length || !canDrawScene()) return false;
     const n = list.length;
+    if (settings().imageSource === 'novelai') {
+        let drawnAny = false;
+        for (let i = 0; i < n; i++) {
+            const tr = list[i];
+            setStatus(`🎨 NovelAI рисует тренд ${i + 1} из ${n} («${tr.title}»)…`);
+            const singlePrompt = cleanForCommand(`1item, solo, ${ITEM_STYLE}, solid plain light cream background, centered trendy item: ${tr.en || tr.desc || tr.title}, no people, no hands, no text, no captions`);
+            const singleUrl = await drawViaNovelAi(singlePrompt, 'square', null);
+            if (!singleUrl) continue;
+            drawnAny = true;
+            tr.image = singleUrl;
+            tr.imageLayout = { rows: 1, cols: 1 };
+            tr.crop = { x: 0, y: 0, w: 1, h: 1 };
+            tr.isSingleImage = true;
+        }
+        if (drawnAny) await ctx().saveMetadata();
+        return drawnAny;
+    }
     const layout = { rows: 1, cols: n };
     const pos = ['first', 'second', 'third', 'fourth'];
     const prompt = n === 1
@@ -12605,11 +12697,13 @@ SCALE [${n.name}]: дружба=точное_число_от_-100_до_100 | р�
             const wasLocked = n.locked;
             n.locked = false;
             if (needFullRebuild) n._replaceCardFull = true;
-            n._allowOverwriteKeys = true;
-            n.dream = ''; n.fear = ''; n.likes = ''; n.dislikes = '';
+            // Если пользователь нажал «Дополнить фактами из ролевой» (cardMode === 'append'), НЕ перезаписываем уже заполненные поля Sims и ключей (заполняем только пустые)
+            n._allowOverwriteKeys = cardMode !== 'append';
+            n._allowOverwriteProfile = cardMode !== 'append';
             parseAndApply(raw);
             delete n._replaceCardFull;
             delete n._allowOverwriteKeys;
+            delete n._allowOverwriteProfile;
             n.locked = wasLocked !== undefined ? wasLocked : true;
             await commit();
             ok = true;
@@ -12687,7 +12781,7 @@ async function openNpcCardPopup(n) {
         // 1. Описание и актуальный статус (полноразмерное многострочное поле без обрезки + авто-защита замочком)
         const cardSec = $('<div class="nnb-note" style="margin:8px 0; padding:10px 12px;"></div>');
         const cardHead = $('<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px;"><b>Описание, внешность, биография и характер (защищено от стирания)</b></div>');
-        const headBtns = $('<div style="display:flex; gap:10px; align-items:center;"></div>');
+        const headBtns = $('<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;"></div>');
         if (!n.isMainChar) {
             const editNameBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.85;"><i class="fa-solid fa-pen"></i> Переименовать</span>').on('click', async () => {
                 const newName = await askText('Имя персонажа', n.name);
@@ -12707,13 +12801,15 @@ async function openNpcCardPopup(n) {
             renderModalContent();
         });
         const expandCardBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.92; color:var(--SmartThemeQuoteColor, #e0c068);" title="Сохранить весь текущий текст слово в слово и дописать в конец новые важные факты и события из всей ролевой и саммари"><i class="fa-solid fa-file-circle-plus"></i> Дополнить фактами из ролевой</span>').on('click', async () => {
-            if (await syncHeroFromChat(n, 'append')) renderModalContent();
+            closePopupOf(el);
+            if (await syncHeroFromChat(n, 'append')) await openNpcCardPopup(n);
         });
         const rebuildCardBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.88;" title="Собрать большое развёрнутое досье (8–16+ предложений) по всему чату, саммари и календарю (удобно, если описание потерялось при старом переезде)"><i class="fa-solid fa-book-medical"></i> Собрать полное досье</span>').on('click', async () => {
             if (n.card && n.card.length >= 60) {
                 if (!confirm(`Пересобрать полное развёрнутое досье «${n.name}» (8–16 предложений) на основе текущего описания, саммари и всей ролевой? (Если хочешь просто дописать новые факты в конец без перефразирования старых — нажми «Отмена» и выбери «Дополнить фактами из ролевой»)`)) return;
             }
-            if (await syncHeroFromChat(n, 'rebuild')) renderModalContent();
+            closePopupOf(el);
+            if (await syncHeroFromChat(n, 'rebuild')) await openNpcCardPopup(n);
         });
         headBtns.append(expandCardBtn, rebuildCardBtn, editStatusBtn);
         cardHead.append(headBtns);
@@ -13311,12 +13407,29 @@ async function generateMigrationStorySummary(st) {
 
     const curDateStr = st.time?.date ? formatDate(st.time.date) : 'текущий игровой день';
 
-    // Выделяем последние 20 постов как полный блок «СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ» без сокращений,
-    // а предыдущие посты берём равномерным срезом от самого первого сообщения
+    // Умный поиск начала последнего (текущего) игрового дня:
+    // Начинаем с 24 последних постов. Если на верхней границе этого среза НЕ видно маркеров начала дня/пробуждения/сна,
+    // значит этот же игровой день начался ещё раньше — прибавляем по +10 постов сверху (до 84 постов максимум)!
     let earlierDigest = '';
     let latestDayDigest = '';
-    const recentCount = Math.min(total, 24);
-    const latestSlice = chat.slice(-recentCount).map((m, i) => fmtMsg(m, total - recentCount + i, 700));
+    const DAY_BOUNDARY_RE = /(?:наступило\s+утро|на\s+следующий\s+день|следующим\s+утром|наутро|проснул(?:ся|ась|ись)|открыл[аи]?\s+глаза\s+утром|новый\s+день|утренн(?:ий|ее|яя)\s+(?:свет|солнце|луч)|легли\s+спать|провалил(?:ся|ась)\s+в\s+сон|пожелав\s+спокойной\s+ночи|\[Перемотка:|<!--\s*день\s*\+)/i;
+    let recentCount = Math.min(total, 24);
+    if (st.time?.dayStartedAtMsg && st.time.dayStartedAtMsg > 0 && st.time.dayStartedAtMsg < total) {
+        const sinceDayStart = total - st.time.dayStartedAtMsg + 2;
+        if (sinceDayStart > recentCount && sinceDayStart <= 84) {
+            recentCount = Math.min(total, sinceDayStart);
+        }
+    } else {
+        while (recentCount < total && recentCount < 84) {
+            const startIdx = total - recentCount;
+            const checkWindow = chat.slice(startIdx, Math.min(total, startIdx + 10));
+            const foundDayStart = checkWindow.some(m => DAY_BOUNDARY_RE.test(String(m?.mes || '')));
+            if (foundDayStart) break;
+            recentCount = Math.min(total, recentCount + 10);
+        }
+    }
+    const perPostMaxLen = recentCount > 45 ? 520 : 680;
+    const latestSlice = chat.slice(-recentCount).map((m, i) => fmtMsg(m, total - recentCount + i, perPostMaxLen));
     latestDayDigest = latestSlice.join('\n\n');
 
     if (total > recentCount) {
@@ -14646,14 +14759,23 @@ function placeMesButtons() {
         if (!on || !st) { $('.nnb-mes-btn, .nnb-inline-scene-bar').remove(); return; }
         mes.each(function () {
             const mesEl = $(this);
-            const box = mesEl.find('.mes_buttons').first();
-            if (!box.length) return;
             const mId = Number(mesEl.attr('mesid'));
             const sceneMeta = Number.isInteger(mId) ? c.chat?.[mId]?.extra?.nnbScene : null;
             const hasSavedPrompt = !!(sceneMeta?.prompt || sceneMeta?.desc);
+            // Быстрый пропуск старых сообщений, у которых уже стоит кнопка сцены и нет прикреплённой картинки сцены (экономит 99% запросов к DOM в длинных чатах!)
+            if (!hasSavedPrompt && mesEl.attr('data-nnb-ready') === '1') {
+                return;
+            }
+            const box = mesEl.find('.mes_buttons').first();
+            if (!box.length) return;
 
             if (!box.find('.nnb-mes-scene').length) {
                 box.prepend('<div class="mes_button nnb-mes-btn nnb-mes-scene fa-solid fa-image interactable" title="Нарисовать эту сцену (или перерисовать)" tabindex="0"></div>');
+            }
+            if (!hasSavedPrompt) {
+                mesEl.attr('data-nnb-ready', '1');
+            } else {
+                mesEl.removeAttr('data-nnb-ready');
             }
             if (hasSavedPrompt && !box.find('.nnb-mes-scene-redraw').length) {
                 box.find('.nnb-mes-scene').after('<div class="mes_button nnb-mes-btn nnb-mes-scene-redraw fa-solid fa-rotate interactable" title="Перерисовать эту сцену по тому же промпту (без нового описания)" tabindex="0"></div>');
@@ -14726,7 +14848,7 @@ function placeMesButtons() {
                         const st2 = store();
                         if (st2 && Array.isArray(st2.scenes)) {
                             st2.scenes = st2.scenes.filter(x => x.mesId !== mId && !hist.includes(x.url));
-                            st2.scenes.push({ url: curUrl, mesId: mId, at: mId + 1, date: st2.time?.date || '', desc: sceneMeta.desc || '', extraNeg: sceneMeta.extraNeg || '', cast: sceneMeta.cast || [], camMode: sceneMeta.camMode || 'third', prompt: sceneMeta.prompt || '', pov: !!sceneMeta.pov });
+                            st2.scenes.push({ url: curUrl, mesId: mId, at: mId + 1, date: st2.time?.date || '', desc: sceneMeta.desc || '', extraNeg: sceneMeta.extraNeg || '', cast: sceneMeta.cast || [], charCaptions: Array.isArray(sceneMeta.charCaptions) ? [...sceneMeta.charCaptions] : [], camMode: sceneMeta.camMode || 'third', prompt: sceneMeta.prompt || '', pov: !!sceneMeta.pov });
                         }
                         await attachToLastMessage(curUrl, mId, sceneMeta, true);
                         await ctx().saveMetadata();
@@ -14737,13 +14859,12 @@ function placeMesButtons() {
                 bar.append(navRow);
 
                 const promptBox = $('<div class="nnb-inline-scene-prompt" style="display:none; width:100%; margin-top:6px;"></div>');
-                const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой сцены (можно подправить теги вручную и нажать ▶)"></textarea>').val(sceneMeta.desc || sceneMeta.prompt || '');
+                const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой сцены (можно подправить теги и строки CHAR1/CHAR2 вручную и нажать ▶)"></textarea>').val(formatEditableScenePrompt(sceneMeta));
                 promptArea.on('click', e => e.stopPropagation());
                 promptArea.on('input change', function () {
                     const val = String($(this).val() || '').trim();
                     if (val) {
-                        sceneMeta.desc = val;
-                        sceneMeta.prompt = '';
+                        applyEditedScenePromptToMeta(sceneMeta, val);
                     }
                 });
                 promptBox.append(promptArea);
