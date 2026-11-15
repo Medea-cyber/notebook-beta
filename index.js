@@ -1280,6 +1280,9 @@ const defaults = {
     imgPromptWriterNote: '',
     imgOrientation: 'portrait',
     sceneCameraMode: 'ask',
+    comicStyleId: 'comicbright',
+    comicLinesMode: 'auto',
+    customComicStyles: [],
     imageRef: true,
     showToasts: true,
     hideSpoilers: false,
@@ -5041,7 +5044,620 @@ function collectRecentScenePrompts(st, chat, beforeIdx, maxCount = 5) {
     return list.slice(-maxCount);
 }
 
-function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
+
+// ===================== 💬 Модуль Комиксов, Манги и Вебтунов (адаптировано из «Мяфля · Кадр») =====================
+const KADR_COMIC_STYLES = [
+    {
+        id: 'comicbright',
+        name: '💬 Яркий комикс как NovelAI (3–4 кадра)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'comic, 4koma, multi-panel, full color, bright even lighting, pastel palette, clean black lineart, flat cel shading, soft gradients, diagonal panel border, eye close-up inset, small chibi reaction inset, sparkles, sweatdrop, expressive anime faces',
+        promptEn: 'Bright, clean full-color anime webcomic page in the style of modern NovelAI comic outputs: crisp clean black lineart, flat cel shading with very soft gradients, high-key bright even lighting, fresh saturated pastel palette, clean readable backgrounds with simple detail, 3–4 panels with thin black borders and white gutters, one panel cut diagonally, a small square inset panel with an extreme close-up of an eye, a small chibi head reaction in a corner, expressive comedic or deadpan anime faces, sparkles, impact stars and sweat drops.',
+    },
+    {
+        id: 'my_nai_comic',
+        name: '✨ Мой стиль NovelAI + раскладка комикса (3–4 кадра)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'comic, multi-panel, 4koma, panel layout, clean panel borders, white gutters, dynamic composition, close-up inset on eyes, expressive faces',
+        promptEn: 'Multi-panel anime comic page layout with 3–4 dynamic panels of different sizes, clean panel borders and white gutters, including a medium shot, an action shot, and an emotional close-up on the face or eyes.',
+    },
+    {
+        id: 'manga_page',
+        name: '📖 Манга-страница, ч/б (танкобон, 4–6 кадров)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'manga, comic, monochrome, greyscale, screentones, multi-panel, ink lines, G-pen lineart, hatching, speed lines, focus lines, eye close-up inset, high contrast, no color',
+        promptEn: 'Authentic Japanese manga page, strictly black and white, printed tankobon look: 4–6 panels of different sizes and shapes with clean black borders and white gutters, read right-to-left, including one large dramatic panel, one extreme close-up on the eyes, one small reaction panel and one figure breaking out of its panel border. Crisp G-pen ink lines with varied line weight, hand-applied screentone dots and gradients for shading, solid black areas, hatching in the shadows, focus lines and speed lines for emotion and motion, detailed inked backgrounds. Pure monochrome ink on white paper.',
+    },
+    {
+        id: 'webtoon',
+        name: '📱 Манхва-фреймы, вертикальный вебтун (3 кадра)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'webtoon, manhwa, comic, full color, vertical strip, 3koma, painterly rendering, glossy hair highlights, attractive adult faces, cinematic lighting, soft bokeh',
+        promptEn: 'Vertical Korean webtoon strip, premium full-color manhwa: one tall vertical scroll with 3 frames stacked top to bottom and wide empty gutters between them, frames without hard borders that softly fade into the background; first an establishing shot of the place, then a medium shot of the characters, then a dramatic close-up of a face, eyes or hands. Semi-realistic painterly rendering, glossy soft highlights, finely detailed hair, attractive adult faces, cinematic lighting with soft bokeh.',
+    },
+    {
+        id: 'manhwapage',
+        name: '🎨 Манхва-страница, цветная (полуреализм, 3–4 кадра)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'manhwa, webtoon, comic, full color, multi-panel, semi-realistic, painterly digital art, soft gradients, glossy highlights, realistic adult proportions, dramatic directional lighting, close-up inset',
+        promptEn: 'Full-color Korean webtoon (manhwa) page, premium semi-realistic digital painting: a page of 3–4 panels of different sizes with thin dark borders and white gutters — a cinematic medium shot, a dramatic close-up of a face, a small detail insert (a hand, a door, a phone). Rich painterly rendering with soft gradients and glossy highlights, finely detailed hair strands, realistic adult proportions and attractive faces, dramatic directional light and deep soft shadows.',
+    },
+    {
+        id: 'comicpage',
+        name: '💥 Комикс-страница, аниме (с чиби-врезкой)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'comic, full color, anime style, bold black outlines, bright cel shading, multi-panel, thick panel borders, eye close-up, cute chibi inset in corner, speed lines, sparkles, sweatdrop',
+        promptEn: 'Full-color anime comic page in a modern manga/manhwa style: clean bold black outlines, bright flat cel shading with soft gradients, a multi-panel layout with thick black panel borders and white gutters (3–4 panels of different sizes, one of them an extreme close-up on the eyes or face), speed lines, sparkles and sweat-drop effects, a small cute chibi reaction of one character in a corner inset, detailed bright backgrounds in every panel.',
+    },
+    {
+        id: 'yonkoma',
+        name: '😄 Ёнкома — 4 кадра-шутка (завязка → панчлайн)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: '4koma, comic, vertical strip, four equal panels, cute anime style, clean lines, soft flat colors, funny exaggerated reaction, sweatdrop, comedic',
+        promptEn: 'Japanese 4-koma (yonkoma) comic strip: four equal panels stacked vertically with thin black borders, simple cute anime style with clean lines and soft flat colors, setup – development – twist – punchline, the last panel is a funny exaggerated reaction.',
+    },
+    {
+        id: 'us_page',
+        name: '🦸 Американский комикс-страница (динамика и тушь)',
+        group: 'Комиксы и манга',
+        isPage: true,
+        naiTags: 'western comic, comic page, multi-panel, full color, bold ink lines, dramatic foreshortening, strong rim lighting, deep shadows, dynamic camera angle',
+        promptEn: 'Modern American comic book page, full color: 4–5 dynamic panels with black borders, bold confident inks, dramatic foreshortening and camera angles, rendered digital coloring with strong rim lights and deep shadows.',
+    },
+    {
+        id: 'shoujo',
+        name: '🌸 Сёдзё-манга, ч/б (романтика и лепестки)',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'shojo manga, monochrome, greyscale, screentones, delicate thin ink lines, sparkling eyes, long flowing hair, floral screentone background, falling petals, romantic atmosphere',
+        promptEn: 'Shojo manga panel, black and white with screentone: delicate thin ink lines, large sparkling eyes with layered highlights, long flowing hair, elegant tall adult figures, floral and bubble screentone backgrounds, soft sparkles and falling petals, romantic dreamy atmosphere, gentle grey tones. No color.',
+    },
+    {
+        id: 'seinen',
+        name: '🗡 Сэйнэн-манга, мрачная ч/б (тушь и штриховка)',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'seinen, manga, monochrome, greyscale, heavy textured ink, dense crosshatching, harsh shadows, solid black areas, grainy screentone, dramatic camera angle, dark atmosphere',
+        promptEn: 'Gritty seinen manga panel, black and white: heavy textured ink, dense cross-hatching, realistic adult anatomy and faces, harsh shadows with large solid blacks, grainy screentone, cinematic low and high camera angles, mature dark atmosphere. No color.',
+    },
+    {
+        id: 'noir',
+        name: '🩸 Нуар-комикс, ч/б с кроваво-красным акцентом',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'comic, noir, monochrome, spot color, red accent, stark high-contrast ink, solid black shadows, rain streaks, venetian blinds shadow, hard-boiled cinematic framing',
+        promptEn: 'Black-and-white noir graphic novel panel: stark high-contrast ink, huge solid black shadows, white negative shapes, rain streaks, light through venetian blinds, a single accent color — blood red — used only on one key detail, hard-boiled cinematic framing.',
+    },
+    {
+        id: 'chibi',
+        name: '🍡 Чиби-комикс (милые чибики и эмоции)',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'chibi, comic, super deformed, big head, small body, huge expressive eyes, exaggerated funny emotion, sweatdrop, sparkles, anger vein, clean ink lines, soft flat colors',
+        promptEn: 'Cute chibi comic illustration: characters drawn super-deformed with big heads, small bodies and huge expressive eyes, exaggerated funny emotions (sweat drops, blush marks, sparkles, anger veins), clean ink lines, soft flat colors, cozy detailed background around them, like a playful webcomic panel.',
+    },
+    {
+        id: 'manhwa_cel',
+        name: '💎 Манхва, чистая линия (корейский вебтун)',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'manhwa, webtoon, clean thin lineart, flat cel shading, soft airbrush gradients, glossy hair highlights, sharp elegant faces, tall slim adult figures, fashionable clothing, sparkling light',
+        promptEn: 'Modern Korean manhwa panel: clean thin digital line art, flat cel shading with soft airbrush gradients, glossy hair highlights, sharp elegant faces, slim tall adult figures, fashionable detailed clothing, bright saturated colors, sparkling light effects, polished romance-fantasy webtoon look.',
+    },
+    {
+        id: 'manhwad',
+        name: '🕯 Манхва-живопись, тёмная (тёплый полумрак)',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'manhwa, webtoon cover art, semi-realistic painterly illustration, soft realistic faces, detailed flowing hair, intimate low-key lighting, warm lamp glow, deep amber and burgundy tones, chiaroscuro',
+        promptEn: 'Semi-realistic painterly illustration in the style of premium Korean webtoon cover art: soft realistic faces, detailed flowing hair, delicate skin shading, elegant clothing with rich fabric texture, cinematic composition. Intimate low-key lighting: warm lamps and candlelight, deep amber and burgundy tones, soft glow on skin, moody chiaroscuro.',
+    },
+    {
+        id: 'manhwa',
+        name: '☀️ Манхва-живопись, светлая (золотой час)',
+        group: 'Одиночный стиль / Арт',
+        isPage: false,
+        naiTags: 'manhwa, webtoon cover art, semi-realistic painterly illustration, bright airy luminous lighting, warm golden hour glow, clear highlights, gentle shadows',
+        promptEn: 'Semi-realistic painterly illustration in the style of premium Korean webtoon cover art: soft realistic faces, detailed flowing hair, delicate skin shading, elegant clothing with rich fabric texture, cinematic composition. Bright, airy, luminous lighting: soft daylight or warm golden-hour glow, clear highlights, gentle shadows.',
+    },
+    {
+        id: 'junji_ito',
+        name: '🌀 Хоррор-манга (Junji Ito, страница с пером)',
+        group: 'Авторские стили из Кадра',
+        isPage: true,
+        naiTags: 'junji ito (style), horror manga, comic, multi-panel, monochrome, greyscale, pure black ink on white paper, obsessive crosshatching, stippling, eerie unsettling atmosphere',
+        promptEn: 'Junji Ito horror manga PAGE LAYOUT style (multi-panel). Full manga page composition with 3-5 panels, pure black ink on white paper, extreme stippling and obsessive crosshatching layered into near-solid black, unsettling eerie atmosphere.',
+    },
+    {
+        id: 'gachiakuta',
+        name: '⚡ Гранж-манга (Gachiakuta, дерзкая тушь)',
+        group: 'Авторские стили из Кадра',
+        isPage: false,
+        naiTags: 'gachiakuta (style), manga, comic, heavy bold black ink line, rough sketchy lineart, dynamic aggressive perspective, grunge punk aesthetic, high contrast',
+        promptEn: 'Gachiakuta grunge-punk dystopian manga style. Heavy bold black ink line varying weight aggressively, deliberate rough sketchy imperfection, hyper-detailed kinetic linework and graffiti energy.',
+    },
+    {
+        id: 'clamp',
+        name: '🦋 CLAMP (изящная сёдзё-эстетика)',
+        group: 'Авторские стили из Кадра',
+        isPage: false,
+        naiTags: 'clamp (circle), shojo manga, elongated graceful proportions, delicate thin black lineart, ornate decorative composition, flowing hair, fluttering petals',
+        promptEn: 'CLAMP shoujo manga style. Ultra-elongated graceful proportions, delicate confident thin black line, ornamental composition with flowing hair, ribbons and petals.',
+    },
+    {
+        id: 'persona5',
+        name: '🎭 Кислотный джаз (Persona 5, красно-чёрный стиль)',
+        group: 'Авторские стили из Кадра',
+        isPage: false,
+        naiTags: 'persona 5 (style), comic, acid-jazz cel shading, bold graphic-novel black outlines, high-contrast red and black palette, dynamic asymmetric angle',
+        promptEn: 'Persona 5 acid-jazz cel-shaded style, clean variant with no UI text. Anime cel-shading with 2-3 flat tones, bold confident graphic-novel black outline, high-contrast red and black aesthetic.',
+    },
+];
+
+function getAllComicStyles() {
+    const s = settings();
+    const custom = Array.isArray(s.customComicStyles) ? s.customComicStyles : [];
+    return [...KADR_COMIC_STYLES, ...custom];
+}
+
+function getComicStyleById(id) {
+    const all = getAllComicStyles();
+    return all.find(x => x.id === id) || all[0];
+}
+
+// Извлечение и проверка настоящих прямых реплик из поста (по алгоритму «Мяфля · Кадр»: не менее 65% совпадения слов с текстом поста, чтобы ИИ не выдумывал отсебятину!)
+function extractRealQuotesFromPostText(rawText, defaultSpeaker = '') {
+    const clean = stripTags(stripActionTags(String(rawText || ''))).replace(/<[^>]+>/g, '');
+    const candidates = [];
+
+    const shortenSpeech = x => {
+        let s = String(x || '').replace(/\s+/g, ' ').trim();
+        if (!s) return '';
+        const dashParts = s.split(/\s+[—–-]\s+/);
+        if (dashParts.length > 1) {
+            const kept = [dashParts[0]];
+            for (let i = 2; i < dashParts.length; i += 2) kept.push(dashParts[i]);
+            s = kept.map((t, j) => {
+                t = t.trim().replace(/[\s,;:]+$/, '');
+                return j < kept.length - 1 && !/[.!?…]$/.test(t) ? t + '.' : t;
+            }).join(' ');
+        }
+        s = s.replace(/^[«"„“]|[»"”]+$/g, '').replace(/[\s,;:—–-]+$/, '').trim();
+        if (s.length > 62) {
+            const firstSent = s.split(/(?<=[.!?…])\s+/)[0] || s;
+            s = firstSent.trim();
+        }
+        if (s.length > 62) {
+            const cut = s.slice(0, 60);
+            const sp = cut.lastIndexOf(' ');
+            s = (sp > 20 ? cut.slice(0, sp) : cut).replace(/[,;:\s]+$/, '') + '…';
+        }
+        return s.length >= 2 ? s : '';
+    };
+
+    const qRe = /[«“"]([^«»“”"\n]{2,240}?)[»”"]/g;
+    let m;
+    while ((m = qRe.exec(clean)) !== null && candidates.length < 8) {
+        const sp = shortenSpeech(m[1]);
+        if (sp) candidates.push(sp);
+    }
+    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,240})/g;
+    while ((m = dRe.exec(clean)) !== null && candidates.length < 8) {
+        const sp = shortenSpeech(m[1]);
+        if (sp) candidates.push(sp);
+    }
+
+    const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
+    const seen = new Set();
+    const out = [];
+    for (const c of candidates) {
+        const n = norm(c);
+        if (n && !seen.has(n)) {
+            seen.add(n);
+            out.push({ panel: out.length + 1, speaker: defaultSpeaker, text: c });
+        }
+        if (out.length >= 4) break;
+    }
+    return out;
+}
+
+function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defaultSpeaker = '') {
+    const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
+    const normStory = ' ' + norm(storyText + ' ' + lastPostText) + ' ';
+    const verified = [];
+    const seen = new Set();
+
+    for (const q of (llmQuotes || [])) {
+        const rawTxt = String(q?.text || '').replace(/^[«"„“]|[»"”]+$/g, '').trim();
+        if (!rawTxt) continue;
+        const words = norm(rawTxt).split(/\s+/).filter(w => w.length > 2);
+        let ok = false;
+        if (!words.length) {
+            ok = /^[!?…. ]+$/.test(rawTxt);
+        } else {
+            const hits = words.filter(w => normStory.includes(' ' + w)).length;
+            ok = (hits / words.length) >= 0.65;
+        }
+        if (ok) {
+            let shortTxt = rawTxt;
+            if (shortTxt.length > 64) {
+                const cut = shortTxt.slice(0, 62);
+                const sp = cut.lastIndexOf(' ');
+                shortTxt = (sp > 20 ? cut.slice(0, sp) : cut) + '…';
+            }
+            const key = norm(shortTxt);
+            if (key && !seen.has(key)) {
+                seen.add(key);
+                verified.push({
+                    panel: Number(q.panel) || (verified.length + 1),
+                    speaker: String(q.speaker || defaultSpeaker || '').trim(),
+                    text: shortTxt,
+                });
+            }
+        }
+    }
+
+    if (verified.length < 2) {
+        const fallback = extractRealQuotesFromPostText(lastPostText || storyText, '');
+        for (const fb of fallback) {
+            const key = norm(fb.text);
+            if (key && !seen.has(key) && verified.length < 4) {
+                seen.add(key);
+                verified.push({
+                    panel: verified.length + 1,
+                    speaker: fb.speaker || defaultSpeaker,
+                    text: fb.text,
+                });
+            }
+        }
+    }
+    return verified.slice(0, 4);
+}
+
+function drawRoundedRectPath(ctx2d, x, y, w, h, r) {
+    const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx2d.beginPath();
+    ctx2d.moveTo(x + rad, y);
+    ctx2d.lineTo(x + w - rad, y);
+    ctx2d.quadraticCurveTo(x + w, y, x + w, y + rad);
+    ctx2d.lineTo(x + w, y + h - rad);
+    ctx2d.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+    ctx2d.lineTo(x + rad, y + h);
+    ctx2d.quadraticCurveTo(x, y + h, x, y + h - rad);
+    ctx2d.lineTo(x, y + rad);
+    ctx2d.quadraticCurveTo(x, y, x + rad, y);
+    ctx2d.closePath();
+}
+
+// Отрисовка аккуратных комикс-облачков с русскими репликами поверх готовой картинки на Canvas
+async function overlayComicBubblesOnDataUrl(imageUrl, quotes) {
+    if (!imageUrl || !Array.isArray(quotes) || !quotes.length || typeof document === 'undefined') return imageUrl;
+    const dataUrl = await fileToDataUrl(imageUrl);
+    const srcToLoad = dataUrl || imageUrl;
+
+    return new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            try {
+                const W = img.naturalWidth || 832;
+                const H = img.naturalHeight || 1216;
+                const cv = document.createElement('canvas');
+                cv.width = W;
+                cv.height = H;
+                const ctx2d = cv.getContext('2d');
+                ctx2d.drawImage(img, 0, 0, W, H);
+
+                const validQuotes = quotes.filter(q => q && q.text && String(q.text).trim()).slice(0, 4);
+                const count = validQuotes.length;
+                if (!count) { resolve(imageUrl); return; }
+
+                const fontSize = Math.max(15, Math.round(W * 0.022));
+                const speakerFontSize = Math.max(12, Math.round(fontSize * 0.78));
+                const lineHeight = Math.round(fontSize * 1.28);
+                const maxBubbleW = Math.round(W * 0.56);
+                const padX = Math.round(fontSize * 0.85);
+                const padY = Math.round(fontSize * 0.65);
+
+                const wrapLines = (text, maxW) => {
+                    ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                    const words = String(text).split(/\s+/);
+                    const lines = [];
+                    let cur = '';
+                    for (const w of words) {
+                        const test = cur ? `${cur} ${w}` : w;
+                        if (ctx2d.measureText(test).width > maxW && cur) {
+                            lines.push(cur);
+                            cur = w;
+                        } else {
+                            cur = test;
+                        }
+                    }
+                    if (cur) lines.push(cur);
+                    return lines.slice(0, 3);
+                };
+
+                // Позиции облачков по высоте страницы (чередуем левый и правый край, чтобы не закрывать лица в центре)
+                const yAnchors = count === 1
+                    ? [0.10]
+                    : count === 2
+                        ? [0.07, 0.78]
+                        : count === 3
+                            ? [0.06, 0.44, 0.80]
+                            : [0.05, 0.31, 0.58, 0.82];
+
+                validQuotes.forEach((q, idx) => {
+                    const isRight = idx % 2 === 1;
+                    const wrapped = wrapLines(q.text, maxBubbleW - padX * 2);
+                    ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                    let textW = 0;
+                    wrapped.forEach(l => { textW = Math.max(textW, ctx2d.measureText(l).width); });
+                    const speakerStr = String(q.speaker || '').trim();
+                    if (speakerStr) {
+                        ctx2d.font = `700 ${speakerFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                        textW = Math.max(textW, ctx2d.measureText(speakerStr).width + 12);
+                    }
+                    const boxW = Math.min(maxBubbleW, Math.max(Math.round(W * 0.24), Math.ceil(textW) + padX * 2));
+                    const speakerOffset = speakerStr ? Math.round(speakerFontSize * 1.25) : 0;
+                    const boxH = wrapped.length * lineHeight + padY * 2 + speakerOffset;
+
+                    const marginX = Math.round(W * 0.035);
+                    const bx = isRight ? Math.max(marginX, W - marginX - boxW) : marginX;
+                    const by = Math.max(Math.round(H * 0.025), Math.min(H - boxH - Math.round(H * 0.03), Math.round(H * yAnchors[idx])));
+                    const radius = Math.min(22, Math.round(boxH * 0.32));
+
+                    ctx2d.save();
+                    ctx2d.shadowColor = 'rgba(0, 0, 0, 0.28)';
+                    ctx2d.shadowBlur = 10;
+                    ctx2d.shadowOffsetY = 3;
+
+                    // Рисуем белое комикс-облачко с хвостиком
+                    drawRoundedRectPath(ctx2d, bx, by, boxW, boxH, radius);
+                    ctx2d.fillStyle = 'rgba(255, 255, 255, 0.95)';
+                    ctx2d.fill();
+                    ctx2d.lineWidth = Math.max(2, Math.round(W * 0.003));
+                    ctx2d.strokeStyle = '#18141f';
+                    ctx2d.stroke();
+
+                    // Хвостик облачка
+                    const tailX = isRight ? bx + Math.round(boxW * 0.72) : bx + Math.round(boxW * 0.28);
+                    const tailDir = idx === count - 1 ? -1 : 1;
+                    const tailBaseY = tailDir > 0 ? by + boxH : by;
+                    ctx2d.shadowColor = 'transparent';
+                    ctx2d.beginPath();
+                    ctx2d.moveTo(tailX - 9, tailBaseY);
+                    ctx2d.lineTo(tailX + (isRight ? -4 : 4), tailBaseY + tailDir * 13);
+                    ctx2d.lineTo(tailX + 9, tailBaseY);
+                    ctx2d.closePath();
+                    ctx2d.fillStyle = 'rgba(255, 255, 255, 0.95)';
+                    ctx2d.fill();
+                    ctx2d.stroke();
+                    ctx2d.restore();
+
+                    let curY = by + padY;
+                    if (speakerStr) {
+                        ctx2d.font = `700 ${speakerFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                        ctx2d.fillStyle = '#5c4b8a';
+                        ctx2d.textAlign = 'center';
+                        ctx2d.textBaseline = 'top';
+                        ctx2d.fillText(speakerStr, bx + Math.round(boxW / 2), curY);
+                        curY += speakerOffset;
+                    }
+
+                    ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                    ctx2d.fillStyle = '#141218';
+                    ctx2d.textAlign = 'center';
+                    ctx2d.textBaseline = 'top';
+                    wrapped.forEach(lineStr => {
+                        ctx2d.fillText(lineStr, bx + Math.round(boxW / 2), curY);
+                        curY += lineHeight;
+                    });
+                });
+
+                resolve(cv.toDataURL('image/png'));
+            } catch (e) {
+                console.warn('[npc_notebook] overlayComicBubblesOnDataUrl error:', e);
+                resolve(imageUrl);
+            }
+        };
+        img.onerror = () => resolve(imageUrl);
+        img.src = srcToLoad;
+    });
+}
+
+// Склейка 3–4 отдельных кадров NovelAI в настоящую страницу манги/комикса или вертикальную ленту вебтуна на Canvas
+async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comicbright', withBubbles = true) {
+    if (!Array.isArray(frameUrls) || !frameUrls.length || typeof document === 'undefined') return frameUrls?.[0] || '';
+    const loadedImgs = [];
+    for (const u of frameUrls) {
+        const dUrl = await fileToDataUrl(u) || u;
+        const im = await new Promise(res => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => res(img);
+            img.onerror = () => res(null);
+            img.src = dUrl;
+        });
+        if (im) loadedImgs.push(im);
+    }
+    if (!loadedImgs.length) return frameUrls[0] || '';
+
+    const isWebtoon = styleId === 'webtoon' || styleId === 'yonkoma';
+    const isDarkBorder = styleId === 'noir' || styleId === 'manhwad' || styleId === 'seinen';
+    const bgCol = isDarkBorder ? '#141218' : '#faf8f5';
+    const borderCol = isDarkBorder ? '#e0d6c8' : '#18141c';
+    const n = loadedImgs.length;
+
+    const cv = document.createElement('canvas');
+    const ctx2d = cv.getContext('2d');
+
+    // Функция отрисовки картинки с заполнением фрейма (object-fit: cover с фокусом чуть выше центра для лиц)
+    const drawCover = (img, x, y, w, h) => {
+        const iw = img.naturalWidth || 832;
+        const ih = img.naturalHeight || 1216;
+        const scale = Math.max(w / iw, h / ih);
+        const sw = w / scale;
+        const sh = h / scale;
+        const sx = Math.max(0, (iw - sw) / 2);
+        const sy = Math.max(0, (ih - sh) * 0.28);
+        ctx2d.save();
+        ctx2d.beginPath();
+        ctx2d.rect(x, y, w, h);
+        ctx2d.clip();
+        ctx2d.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+        ctx2d.restore();
+        ctx2d.lineWidth = 4;
+        ctx2d.strokeStyle = borderCol;
+        ctx2d.strokeRect(x, y, w, h);
+    };
+
+    const panelRects = [];
+    if (isWebtoon) {
+        const W = 860;
+        const pad = 24;
+        const gap = 28;
+        const panelW = W - pad * 2;
+        const panelH = 780;
+        const H = pad * 2 + n * panelH + (n - 1) * gap;
+        cv.width = W;
+        cv.height = H;
+        ctx2d.fillStyle = bgCol;
+        ctx2d.fillRect(0, 0, W, H);
+        for (let i = 0; i < n; i++) {
+            const rx = pad;
+            const ry = pad + i * (panelH + gap);
+            drawCover(loadedImgs[i], rx, ry, panelW, panelH);
+            panelRects.push({ x: rx, y: ry, w: panelW, h: panelH });
+        }
+    } else {
+        const W = 1200;
+        const H = 1680;
+        const pad = 26;
+        const gap = 20;
+        cv.width = W;
+        cv.height = H;
+        ctx2d.fillStyle = bgCol;
+        ctx2d.fillRect(0, 0, W, H);
+        const innerW = W - pad * 2;
+        const innerH = H - pad * 2;
+
+        if (n === 1) {
+            drawCover(loadedImgs[0], pad, pad, innerW, innerH);
+            panelRects.push({ x: pad, y: pad, w: innerW, h: innerH });
+        } else if (n === 2) {
+            const ph = Math.floor((innerH - gap) / 2);
+            drawCover(loadedImgs[0], pad, pad, innerW, ph);
+            drawCover(loadedImgs[1], pad, pad + ph + gap, innerW, ph);
+            panelRects.push({ x: pad, y: pad, w: innerW, h: ph }, { x: pad, y: pad + ph + gap, w: innerW, h: ph });
+        } else if (n === 3) {
+            const topH = Math.floor(innerH * 0.47);
+            const botH = innerH - topH - gap;
+            const botW = Math.floor((innerW - gap) / 2);
+            drawCover(loadedImgs[0], pad, pad, innerW, topH);
+            drawCover(loadedImgs[1], pad, pad + topH + gap, botW, botH);
+            drawCover(loadedImgs[2], pad + botW + gap, pad + topH + gap, innerW - botW - gap, botH);
+            panelRects.push(
+                { x: pad, y: pad, w: innerW, h: topH },
+                { x: pad, y: pad + topH + gap, w: botW, h: botH },
+                { x: pad + botW + gap, y: pad + topH + gap, w: innerW - botW - gap, h: botH }
+            );
+        } else {
+            const pw = Math.floor((innerW - gap) / 2);
+            const ph = Math.floor((innerH - gap) / 2);
+            const coords = [
+                { x: pad, y: pad, w: pw, h: ph },
+                { x: pad + pw + gap, y: pad, w: innerW - pw - gap, h: ph },
+                { x: pad, y: pad + ph + gap, w: pw, h: innerH - ph - gap },
+                { x: pad + pw + gap, y: pad + ph + gap, w: innerW - pw - gap, h: innerH - ph - gap },
+            ];
+            for (let i = 0; i < Math.min(4, n); i++) {
+                drawCover(loadedImgs[i], coords[i].x, coords[i].y, coords[i].w, coords[i].h);
+                panelRects.push(coords[i]);
+            }
+        }
+    }
+
+    if (withBubbles && Array.isArray(quotes) && quotes.length) {
+        quotes.slice(0, panelRects.length).forEach((q, idx) => {
+            if (!q || !q.text) return;
+            const rect = panelRects[Math.min(idx, panelRects.length - 1)];
+            const fontSize = Math.max(16, Math.round(rect.w * 0.032));
+            const speakerSize = Math.max(13, Math.round(fontSize * 0.78));
+            const lineH = Math.round(fontSize * 1.26);
+            const maxBW = Math.round(rect.w * 0.78);
+            const padX = 14, padY = 10;
+
+            ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+            const words = String(q.text).split(/\s+/);
+            const lines = [];
+            let cur = '';
+            for (const w of words) {
+                const test = cur ? `${cur} ${w}` : w;
+                if (ctx2d.measureText(test).width > maxBW - padX * 2 && cur) {
+                    lines.push(cur);
+                    cur = w;
+                } else {
+                    cur = test;
+                }
+            }
+            if (cur) lines.push(cur);
+            const finalLines = lines.slice(0, 3);
+            let tw = 0;
+            finalLines.forEach(l => { tw = Math.max(tw, ctx2d.measureText(l).width); });
+            const spk = String(q.speaker || '').trim();
+            if (spk) {
+                ctx2d.font = `700 ${speakerSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                tw = Math.max(tw, ctx2d.measureText(spk).width + 10);
+            }
+            const bw = Math.min(maxBW, Math.max(140, Math.ceil(tw) + padX * 2));
+            const spkH = spk ? Math.round(speakerSize * 1.25) : 0;
+            const bh = finalLines.length * lineH + padY * 2 + spkH;
+            const isRight = idx % 2 === 1;
+            const bx = isRight ? rect.x + rect.w - bw - 14 : rect.x + 14;
+            const by = (idx % 2 === 0) ? rect.y + rect.h - bh - 14 : rect.y + 14;
+
+            ctx2d.save();
+            ctx2d.shadowColor = 'rgba(0,0,0,0.32)';
+            ctx2d.shadowBlur = 8;
+            drawRoundedRectPath(ctx2d, bx, by, bw, bh, 16);
+            ctx2d.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx2d.fill();
+            ctx2d.lineWidth = 2.5;
+            ctx2d.strokeStyle = '#18141c';
+            ctx2d.stroke();
+            ctx2d.restore();
+
+            let cy = by + padY;
+            if (spk) {
+                ctx2d.font = `700 ${speakerSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+                ctx2d.fillStyle = '#5c4b8a';
+                ctx2d.textAlign = 'center';
+                ctx2d.textBaseline = 'top';
+                ctx2d.fillText(spk, bx + Math.round(bw / 2), cy);
+                cy += spkH;
+            }
+            ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+            ctx2d.fillStyle = '#141218';
+            ctx2d.textAlign = 'center';
+            ctx2d.textBaseline = 'top';
+            finalLines.forEach(l => {
+                ctx2d.fillText(l, bx + Math.round(bw / 2), cy);
+                cy += lineH;
+            });
+        });
+    }
+
+    return cv.toDataURL('image/png');
+}
+
+function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, directorWhisper = '', comicOpts = null) {
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
     const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
     const names = storyNames();
@@ -5100,6 +5716,33 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
     const forcedCastLine = Array.isArray(forcedCast) && forcedCast.length
         ? `ВАЖНО — ИГРОК ЯВНО УКАЗАЛ, КТО ДОЛЖЕН БЫТЬ В КАДРЕ: ${forcedCast.join(', ')}. Обязательно включи ВСЕХ перечисленных (${forcedCast.length} чел.) в строку CAST и подробно опиши внешность, одежду и позу КАЖДОГО из них в строке SCENE!`
         : '';
+    const whisperLine = directorWhisper && String(directorWhisper).trim()
+        ? `🎬 ШЁПОТ РЕЖИССЁРУ ОТ ИГРОКА (ВЫСШИЙ ПРИОРИТЕТ — выполни это указание в кадре обязательно!): «${String(directorWhisper).trim()}».`
+        : '';
+    const isNaiSource = settings().imageSource === 'novelai';
+    let comicInstruction = '';
+    if (comicOpts && comicOpts.enabled) {
+        const cStyle = getComicStyleById(comicOpts.styleId);
+        const wantLines = comicOpts.linesMode !== 'off';
+        if (comicOpts.stripMode) {
+            comicInstruction = `💬 РЕЖИМ РАСКАДРОВКИ КОМИКСА ПО КАДРАМ (3 ОТДЕЛЬНЫХ ФРЕЙМА В СТИЛЕ «${cStyle.name}»):
+Разбей самый яркий и эмоциональный момент текущего сообщения на 3 последовательных кадра комикса (PANEL1, PANEL2, PANEL3):
+— PANEL1: завязка момента / общий или средний план (кто где находится, обстановка, начало действия);
+— PANEL2: развитие действия вблизи (жест руками, движение, прикосновение, диалог);
+— PANEL3: эмоциональная кульминация / крупный план лица, глаз или яркая реакция персонажа!
+В КАЖДОМ из PANEL1, PANEL2, PANEL3 пиши полный самодостаточный английский промпт этого кадра (для NovelAI — короткими тегами Danbooru: количество людей 1girl/1boy, внешность и одежда присутствующих в этом кадре, ракурс, поза, мимика и фон). В строку SCENE запиши описание 1-го кадра, а ниже обязательно выведи строки PANEL1:, PANEL2:, PANEL3:!
+${wantLines ? `Также выпиши до 3 коротких ДОСЛОВНЫХ реплик на русском языке, которые РЕАЛЬНО произнесены в этом сообщении (не выдумывай отсебятину!), в строках QUOTE1: Имя | точная короткая фраза, QUOTE2: Имя | фраза, QUOTE3: Имя | фраза.` : ''}`;
+        } else {
+            comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ КОМИКСА / МАНГИ («${cStyle.name}»):
+Построй композицию в виде многокадровой страницы комикса из 3–4 фреймов на одном листе (${isNaiSource ? `начни строку SCENE с тегов раскладки: ${cStyle.naiTags}` : cStyle.promptEn}):
+— Опиши в SCENE раскадровку по фреймам: крупный динамичный кадр взаимодействия героев, кадр с жестом рук/деталью и крупный эмоциональный план глаз/лица (или забавную чиби-реакцию в угловой врезке, если подходит по стилю).
+— Для каждого видимого персонажа укажи, что делает его левая и правая рука (строго по 2 руки у каждого человека, без лишних конечностей!).
+${(!isNaiSource && wantLines) ? `— Включи в описание SCENE 2–3 белых облачка реплик (speech bubbles) с ДОСЛОВНЫМИ короткими фразами на русском языке из текста поста.` : `— Внутри самой строки SCENE НЕ пиши русский текст (облачка с русскими репликами система аккуратно наложит поверх готового рисунка сама!).`}
+${wantLines ? `После основных строк обязательно выпиши 2–3 короткие ДОСЛОВНЫЕ реплики из текста поста в формате:
+QUOTE1: Имя говорящего | короткая дословная реплика из поста (до 55 символов)
+QUOTE2: Имя говорящего | короткая дословная реплика из поста` : ''}`;
+        }
+    }
 
     let cameraInstruction = '';
     if (isPovHands) {
@@ -5124,6 +5767,8 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
         prevContext,
         moment,
         forcedCastLine,
+        whisperLine,
+        comicInstruction,
         cameraInstruction,
         `ВАЖНЫЕ ПРАВИЛА ПО КАНОНУ И НЕСКОЛЬКИМ ПЕРСОНАЖАМ В КАДРЕ:
 1) КАНОНИЧНЫЕ ГЕРОИ: если персонаж из известного аниме/манги/игры (например, Наоя / Naoya Zenin из Jujutsu Kaisen и др.), обязательно пиши его точный каноничный тег Danbooru \`фамилия имя, тайтл на английском\` (например: \`zen'in naoya, jujutsu kaisen\`), а не просто имя \`Naoya\`, плюс теги его причёски, глаз и деталей!
@@ -5136,7 +5781,11 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null) {
         `CAST: кто именно виден в кадре через запятую (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
         'SCENE: общий промпт сцены на английском в одну строку (количество персонажей 1boy/1girl или 2boys/2girls, ракурс, взаимодействие, внешность и одежда каждого, окружение и свет — короткими тегами Danbooru)',
         'CHAR1: (если в кадре >= 2 человек) английские теги 1-го персонажа в кадре (внешность, канон-тег, одежда, поза, эмоция)',
-        'CHAR2: (если в кадре >= 2 человек) английские теги 2-го персонажа в кадре (и далее CHAR3:, CHAR4: для 3-го и 4-го персонажа)]',
+        'CHAR2: (если в кадре >= 2 человек) английские теги 2-го персонажа в кадре (и далее CHAR3:, CHAR4: для 3-го и 4-го персонажа)',
+        (comicOpts && comicOpts.enabled && comicOpts.stripMode) ? 'PANEL1: полный английский промпт 1-го кадра комикса (внешность и одежда присутствующих + средний/общий план)\nPANEL2: полный английский промпт 2-го кадра комикса (внешность и одежда присутствующих + действие/жест вблизи)\nPANEL3: полный английский промпт 3-го кадра комикса (внешность и одежда присутствующих + крупный план лица/глаз/реакции)' : '',
+        (comicOpts && comicOpts.enabled && comicOpts.linesMode !== 'off') ? 'QUOTE1: Имя говорящего | короткая дословная реплика из поста на русском\nQUOTE2: Имя говорящего | короткая дословная реплика из поста на русском\nQUOTE3: Имя говорящего | короткая дословная реплика из поста на русском' : '',
+        (comicOpts && comicOpts.enabled) ? 'ВАЖНО: в режиме комикса обязательно выведи все запрошенные строки выше (включая PANEL1..PANEL3 и QUOTE1..QUOTE3, если они указаны в шаблоне)!' : '',
+        ']',
     ].filter(Boolean).join('\n\n');
 }
 
@@ -5144,8 +5793,14 @@ function formatEditableScenePrompt(meta) {
     if (!meta) return '';
     const base = String(meta.desc || meta.prompt || '').trim();
     const caps = Array.isArray(meta.charCaptions) ? meta.charCaptions.filter(Boolean) : [];
-    if (!caps.length) return base;
-    return [base, ...caps.map((c, idx) => `CHAR${idx + 1}: ${c}`)].filter(Boolean).join('\n');
+    const panels = Array.isArray(meta.panelPrompts) ? meta.panelPrompts.filter(Boolean) : [];
+    const quotes = Array.isArray(meta.comicQuotes) ? meta.comicQuotes.filter(q => q && q.text) : [];
+    return [
+        base,
+        ...caps.map((c, idx) => `CHAR${idx + 1}: ${c}`),
+        ...panels.map((p, idx) => `PANEL${idx + 1}: ${p}`),
+        ...quotes.map((q, idx) => `QUOTE${idx + 1}: ${q.speaker ? `${q.speaker} | ` : ''}${q.text}`),
+    ].filter(Boolean).join('\n');
 }
 
 function applyEditedScenePromptToMeta(meta, rawText) {
@@ -5154,20 +5809,45 @@ function applyEditedScenePromptToMeta(meta, rawText) {
     if (!text) return;
     const baseLines = [];
     const newCaps = [];
+    const newPanels = [];
+    const newQuotes = [];
     for (const line of text.split(/\r?\n/)) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        const m = trimmed.match(/^CHAR\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
+        let m = trimmed.match(/^CHAR\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
         if (m) {
             const cap = m[2].trim().replace(/\]$/, '');
             if (cap) newCaps.push(cap);
-        } else {
-            baseLines.push(trimmed.replace(/^SCENE\s*[:：—–-]\s*/i, ''));
+            continue;
         }
+        m = trimmed.match(/^PANEL\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
+        if (m) {
+            const pTxt = m[2].trim().replace(/\]$/, '');
+            if (pTxt) newPanels.push(pTxt);
+            continue;
+        }
+        m = trimmed.match(/^QUOTE\s*(\d*)\s*[:：—–-]\s*(.+)$/i);
+        if (m) {
+            const qBody = m[2].trim().replace(/\]$/, '');
+            if (qBody && !/^\(?нет\)?$/i.test(qBody)) {
+                const qParts = qBody.split('|').map(x => x.trim());
+                const spk = qParts.length > 1 ? qParts[0] : '';
+                const qTxt = (qParts.length > 1 ? qParts.slice(1).join(' | ') : qParts[0]).replace(/^[«"„“]|[»"”]+$/g, '').trim();
+                if (qTxt) newQuotes.push({ panel: Number(m[1]) || (newQuotes.length + 1), speaker: spk, text: qTxt });
+            }
+            continue;
+        }
+        baseLines.push(trimmed.replace(/^SCENE\s*[:：—–-]\s*/i, ''));
     }
-    meta.desc = baseLines.join(', ').replace(/,\s*,+/g, ', ').trim();
+    if (baseLines.length) {
+        meta.desc = baseLines.join(', ').replace(/,\s*,+/g, ', ').trim();
+    } else if (newPanels.length) {
+        meta.desc = newPanels[0];
+    }
     meta.prompt = '';
     meta.charCaptions = newCaps;
+    if (newPanels.length) meta.panelPrompts = newPanels;
+    if (newQuotes.length || /QUOTE\s*\d*\s*[:：—–-]/i.test(text)) meta.comicQuotes = newQuotes;
 }
 
 function findSavedSceneMeta(mesId) {
@@ -5188,9 +5868,9 @@ function findSavedSceneMeta(mesId) {
     return null;
 }
 
-async function askSceneCameraMode(existingMeta = null) {
+async function askSceneCameraMode(existingMeta = null, forceAsk = false) {
     const mode = settings().sceneCameraMode || 'ask';
-    if (mode !== 'ask' && !existingMeta?.prompt) return { mode };
+    if (!forceAsk && mode !== 'ask' && !existingMeta?.prompt) return { mode };
     return new Promise(resolve => {
         const el = $('<div class="nnb-pop"><h3>🎬 Как нарисовать эту сцену?</h3></div>');
         let settled = false;
@@ -5281,7 +5961,15 @@ async function askSceneCameraMode(existingMeta = null) {
 
         const getForcedCast = () => (selectedCast.size ? [...selectedCast] : null);
 
-        el.append('<div class="nnb-pop-sub">Выбери ракурс для генерации:</div>');
+        // Поле «✎ Шёпот режиссёру» (как в Мяфля · Кадр)
+        const whisperBox = $('<div class="nnb-note" style="padding:8px 10px; margin:6px 0;"></div>');
+        whisperBox.append('<div style="font-size:0.84em; font-weight:600; margin-bottom:4px;">✎ Шёпот режиссёру <span style="font-weight:400; opacity:0.75;">(необязательно — особое пожелание к кадру или комиксу)</span></div>');
+        const whisperInp = $('<input type="text" class="text_pole" style="width:100%; margin:0; font-size:0.86em;" placeholder="например: крупный план рук, вид со спины, дождь за окном, она смеётся…">');
+        whisperBox.append(whisperInp);
+        el.append(whisperBox);
+        const getWhisper = () => String(whisperInp.val() || '').trim();
+
+        el.append('<div class="nnb-pop-sub">1️⃣ Обычная иллюстрация сцены (1 кадр):</div>');
         const grid = $('<div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;"></div>');
         const thirdBtn = $(`
             <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
@@ -5291,7 +5979,7 @@ async function askSceneCameraMode(existingMeta = null) {
                     <div style="font-size:0.84em; opacity:0.8;">Рисует всех присутствующих в сцене (героиню, чара, всех НПС в комнате или локацию); персонажи смотрят друг на друга, а не в объектив</div>
                 </div>
             </div>
-        `).on('click', () => finish({ mode: 'third', forcedCast: getForcedCast() }));
+        `).on('click', () => finish({ mode: 'third', forcedCast: getForcedCast(), whisper: getWhisper() }));
 
         const povHandsBtn = $(`
             <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
@@ -5301,7 +5989,7 @@ async function askSceneCameraMode(existingMeta = null) {
                     <div style="font-size:0.84em; opacity:0.8;">Вид из глаз твоей героини с её рукой или прикосновением на переднем плане (без головы и спины, чтобы не ломался ракурс)</div>
                 </div>
             </div>
-        `).on('click', () => finish({ mode: 'pov_hands', forcedCast: getForcedCast() }));
+        `).on('click', () => finish({ mode: 'pov_hands', forcedCast: getForcedCast(), whisper: getWhisper() }));
 
         const povCleanBtn = $(`
             <div class="nnb-look" tabindex="0" style="padding:10px 12px; display:flex; align-items:center; gap:10px;">
@@ -5311,10 +5999,105 @@ async function askSceneCameraMode(existingMeta = null) {
                     <div style="font-size:0.84em; opacity:0.8;">Ровный кадр на уровне взгляда прямо перед тобой без рук и частей тела героини в кадре</div>
                 </div>
             </div>
-        `).on('click', () => finish({ mode: 'pov_clean', forcedCast: getForcedCast() }));
+        `).on('click', () => finish({ mode: 'pov_clean', forcedCast: getForcedCast(), whisper: getWhisper() }));
 
         grid.append(thirdBtn, povHandsBtn, povCleanBtn);
         el.append(grid);
+
+        // 2️⃣ Блок Комиксов, Манги и Вебтунов (адаптировано из «Мяфля · Кадр»)
+        const comicBox = $('<div class="nnb-note" style="padding:10px 12px; margin-top:12px; border:1.5px solid var(--SmartThemeQuoteColor, #e0c068); background:color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 10%, transparent);"></div>');
+        comicBox.append('<div style="font-weight:700; font-size:0.96em; margin-bottom:4px;">💬 Нарисовать Комикс / Мангу / Вебтун по сцене</div>');
+        comicBox.append('<div class="nnb-npc-status" style="font-size:0.82em; margin-bottom:8px;">Разбивает сцену на фреймы (с крупным планом глаз, действием и реакцией) и проверяет реальные реплики из поста, чтобы не было выдуманного текста:</div>');
+
+        const styleRow = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px;"></div>');
+        const styleSel = $('<select class="text_pole" style="flex:1; min-width:200px; margin:0; font-size:0.86em;"></select>');
+        const fillComicStylesSel = () => {
+            styleSel.empty();
+            const curId = settings().comicStyleId || 'comicbright';
+            getAllComicStyles().forEach(stObj => {
+                const opt = $('<option></option>').val(stObj.id).text(`${stObj.name}`);
+                if (stObj.id === curId) opt.prop('selected', true);
+                styleSel.append(opt);
+            });
+        };
+        fillComicStylesSel();
+        styleSel.on('change', function () {
+            settings().comicStyleId = String($(this).val() || 'comicbright');
+            saveSettings();
+        });
+
+        const addCustomStyleBtn = $('<div class="menu_button" style="margin:0; padding:5px 9px; font-size:0.8em; width:auto;" title="Добавить свой стиль комикса или манги"><i class="fa-solid fa-plus"></i> Свой стиль</div>').on('click', async () => {
+            const sName = await askText('Название твоего стиля комикса/арта:', 'Моя манга');
+            if (!sName || !sName.trim()) return;
+            const sTags = await askText('Описание стиля или теги Danbooru на английском:', 'comic, multi-panel, monochrome, screentones, dramatic lighting');
+            if (!sTags || !sTags.trim()) return;
+            if (!Array.isArray(settings().customComicStyles)) settings().customComicStyles = [];
+            const newId = 'custom_comic_' + Date.now();
+            settings().customComicStyles.push({
+                id: newId,
+                name: '⭐ ' + sName.trim(),
+                group: 'Мои стили',
+                isPage: true,
+                naiTags: sTags.trim(),
+                promptEn: sTags.trim(),
+            });
+            settings().comicStyleId = newId;
+            saveSettings();
+            fillComicStylesSel();
+            toastr.success(`Стиль «${escapeHtml(sName.trim())}» добавлен!`, '💬 Стиль комикса', { escapeHtml: false });
+        });
+        styleRow.append(styleSel, addCustomStyleBtn);
+        comicBox.append(styleRow);
+
+        const linesRow = $('<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:0.84em;"></div>');
+        linesRow.append('<span style="opacity:0.85;">Облачка с репликами:</span>');
+        const linesSel = $('<select class="text_pole" style="flex:1; min-width:180px; margin:0; font-size:0.95em; padding:3px 8px;"></select>');
+        linesSel.append('<option value="auto">💬 С репликами из поста (проверенные цитаты)</option>');
+        linesSel.append('<option value="off">🎨 Без текста (чистые фреймы без облачков)</option>');
+        linesSel.val(settings().comicLinesMode || 'auto');
+        linesSel.on('change', function () {
+            settings().comicLinesMode = String($(this).val() || 'auto');
+            saveSettings();
+        });
+        linesRow.append(linesSel);
+        comicBox.append(linesRow);
+
+        const comicBtns = $('<div style="display:flex; flex-direction:column; gap:6px;"></div>');
+        const singleComicBtn = $(`
+            <div class="menu_button nnb-btn-primary" style="margin:0; padding:8px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:700;">
+                <i class="fa-solid fa-book-open"></i> 📄 Нарисовать комикс-страницу (одним листом)
+            </div>
+        `).on('click', () => finish({
+            mode: 'third',
+            forcedCast: getForcedCast(),
+            whisper: getWhisper(),
+            comicOpts: {
+                enabled: true,
+                stripMode: false,
+                styleId: String(styleSel.val() || 'comicbright'),
+                linesMode: String(linesSel.val() || 'auto'),
+            },
+        }));
+
+        const stripComicBtn = $(`
+            <div class="menu_button" style="margin:0; padding:8px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:600;" title="Генерирует 3 отдельных детализированных кадра по раскадровке (общий план → действие → крупный план эмоций) и склеивает их в настоящую полосу манги/вебтуна с русскими облачками!">
+                <i class="fa-solid fa-table-columns"></i> 🎞 Склеить полосу из 3 кадров по раскадровке (макс. качество NovelAI)
+            </div>
+        `).on('click', () => finish({
+            mode: 'third',
+            forcedCast: getForcedCast(),
+            whisper: getWhisper(),
+            comicOpts: {
+                enabled: true,
+                stripMode: true,
+                styleId: String(styleSel.val() || 'comicbright'),
+                linesMode: String(linesSel.val() || 'auto'),
+            },
+        }));
+
+        comicBtns.append(singleComicBtn, stripComicBtn);
+        comicBox.append(comicBtns);
+        el.append(comicBox);
         openPopup(el).then(() => {
             if (!settled) { settled = true; resolve(null); }
         });
@@ -5322,10 +6105,10 @@ async function askSceneCameraMode(existingMeta = null) {
 }
 
 let sceneDrawing = false;
-async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, forcedCast = null) {
+async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, forcedCast = null, directorWhisper = '', comicOpts = null) {
     if (sceneDrawing) {
         const elapsed = sceneDrawingStartedAt ? Math.round((Date.now() - sceneDrawingStartedAt) / 1000) : 0;
-        if (elapsed > 95) {
+        if (elapsed > 240) {
             logImageDiag(`Предыдущая генерация висела ${elapsed} сек. — автоматический сброс`);
             sceneDrawing = false;
         } else {
@@ -5348,6 +6131,8 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         let extraNeg = reuseMeta?.extraNeg || '';
         let cast = [];
         let charCaptions = Array.isArray(reuseMeta?.charCaptions) ? [...reuseMeta.charCaptions] : [];
+        const panelPrompts = Array.isArray(reuseMeta?.panelPrompts) ? [...reuseMeta.panelPrompts] : [];
+        const rawLlmQuotes = [];
 
         if (reuseMeta && (reuseMeta.desc || reuseMeta.prompt)) {
             const splitReuse = splitPositiveAndNegativePrompt(reuseMeta.desc || reuseMeta.prompt);
@@ -5358,8 +6143,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         } else {
             // 1) описание сцены текстовой моделью (через отдельную модель промптов картинок, например GLM, если она выбрана!)
             const promptSrcLabel = settings().imgPromptSource || settings().textSource || 'основной чат';
-            logImageDiag(`Шаг 1/2: запрос промпта сцены (источник: ${promptSrcLabel}, ракурс: ${camMode})`);
-            const raw = await withBusy('🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(scenePromptRequest(st, mesId, camMode, forcedCast)));
+            const isComicMode = !!(comicOpts && comicOpts.enabled);
+            const cStyleObj = isComicMode ? getComicStyleById(comicOpts.styleId) : null;
+            logImageDiag(`Шаг 1/2: запрос промпта ${isComicMode ? `комикса (${cStyleObj?.name || ''})` : 'сцены'} (источник: ${promptSrcLabel}, ракурс: ${camMode})`);
+            const raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(scenePromptRequest(st, mesId, camMode, forcedCast, directorWhisper, comicOpts)));
             logImageDiag('Ответ модели промптов получен', raw ? String(raw).slice(0, 500) : '(пусто)');
             // Поддержка ответа в формате <nai_imagen> (если пользователь вставил промпт из ext-blocks-custom) и многострочного SCENE:
             const rawCleaned = cleanAnswer(raw || '');
@@ -5370,6 +6157,25 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             const sceneLines = [];
             let inSceneBlock = false;
             for (const line of answerLines(raw || '')) {
+                let mp = line.match(/^PANEL\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
+                if (mp) {
+                    inSceneBlock = false;
+                    const pTxt = mp[2].trim().replace(/\]$/, '');
+                    if (pTxt) panelPrompts.push(pTxt);
+                    continue;
+                }
+                let mq = line.match(/^QUOTE\s*(\d*)\s*[:：—–-]\s*(.+)$/i);
+                if (mq) {
+                    inSceneBlock = false;
+                    const qBody = mq[2].trim().replace(/\]$/, '');
+                    if (qBody && !/^\(?нет\)?$/i.test(qBody)) {
+                        const qParts = qBody.split('|').map(x => x.trim());
+                        const spk = qParts.length > 1 ? qParts[0] : '';
+                        const qTxt = (qParts.length > 1 ? qParts.slice(1).join(' | ') : qParts[0]).replace(/^[«"„“]|[»"”]+$/g, '').trim();
+                        if (qTxt) rawLlmQuotes.push({ panel: Number(mq[1]) || (rawLlmQuotes.length + 1), speaker: spk, text: qTxt });
+                    }
+                    continue;
+                }
                 let m = line.match(/^CAST\s*[:：—–-]\s*(.+)$/i);
                 if (m) {
                     inSceneBlock = false;
@@ -5404,8 +6210,11 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             if (!desc && sceneLines.length) {
                 desc = sceneLines.join(', ').replace(/,\s*,+/g, ', ').trim();
             }
+            if (!desc && panelPrompts.length) {
+                desc = panelPrompts[0];
+            }
             if (!desc && raw) {
-                const fallbackLines = answerLines(raw).filter(l => !/^(CAST|NEGATIVE|UC)\s*[:：—–-]/i.test(l) && !/^<\/?nai_imagen>/i.test(l));
+                const fallbackLines = answerLines(raw).filter(l => !/^(CAST|NEGATIVE|UC|PANEL\s*\d+|QUOTE\s*\d*|CHAR\s*\d+)\s*[:：—–-]/i.test(l) && !/^<\/?nai_imagen>/i.test(l));
                 if (fallbackLines.length) desc = fallbackLines.join(', ').trim();
             }
             const splitDesc = splitPositiveAndNegativePrompt(desc);
@@ -5528,16 +6337,107 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             : (isNai
                 ? cleanForCommand(`${countPrefix}${desc}`)
                 : cleanForCommand(`${countPrefix}${desc}. ${cameraSuffix}`));
-        const prompt = splitPositiveAndNegativePrompt(rawCombinedPrompt).positive;
-        logImageDiag(`Шаг 2/2: отправка промпта в генератор (${imageSourceName()})`, `Референсов: ${images.length} (${who.join(', ') || 'нет'}), режим референса: ${refModeSetting}`);
-        const url = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
-        logImageDiag('Картинка успешно получена и сохранена!', url ? String(url).slice(0, 120) : '');
+        let prompt = splitPositiveAndNegativePrompt(rawCombinedPrompt).positive;
         let targetMesIdx = Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1);
         while (targetMesIdx >= 0 && (!ctx().chat[targetMesIdx] || ctx().chat[targetMesIdx].is_system)) targetMesIdx--;
-        const sceneMeta = { desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov, mesId: targetMesIdx };
+
+        const activeComicOpts = comicOpts || reuseMeta?.comicOpts || null;
+        let verifiedQuotes = Array.isArray(reuseMeta?.comicQuotes) ? reuseMeta.comicQuotes : [];
+        if (activeComicOpts?.enabled) {
+            const cStyle = getComicStyleById(activeComicOpts.styleId);
+            if (cStyle) {
+                if (/\bmonochrome\b/i.test(cStyle.naiTags || '') && !/\bspot\s+color\b/i.test(cStyle.naiTags || '')) {
+                    extraNeg = [extraNeg, 'color, colorful, full color, pastel colors, saturated colors'].filter(Boolean).join(', ');
+                    if (refs) refs.extraNeg = extraNeg;
+                }
+                if (isNai && cStyle.naiTags && !prompt.toLowerCase().includes(cStyle.naiTags.split(',')[0].trim().toLowerCase())) {
+                    prompt = `${cStyle.naiTags}, ${prompt}`;
+                } else if (!isNai && cStyle.promptEn && !prompt.includes(cStyle.promptEn.slice(0, 30))) {
+                    prompt = `${cStyle.promptEn} Scene: ${prompt}`;
+                }
+            }
+            if (activeComicOpts.linesMode !== 'off' && !verifiedQuotes.length) {
+                const targetMsgObj = ctx().chat?.[targetMesIdx];
+                const prevMsgObj = targetMesIdx > 0 ? ctx().chat?.[targetMesIdx - 1] : null;
+                const postTxt = String(targetMsgObj?.mes || '');
+                const storyTxt = [prevMsgObj?.mes || '', postTxt].join('\n');
+                verifiedQuotes = verifyComicQuotesAgainstStory(rawLlmQuotes, storyTxt, postTxt, names.char);
+                if (!isNai && verifiedQuotes.length) {
+                    prompt += `\nSpeech bubbles (Cyrillic text written exactly as given, never invent other words): ` +
+                        verifiedQuotes.map((q, idx) => `Panel ${idx + 1}${q.speaker ? ` (${q.speaker})` : ''}: «${q.text}»`).join('; ');
+                }
+            }
+        }
+
+        let url = '';
+        let cleanUnletteredUrl = '';
+        if (activeComicOpts?.enabled && activeComicOpts.stripMode) {
+            const cStyle = getComicStyleById(activeComicOpts.styleId);
+            const isWebtoonStrip = cStyle?.id === 'webtoon' || cStyle?.id === 'yonkoma';
+            const framesToDraw = (Array.isArray(panelPrompts) && panelPrompts.length >= 2)
+                ? panelPrompts.slice(0, 3)
+                : [
+                    `${prompt}, medium establishing shot`,
+                    `${prompt}, close-up action and gesture`,
+                    `${prompt}, dramatic extreme close-up on face and eyes, intense emotion`,
+                ];
+            const frameUrls = [];
+            for (let fIdx = 0; fIdx < framesToDraw.length; fIdx++) {
+                sceneDrawingStartedAt = Date.now(); // обновляем таймер на каждом кадре полосы, чтобы 3 кадра не сбрасывались по таймауту!
+                const rawFrameDesc = framesToDraw[fIdx];
+                const framePrompt = isNai
+                    ? cleanForCommand(`${cStyle?.naiTags || ''}, ${rawFrameDesc}`)
+                    : cleanForCommand(`${cStyle?.promptEn || ''} ${rawFrameDesc}`);
+                // Для 3-кадровой страницы манги 1-й верхний фрейм широкий (landscape), а 2-й и 3-й нижние — вертикальные (portrait); для вебтуна — квадратные/горизонтальные
+                const frameOrient = isWebtoonStrip ? 'square' : (fIdx === 0 && framesToDraw.length === 3 ? 'landscape' : 'portrait');
+                logImageDiag(`Комикс-полоса: рисуем кадр ${fIdx + 1} из ${framesToDraw.length} (${frameOrient})`, framePrompt);
+                toastr.info(`🎨 Рисуем кадр комикса ${fIdx + 1} из ${framesToDraw.length}…`, '💬 Комикс по кадрам', { timeOut: 15000 });
+                const fUrl = await withTimeout(drawPicture(framePrompt, refs, frameOrient), 120000, `кадр комикса ${fIdx + 1}`);
+                if (fUrl) frameUrls.push(fUrl);
+            }
+            if (!frameUrls.length) throw new Error('Не удалось сгенерировать кадры для склейки комикса');
+            const wantBubbles = activeComicOpts.linesMode !== 'off' && verifiedQuotes.length > 0;
+            if (wantBubbles) {
+                const stitchedCleanData = await stitchComicFramesOnCanvas(frameUrls, [], activeComicOpts.styleId, false);
+                cleanUnletteredUrl = await storeImage(stitchedCleanData);
+            }
+            const stitchedData = await stitchComicFramesOnCanvas(frameUrls, verifiedQuotes, activeComicOpts.styleId, wantBubbles);
+            url = await storeImage(stitchedData);
+        } else {
+            logImageDiag(`Шаг 2/2: отправка промпта в генератор (${imageSourceName()})`, `Референсов: ${images.length} (${who.join(', ') || 'нет'}), режим референса: ${refModeSetting}`);
+            const rawUrl = await withTimeout(drawPicture(prompt, refs, imgOrient()), 120000, 'рисунок сцены');
+            url = rawUrl;
+            // Если это комикс в NovelAI и включены реплики из поста — накладываем аккуратные русские облачка реплик (а чистую версию без текста тоже сохраняем в историю поста!)
+            if (activeComicOpts?.enabled && isNai && activeComicOpts.linesMode !== 'off' && verifiedQuotes.length > 0 && rawUrl) {
+                cleanUnletteredUrl = rawUrl;
+                const letteredDataUrl = await overlayComicBubblesOnDataUrl(rawUrl, verifiedQuotes);
+                if (letteredDataUrl && letteredDataUrl !== rawUrl) {
+                    url = await storeImage(letteredDataUrl);
+                }
+            }
+        }
+
+        logImageDiag('Картинка успешно получена и сохранена!', url ? String(url).slice(0, 120) : '');
+        const sceneMeta = {
+            desc,
+            extraNeg,
+            cast,
+            charCaptions,
+            camMode,
+            prompt,
+            pov: isPov,
+            mesId: targetMesIdx,
+            comicOpts: activeComicOpts,
+            comicQuotes: verifiedQuotes,
+            panelPrompts,
+            cleanUnletteredUrl: cleanUnletteredUrl || '',
+        };
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
         // Сохраняем все сгенерированные варианты без автоудаления, чтобы можно было спокойно сравнить и выбрать лучший (а лишние удалить вручную кнопкой)!
+        if (cleanUnletteredUrl && cleanUnletteredUrl !== url) {
+            st.scenes.push({ url: cleanUnletteredUrl, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov });
+        }
         st.scenes.push({ url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov });
         if (st.scenes.length > 120) st.scenes.shift();
         await ctx().saveMetadata();
@@ -5561,6 +6461,9 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
         if (!m || m.is_system) continue;
         m.extra = m.extra || {};
         const prevHistory = Array.isArray(m.extra.nnbScene?.history) ? [...m.extra.nnbScene.history] : (m.extra.nnbScene?.url ? [m.extra.nnbScene.url] : []);
+        if (sceneMeta?.cleanUnletteredUrl && sceneMeta.cleanUnletteredUrl !== url && !prevHistory.includes(sceneMeta.cleanUnletteredUrl)) {
+            prevHistory.push(sceneMeta.cleanUnletteredUrl);
+        }
         if (url && !prevHistory.includes(url)) prevHistory.push(url);
         if (sceneMeta) {
             m.extra.nnbScene = { ...sceneMeta, url, history: prevHistory, mesId: i };
@@ -5575,6 +6478,9 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
             // Сохраняем ОБЕ (и все последующие) сгенерированные картинки в галерее сообщения, не затирая старую!
             if (!Array.isArray(m.extra.media)) m.extra.media = [];
             if (!m.extra.media_display) m.extra.media_display = 'gallery';
+            if (sceneMeta?.cleanUnletteredUrl && sceneMeta.cleanUnletteredUrl !== url && !m.extra.media.some(x => x.url === sceneMeta.cleanUnletteredUrl)) {
+                m.extra.media.push({ url: sceneMeta.cleanUnletteredUrl, type: 'image', title: 'Комикс (чистый арт без текста)', source: 'generated' });
+            }
             const existingIdx = m.extra.media.findIndex(x => x.url === url);
             if (existingIdx >= 0) {
                 m.extra.media_index = existingIdx;
@@ -5988,23 +6894,27 @@ async function redrawSceneBySamePrompt(mesId, customMeta = null) {
 }
 
 // 🎬: рисуем в фоне и ставим картинку отдельным блоком под постом (без перекрывающих текст всплывающих окон!)
-async function showScenePopup(mesId) {
+async function showScenePopup(mesId, forceAsk = false) {
     if (!Number.isInteger(mesId)) mesId = undefined;
     if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится под постом сама', '🎬 Сцена');
     const existingMeta = findSavedSceneMeta(mesId);
-    const choice = await askSceneCameraMode(existingMeta);
+    const choice = await askSceneCameraMode(existingMeta, forceAsk);
     if (!choice) return;
     const camMode = choice.mode || 'third';
     const reuseMeta = choice.reuseMeta || null;
     const forcedCast = choice.forcedCast || null;
+    const whisper = choice.whisper || '';
+    const comicOpts = choice.comicOpts || null;
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean';
     const toastMsg = reuseMeta
         ? 'Перерисовываю сцену по готовому промпту… Нажми на уведомление, чтобы скрыть.'
-        : (isPov ? 'Рисую сцену от первого лица (POV)… Нажми на уведомление, чтобы скрыть.' : 'Рисую сцену (взгляд со стороны)… Нажми на уведомление, чтобы скрыть.');
-    const note = toastr.info(toastMsg, '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
+        : comicOpts?.enabled
+            ? (comicOpts.stripMode ? 'Рисую 3 кадра комикса и склеиваю страницу с репликами…' : 'Рисую страницу комикса / манги по текущей сцене…')
+            : (isPov ? 'Рисую сцену от первого лица (POV)… Нажми на уведомление, чтобы скрыть.' : 'Рисую сцену (взгляд со стороны)… Нажми на уведомление, чтобы скрыть.');
+    const note = toastr.info(toastMsg, comicOpts?.enabled ? '💬 Комикс' : '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
     let res = null;
     try {
-        res = await drawScene(null, mesId, camMode, reuseMeta, forcedCast);
+        res = await drawScene(null, mesId, camMode, reuseMeta, forcedCast, whisper, comicOpts);
     } catch (e) {
         console.error('[npc_notebook] showScenePopup error:', e);
     } finally {
@@ -14835,6 +15745,36 @@ function placeMesButtons() {
                     }
                 });
                 navRow.append(prevBtn, promptToggleBtn, nextBtn);
+                if (sceneMeta.cleanUnletteredUrl || sceneMeta.comicOpts?.enabled) {
+                    const editBubblesBtn = $('<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Изменить или добавить русские реплики в облачках прямо поверх этого кадра (мгновенно, без новой генерации в NovelAI!)"><i class="fa-solid fa-comment-dots"></i> Реплики</div>').on('click', async e => {
+                        e.stopPropagation();
+                        const curQuotesText = (sceneMeta.comicQuotes || []).map(q => `${q.speaker ? q.speaker + ' | ' : ''}${q.text}`).join('\n');
+                        const editedQ = await askText('Реплики для облачков комикса (по одной на строку в формате «Имя | текст реплики»; оставь пустым, чтобы убрать облачка):', curQuotesText);
+                        if (editedQ === null) return;
+                        const parsedQ = [];
+                        for (const ql of String(editedQ).split(/\r?\n/)) {
+                            const clLine = ql.trim().replace(/^QUOTE\s*\d*\s*[:：—–-]\s*/i, '');
+                            if (!clLine) continue;
+                            const parts = clLine.split('|').map(x => x.trim());
+                            const spk = parts.length > 1 ? parts[0] : '';
+                            const txt = (parts.length > 1 ? parts.slice(1).join(' | ') : parts[0]).replace(/^[«"„“]|[»"”]+$/g, '').trim();
+                            if (txt) parsedQ.push({ panel: parsedQ.length + 1, speaker: spk, text: txt });
+                        }
+                        sceneMeta.comicQuotes = parsedQ;
+                        const baseCleanUrl = sceneMeta.cleanUnletteredUrl || curUrl;
+                        if (!sceneMeta.cleanUnletteredUrl) sceneMeta.cleanUnletteredUrl = baseCleanUrl;
+                        if (!parsedQ.length) {
+                            await attachToLastMessage(baseCleanUrl, mId, sceneMeta, true);
+                            toastr.info('Показана чистая версия кадра без облачков текста', '💬 Реплики');
+                            return;
+                        }
+                        const newLetteredData = await overlayComicBubblesOnDataUrl(baseCleanUrl, parsedQ);
+                        const savedUrl = await storeImage(newLetteredData);
+                        await attachToLastMessage(savedUrl, mId, sceneMeta, true);
+                        toastr.success('Облачка с репликами обновлены на этом кадре!', '💬 Реплики комикса');
+                    });
+                    navRow.append(editBubblesBtn);
+                }
                 if (hist.length > 1) {
                     const keepOnlyBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Удалить остальные ${hist.length - 1} черновых вариантов этой сцены и оставить только текущий кадр (освобождает память чата)"><i class="fa-solid fa-broom"></i> Оставить только этот</div>`).on('click', async e => {
                         e.stopPropagation();
@@ -14943,7 +15883,7 @@ function addMenuItems() {
         menu.append(item('nnb_menu_customer', 'fa-bell-concierge', 'Лавка: следующий покупатель', () => nextShopCustomer()));
         menu.append(item('nnb_menu_ff', 'fa-forward', 'Дальше: следующее событие', fastForward));
         menu.append(item('nnb_menu_offscreen', 'fa-clapperboard', 'За кадром: что у остальных героев', offscreenCutaway));
-        menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена: нарисовать', () => showScenePopup()));
+        menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена / Комикс: нарисовать', () => showScenePopup(undefined, true)));
         menu.append(item('nnb_menu_map', 'fa-map', 'Карта: куда пойти', () => showMapPopup()));
         menu.append(item('nnb_menu_gacha', 'fa-dice', 'Находки: испытать удачу', () => startGacha()));
         menu.append(item('nnb_menu_album', 'fa-images', 'Альбом', () => openBook('album')));
