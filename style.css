@@ -122,8 +122,8 @@
 #nnb_panel details.nnb-set > select.text_pole, #nnb_img_api input.text_pole { width: 100%; margin: 4px 0; }
 
 /* картинка сцены в посте: по центру и крупно */
-.mes .mes_media_wrapper:has(.mes_img[title="Сцена"]) { justify-content: center; padding-right: 0; }
-.mes .mes_img_container:has(.mes_img[title="Сцена"]) { width: 100%; justify-content: center; }
+.mes .mes_media_wrapper { justify-content: center; padding-right: 0; }
+.mes .mes_img_container { width: 100%; justify-content: center; }
 .mes .mes_img[title="Сцена"] { max-width: 100%; max-height: 80vh; width: auto; height: auto; border-radius: 8px; }
 
 /* --- 🎰 находки: рамки редкости --- */
@@ -324,8 +324,7 @@
 }
 
 /* --- 🎬 Отдельный блок иллюстрации сцены под постом (без перекрытия текста) --- */
-#chat .mes .mes_media_wrapper:has(.mes_img),
-#chat .mes .mes_media_wrapper:has(.nnb-inline-scene-bar) {
+#chat .mes .mes_media_wrapper {
     display: block !important;
     width: 100% !important;
     max-width: 100% !important;
