@@ -135,7 +135,7 @@
 .nnb-card-pick.nnb-rar { border: 2px solid var(--nnb-rar); }
 .nnb-card-pick.nnb-rar .nnb-card-kind { color: var(--nnb-rar); font-weight: bold; opacity: 1; }
 .nnb-card-pick.nnb-rar-epic { box-shadow: 0 0 8px color-mix(in srgb, var(--nnb-rar) 45%, transparent); }
-.nnb-card-pick.nnb-rar-legendary { box-shadow: 0 0 14px color-mix(in srgb, var(--nnb-rar) 70%, transparent); animation: nnb-glow 2.4s ease-in-out infinite; }
+.nnb-card-pick.nnb-rar-legendary { box-shadow: 0 0 14px color-mix(in srgb, var(--nnb-rar) 70%, transparent); /* бесконечная анимация отключена для экономии GPU */ }
 @keyframes nnb-glow { 50% { box-shadow: 0 0 22px color-mix(in srgb, var(--nnb-rar) 90%, transparent); } }
 .nnb-scope .nnb-note.nnb-box-item { display: flex; flex-direction: row; gap: 10px; align-items: center; }
 .nnb-scope .nnb-box-item .nnb-box-main { flex: 1 1 auto; min-width: 0; }
@@ -369,4 +369,23 @@
     gap: 8px !important;
     flex-wrap: wrap !important;
     width: 100% !important;
+}
+
+
+/* --- ⚡ Турбо-режим чата и аппаратная разгрузка DOM (#chat) --- */
+#chat .mes.nnb-turbo-folded-mes {
+    display: none !important;
+}
+#chat .mes:not(:nth-last-child(-n+4)) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 340px;
+}
+.nnb-turbo-chat-bar {
+    margin: 8px 0 12px 0;
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 40%, transparent);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #8b78c4) 12%, transparent);
+    box-sizing: border-box;
+    width: 100%;
 }
