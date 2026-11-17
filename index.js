@@ -1961,7 +1961,7 @@ function formatNpcs(list, forThink = false, st = store()) {
     const all = [];
     if (st) {
         const mc = ensureMainCharCard(st);
-        if (mc && (!st.worldProfile?.freeWorld || mc.romance > 0 || mc.friendship !== 10 || mc.status || mc.turnOns)) {
+        if (mc && (!st.worldProfile?.freeWorld || mc.locked || mc.romance > 0 || mc.friendship !== 10 || mc.status || mc.turnOns || mc.dream || mc.fear || mc.likes)) {
             all.push(mc);
         }
     }
@@ -2447,25 +2447,34 @@ function buildStandaloneContextPrompt(taskPrompt) {
     const names = storyNames();
     const parts = [];
 
-    // 1. Краткая справка о персонажах чата
+    // 1. Краткая справка о персонажах чата и Саммари предыдущих глав (чтобы отдельная быстрая модель Блокнота помнила весь канон!)
+    const st = store();
+    if (st?.storySummary?.trim()) {
+        parts.push(`[📜 Краткое содержание предыдущих глав истории:\n${String(st.storySummary).trim().slice(0, 3500)}]`);
+    }
     const ch = (c.characterId !== undefined && c.characters?.[c.characterId]) ? c.characters[c.characterId] : null;
     if (ch) {
-        const desc = [ch.description, ch.personality, ch.scenario].filter(Boolean).join('\n').slice(0, 2400);
+        const desc = [ch.description, ch.personality, ch.scenario].filter(Boolean).join('\n').slice(0, 2600);
         if (desc) parts.push(`[Описание персонажа ${names.char}:\n${c.substituteParams(desc)}]`);
     }
     const personaDesc = c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || '';
     if (personaDesc) {
-        parts.push(`[Описание игрока ${names.user}:\n${c.substituteParams(String(personaDesc).slice(0, 1400))}]`);
+        parts.push(`[Описание игрока ${names.user}:\n${c.substituteParams(String(personaDesc).slice(0, 1600))}]`);
     }
 
-    // 2. Последние сообщения чата
+    // 2. Последние сообщения чата (для последних 6 постов сохраняем до 3600 символов и обязательно концовку поста, чтобы модель Блокнота видела финал сцены!)
     const maxMsgs = Math.max(5, Math.min(80, Number(s.textContextMsgs) || 25));
     const chat = Array.isArray(c.chat) ? c.chat : [];
     const recent = chat.filter(m => m && !m.is_system && m.mes).slice(-maxMsgs);
     if (recent.length) {
-        const lines = recent.map(m => {
+        const lines = recent.map((m, idx) => {
             const speaker = m.is_user ? names.user : (m.name || names.char);
-            const clean = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 1200);
+            const rawClean = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').trim();
+            const isVeryRecent = idx >= recent.length - 6;
+            const limit = isVeryRecent ? 3600 : 1800;
+            const clean = rawClean.length <= limit
+                ? rawClean
+                : `${rawClean.slice(0, Math.floor(limit * 0.45))} … ${rawClean.slice(-Math.floor(limit * 0.55))}`;
             return `${speaker}: ${clean}`;
         });
         parts.push(`[Последние сообщения ролевой (контекст чата):\n${lines.join('\n\n')}]`);
@@ -3338,7 +3347,7 @@ function escapeHtml(t) {
 }
 
 
-async function generateActionPromptsNow() {
+async function generateActionPromptsNow(forceReroll = false) {
     const c = ctx();
     const chat = c.chat;
     if (!chat || !chat.length) return toastr.warning('Чат пуст', '💡 Подсказки');
@@ -3346,22 +3355,34 @@ async function generateActionPromptsNow() {
     const lastMsg = chat[lastIdx];
     if (!lastMsg || lastMsg.is_user) return toastr.info('Подсказки действий создаются для последнего ответа персонажа', '💡 Подсказки');
 
-    if (Array.isArray(lastMsg.extra?.actions) && lastMsg.extra.actions.length) {
-        renderActionPrompts();
-        return;
-    }
-
-    const user = storyNames().user;
+    const prevActions = Array.isArray(lastMsg.extra?.actions) ? [...lastMsg.extra.actions] : [];
+    const names = storyNames();
+    const user = names.user;
     const st = store();
+    const recentMsgs = chat.filter(m => m && !m.is_system && m.mes).slice(-3).map((m, idx, arr) => {
+        const who = m.is_user ? user : (m.name || names.char);
+        const rawTxt = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').trim();
+        const lim = idx === arr.length - 1 ? 3600 : 1400;
+        const txt = rawTxt.length <= lim ? rawTxt : `${rawTxt.slice(0, Math.floor(lim * 0.4))} … ${rawTxt.slice(-Math.floor(lim * 0.6))}`;
+        return `${who}: ${txt}`;
+    }).join('\n\n');
+    const notesHint = (st?.notes || []).length ? `Активные задумки сюжета: ${st.notes.slice(-3).map(n => n.text).join('; ')}.` : '';
+    const avoidPrev = prevActions.length ? `\n— НЕ повторяй предыдущие варианты (${prevActions.join('; ')}) — придумай 3 совершенно других хода!` : '';
     const poiLine = (st && livingWorldOn(st))
         ? `\n— Если в сцене есть точки интереса, необычные детали окружения, фоновые персонажи или зацепки локации, хотя бы один вариант должен предлагать ${user} изучить, осмотреть или задействовать этот крючок мира.`
         : '';
-    const prompt = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Предложи три возможных варианта следующего хода для игрока (${user}) — что может сделать или сказать САМА ${user} в ответ на последнее сообщение:
+    const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
+[OOC: Пауза в ролевой игре. Ты — автор этой истории.
+Последние сообщения текущей сцены:
+${recentMsgs}
+${notesHint}
+
+Предложи три возможных варианта следующего хода для игрока (${user}) — что может сделать или сказать САМА ${user} прямо сейчас в ответ на концовку последнего сообщения:
 <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->
 Требования к вариантам:
 — Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «посмотреть на ${user}» — действует только сама ${user}.
 — Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${poiLine}
+— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${poiLine}${avoidPrev}
 — Формулируй кратко (1–2 фразы), чтобы ${user} могла выбрать вариант как свой следующий ход.
 Ответь ТОЛЬКО строкой в формате <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->]`;
 
@@ -3497,6 +3518,7 @@ async function rerollNote(id, kind = 'note') {
     busy = true;
     setStatus('Модель переписывает задумку…');
     ctx().setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+    ctx().setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
     try {
         const others = isIntrigue ? st.notes : st.notes.filter(n => n.id !== id);
         const tpl = (isIntrigue ? REROLL_INTRIGUE_PROMPT : REROLL_PROMPT).replace('{{old}}', note.text);
@@ -3584,6 +3606,7 @@ async function runHolidayStep(opts) {
     busy = true;
     setStatus('Проверяю праздники…');
     ctx().setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+    ctx().setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
     try {
         await holidayStep(st, opts);
     } catch (err) {
@@ -3603,6 +3626,7 @@ async function runFlavor() {
     busy = true;
     setStatus('Модель пишет местный колорит…');
     ctx().setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+    ctx().setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
     try {
         await fillFlavor(st, true);
         await ctx().saveMetadata();
@@ -3628,6 +3652,7 @@ async function withBusy(status, fn) {
     busy = true;
     setStatus(status);
     ctx().setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+    ctx().setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
     try {
         return await fn(st);
     } catch (err) {
@@ -3697,20 +3722,11 @@ async function offscreenCutaway() {
         return toastr.info('В Блокноте пока нет записанных героев или НПС', '🎬 За кадром');
     }
 
-    // Смотрим последние 2 сообщения чата, чтобы понять, кто сейчас в кадре, а кого в текущей сцене нет
-    const recentText = c.chat
-        .filter(m => m && !m.is_system && m.mes)
-        .slice(-2)
-        .map(m => stripTags(stripActionTags(String(m.mes || ''))))
-        .join(' ')
-        .toLowerCase()
-        .replace(/ё/g, 'е');
-
+    // Смотрим последние 2 сообщения чата через анти-ясновидение (с учётом падежей и физического присутствия в сцене), чтобы точно определить, кого сейчас нет рядом
+    const recentMsgs = c.chat.filter(m => m && !m.is_system && m.mes).slice(-2);
     const absentHeroes = allHeroes.filter(h => {
-        const nNorm = normName(h.name);
-        if (!nNorm) return false;
-        const firstWord = nNorm.split(/\s+/)[0];
-        return !recentText.includes(nNorm) && (!firstWord || firstWord.length < 3 || !recentText.includes(firstWord));
+        if (!h || !h.name) return false;
+        return !recentMsgs.some(m => isHeroPhysicallyPresentInMessage(h.name, m.mes, m.name));
     });
 
     const targetList = absentHeroes.length ? absentHeroes : allHeroes.filter(h => !h.isMainChar);
@@ -6112,7 +6128,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         : '';
     const moment = targetPostMsg
         ? `[🎯 ГЛАВНЫЙ ЦЕЛЕВОЙ ПОСТ ДЛЯ ИЛЛЮСТРАЦИИ — определяй ЛОКАЦИЮ (дом/квартира/комната/улица и т.д.), КТО ПРИСУТСТВУЕТ В СЦЕНЕ и ЧТО ОНИ ДЕЛАЮТ СТРОГО ПО ЭТОМУ ПОСТУ!]:\n` +
-          `${targetPostMsg.is_user ? names.user : (targetPostMsg.name || names.char)}: «${stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 2200)}»`
+          `${targetPostMsg.is_user ? names.user : (targetPostMsg.name || names.char)}: «${stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 4500)}»`
         : '';
     const a = st.wardrobe?.active;
     const outfit = (!isPov && a?.status === 'worn') ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
@@ -11408,6 +11424,11 @@ function renderActionPrompts() {
 
     const container = $('<div class="nnb-action-prompts"></div>').attr('data-nnb-act-sig', actSig);
     const head = $('<div class="nnb-action-prompts-head"><span>Варианты хода</span></div>');
+    const headBtns = $('<span style="display:inline-flex; gap:8px; align-items:center;"></span>');
+    const rerollActBtn = $('<span title="Придумать 3 других варианта хода (через быструю модель Блокнота)" style="cursor:pointer; padding:0 4px; opacity:0.75;"><i class="fa-solid fa-rotate"></i></span>').on('click', function (e) {
+        e.stopPropagation();
+        generateActionPromptsNow(true);
+    });
     const hideBtn = $('<span title="Выключить варианты хода (включить обратно можно в меню палочки 🪄 или в блокноте)" style="cursor:pointer; padding:0 4px; opacity:0.65;">✕</span>').on('click', function (e) {
         e.stopPropagation();
         settings().actionPrompts = false;
@@ -11418,7 +11439,8 @@ function renderActionPrompts() {
         $('.nnb-action-prompts').remove();
         toastr.info('Варианты хода выключены (включить обратно можно в меню 🪄 или в блокноте)', '💡 Варианты хода');
     });
-    head.append(hideBtn);
+    headBtns.append(rerollActBtn, hideBtn);
+    head.append(headBtns);
     container.append(head);
 
     const list = $('<div class="nnb-action-chips"></div>');
@@ -12478,7 +12500,7 @@ async function generateTopicsNow() {
         const chat = ctx().chat || [];
         const lastMsgs = chat.filter(m => m && !m.is_system && m.mes).slice(-3).map(m => {
             const who = m.is_user ? names.user : (m.name || names.char);
-            return `${who}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 500)}`;
+            return `${who}: ${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(-1600)}`;
         }).join('\n');
 
         const mc = ensureMainCharCard(s2);
@@ -12493,7 +12515,8 @@ async function generateTopicsNow() {
         const notesContext = (s2.notes || []).length ? `Задумки автора на ближайшее будущее: ${s2.notes.slice(-4).map(n => n.text).join('; ')}.` : '';
         const avoidContext = s2.pastTopics.length ? `СТРОГО ЗАПРЕЩЕНО повторять или перефразировать эти старые темы: ${s2.pastTopics.join('; ')}.` : '';
 
-        const prompt = `[OOC: Пауза в ролевой игре. Ты — автор истории.
+        const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
+[OOC: Пауза в ролевой игре. Ты — автор истории.
 СНАЧАЛА определи по последним сообщениям чата ниже, КТО ИМЕННО находится рядом с ${names.user} в текущей сцене прямо сейчас (это может быть ${names.char}, конкретный NPC — например, подруга, коллега или случайный собеседник, — либо несколько персонажей сразу).
 Придумай РОВНО 5 СОВЕРШЕННО НОВЫХ, цепляющих, живых и небанальных тем для разговора, адресованных ИМЕННО тем персонажам, которые реально присутствуют в текущей сцене с ${names.user}! (Если в сцене сейчас подруга или другой NPC, а не ${names.char} — генерируй темы для разговора именно с этим NPC и укажи его имя в начале названия темы!)
 
@@ -12864,7 +12887,7 @@ function buildStrictPersonalContextForDiary(n, st, useDate = '') {
         if (isHeroPhysicallyPresentInMessage(n, m)) {
             const who = m.is_user ? names.user : (m.name || names.char);
             const clean = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            personalPosts.push(`[Пост #${i + 1}, где ${n.name} присутствовал(а) лично] ${who}: ${clean.slice(0, 850)}`);
+            personalPosts.push(`[Пост #${i + 1}, где ${n.name} присутствовал(а) лично] ${who}: ${clean.slice(0, 1600)}`);
         }
     }
     const recent8 = allChat.slice(-8);
