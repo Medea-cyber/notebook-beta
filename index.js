@@ -212,6 +212,7 @@
 
 const MODULE = 'npc_notebook';
 const INJECT_KEY = 'npc_notebook_inject';
+const INJECT_STATIC_KEY = 'npc_notebook_static_canon';
 const ACTION_INJECT_KEY = 'npc_notebook_actions';
 
 // Константы SillyTavern (extension_prompt_types / extension_prompt_roles)
@@ -1178,12 +1179,15 @@ const GENRE_HINTS = {
     var name = typeof nameOrNpc === 'string' ? nameOrNpc : (nameOrNpc.name || '');
     if (INAPPROPRIATE_BDAY_RE.test(name)) return true;
     var norm = normNameB(name);
-    var npc = (st && st.npcs) ? st.npcs.find(function (n) { return normNameB(n.name) === norm; }) : (typeof nameOrNpc === 'object' ? nameOrNpc : null);
+    var npc = (st && st.npcs) ? st.npcs.find(function (n) { return normNameB(n.name) === norm || (typeof matchesCharacterName === 'function' && matchesCharacterName(n.name, name)); }) : (typeof nameOrNpc === 'object' ? nameOrNpc : null);
     if (npc) {
       if (INAPPROPRIATE_BDAY_RE.test(npc.card || '') || INAPPROPRIATE_BDAY_RE.test(npc.status || '')) return true;
     }
     if (st && st.relationships) {
-      var rels = st.relationships.filter(function (r) { return normNameB(r.a) === norm || normNameB(r.b) === norm; });
+      var rels = st.relationships.filter(function (r) {
+        return normNameB(r.a) === norm || normNameB(r.b) === norm
+          || (typeof matchesCharacterName === 'function' && (matchesCharacterName(r.a, name) || matchesCharacterName(r.b, name)));
+      });
       for (var i = 0; i < rels.length; i++) {
         var r = rels[i];
         var text = (r.type || '') + ' ' + (r.desc || '');
@@ -1195,7 +1199,9 @@ const GENRE_HINTS = {
   }
   function hasBday(st, who) {
     var k = normNameB(who);
-    return st.time.custom.some(function (c) { return c.bday && normNameB(c.who) === k; });
+    return st.time.custom.some(function (c) {
+      return c.bday && (normNameB(c.who) === k || (typeof matchesCharacterName === 'function' && matchesCharacterName(c.who, who)));
+    });
   }
   function bdaySection(st, userName, charNames, npcNames) {
     var known = st.time.custom.filter(function (c) { return c.bday; }).map(function (c) { var md = c.md.split('-').map(Number); return c.who + ' — ' + md[1] + ' ' + MONTHS_GEN[md[0] - 1]; });
@@ -1292,26 +1298,28 @@ const defaults = {
     chatTurboMode: true,
     chatMaxVisibleMsgs: 16,
     chatMaxLiveImages: 4,
+    tokenSaverMode: true,
+    actionPromptsOnClickOnly: false,
     thinkPrompt: DEFAULT_THINK,
     injectPrompt: DEFAULT_INJECT,
 };
 
-const DEFAULT_NAI_WRITER_PROMPT = `ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — составить чистый визуальный промпт из коротких тегов Danbooru для иллюстрации текущей сцены в NovelAI V5.
-Выдай ТОЛЬКО строки CAST, SCENE и (если в кадре 2 и более человек) строки CHAR1, CHAR2... без пояснений.
+const DEFAULT_NAI_WRITER_PROMPT = `ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — составить чистый визуальный промпт из коротких тегов Danbooru для NovelAI V5 без рассуждений и комментариев.
+— Если запрошена обычная сцена (1 кадр): выдай ТОЛЬКО строки CAST, SCENE и (при 2+ людях в кадре) CHAR1, CHAR2.
+— Если запрошен КОМИКС (PANEL1, PANEL2, PANEL3): выдай ТОЛЬКО строки CAST, PANEL1, PANEL2, PANEL3 и QUOTE1, QUOTE2, QUOTE3 (БЕЗ строки SCENE!).
 
-ГЛАВНЫЕ ПРАВИЛА ДЛЯ NOVELAI V5:
-1. ТОЛЬКО КОРОТКИЕ ТЕГИ DANBOORU (1–4 слова), БЕЗ ЛИТЕРАТУРНЫХ МЕТАФОР И БЕЗ ГРОТЕСКА:
-   — Игнорируй комедийный или гротескный тон текста ролевой! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать метафоры, идиомы и гиперболы ("screaming internally", "about to die of shame", "flashback horror", "deer in headlights", "bird's nest", "bony build").
-   — НЕ переводи смущение или шок словами horror, dread, terror, die, corpse, pinpricks — используй только эстетичные теги мимики Danbooru: blush, embarrassed, flustered, wide eyes, parted lips, surprised, nervous, shy, soft expression, looking away.
-   — НЕ пиши отрицательные веса (-1.5::...::), НЕ пиши блок NEGATIVE, НЕ пиши теги masculine face / masculine hands и НЕ используй частицу "no ...".
+ГЛАВНЫЕ ПРАВИЛА ДЛЯ СЦЕН И КОМИКСОВ В NOVELAI V5:
+1. ПРАВИЛО РАСКАДРОВКИ КОМИКСА (PANEL1, PANEL2, PANEL3) — РАЗНЫЕ МОМЕНТЫ И НЕ БОЛЕЕ 1–2 ГЕРОЕВ В КАДРЕ:
+   — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать в один кадр комикса толпу из 4–7 человек (4boys, 2girls, six people)! В одном фрейме комикса NovelAI может чисто нарисовать ТОЛЬКО 1 или 2 персонажей (максимум 3 на общем плане), которые непосредственно говорят реплику (QUOTE) или действуют ИМЕННО В ЭТОТ МОМЕНТ!
+   — Привязывай каждый кадр к своей реплике и своему микро-эпизоду поста:
+     • PANEL1 (Момент 1 под QUOTE1, средний план medium shot / cowboy shot): 1–2 персонажа из начала поста (кто произносит QUOTE1 и кому). Если их двое — в конце строки обязательно добавь: || CHAR1: пол, внешность, одежда и поза 1-го || CHAR2: пол, внешность, одежда и поза 2-го.
+     • PANEL2 (Момент 2 под QUOTE2, другой ракурс dynamic angle / medium close-up): ДРУГИЕ 1–2 персонажа (или другая поза и действие из середины поста, кто произносит QUOTE2 и кто реагирует). НЕ повторяй описание и позы из PANEL1! Добавь в конце || CHAR1: ... || CHAR2: ... (если в кадре двое).
+     • PANEL3 (Момент 3 под QUOTE3, крупный эмоциональный план close-up / portrait): СОЛЬНЫЙ крупный план (1boy, solo, close-up ИЛИ 1girl, solo, close-up) того персонажа, который произносит QUOTE3 или ярко реагирует в финале! В PANEL3 ЗАПРЕЩЕНО писать wide shot, full body или 2boys/4boys!
 
-2. КАНОНИЧНЫЕ ПЕРСОНАЖИ ИЗ АНИМЕ / МАНГИ / ИГР (ТОЧНЫЙ ТЕГ DANBOORU):
-   — Если персонаж в сцене из известного канона (например, Наоя Дзэнин из Jujutsu Kaisen, Годжо Сатору, Тоджи Фушигуро, Гето Сугуру и др.), НИКОГДА не пиши просто одиночное имя "Naoya"!
-   — ВСЕГДА пиши его точный каноничный тег Danbooru в формате \`фамилия имя, название тайтла на английском\` + его ключевые черты внешности: например \`zen'in naoya, jujutsu kaisen, blonde hair, dyed hair, black roots, slit pupils, ear piercings\`.
-
-3. КОГДА В КАДРЕ 3–4 И БОЛЕЕ ПЕРСОНАЖЕЙ (ЗАЩИТА ОТ СЛИЯНИЯ ДВУХ ПАРНЕЙ В ОДНОГО):
-   — В начале SCENE укажи ТОЛЬКО суммарные счётчики пола: например \`2boys, 2girls, multiple boys, multiple girls, group\` (если парней двое — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать внутри общего текстаSCENE тег \`1boy\`, иначе NovelAI слепит двух парней в одного человека!).
-   — Обязательно вынеси КАЖДОГО персонажа в отдельную строку CHAR1, CHAR2, CHAR3, CHAR4 после строки SCENE — система передаст каждого персонажа в отдельный независимый слой NovelAI V5 (char_captions), чтобы их внешность и одежда никогда не смешивались!`;
+2. КАЛИБРОВКА ПРОПОРЦИЙ И ЗАПРЕТ БУКВАЛЬНЫХ МЕТАФОР:
+   — Если в кадре мужчина и женщина (1boy, 1girl), фиксируй взрослые пропорции: 1.2::tall lean adult man, adult male proportions, man slightly taller than woman, wider male shoulders::. Внутри фраз называй мужчину adult man / male (слово boy используй только в счётчике 1boy/2boys).
+   — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО переводить русские метафоры дословно: НЕ пиши "lion mane" про пышную шевелюру человека (иначе NovelAI нарисует голову льва-фурри! Пиши: thick messy greying hair, voluminous wild hair); НЕ пиши "greenish-pale" или "green face" про тошноту/бледность (иначе кожа станет зелёной как у зомби! Пиши: pale skin, unwell, exhausted, sweatdrop).
+   — Не используй частицу "no ..." в позитиве и не пиши общие слова стиля (anime style, masterpiece) в начале.`;
 
 const BUILTIN_NAI_WRITER_PRESETS = [
     {
@@ -1589,8 +1597,49 @@ function findRel(st, a, b) {
 
 const REL_INJECT_HEADER = '[Отношения и связи между персонажами — канон их динамики. Держись этих линий в разговорах, взглядах, симпатиях и спорах.]';
 
+function getActiveSceneHeroSet(st) {
+    const active = new Set();
+    const names = storyNames();
+    if (names.user) active.add(normName(names.user));
+    if (names.char) active.add(normName(names.char));
+    (names.chars || []).forEach(c => { if (c) active.add(normName(c)); });
+    if (!st) return active;
+
+    const chat = (ctx().chat || []).filter(m => m && !m.is_system && m.mes);
+    const recentMsgsText = chat.slice(-10).map(m => `${m.name || ''}: ${m.mes || ''}`).join('\n');
+    const notesText = (st.notes || []).map(n => n.text || '').join('\n');
+    const intriguesText = (st.intrigues || []).map(it => `${it.text || ''} ${(it.clues || []).map(c => c.text).join(' ')}`).join('\n');
+    const arcsText = [...(st.arcs || []), ...(st.evolved || [])].map(a => `${a.who || ''} ${a.text || ''} ${a.current || ''}`).join('\n');
+    const linesText = st.direction?.lines || '';
+    const compText = st.map?.currentCompanion || '';
+    const curPlace = st.map?.current ? (st.map.places || []).find(p => p.id === st.map.current) : null;
+    const placeText = curPlace ? `${curPlace.title || ''} ${curPlace.desc || ''} ${curPlace.hooks || ''}` : '';
+    const dreamsText = (st.dreams || []).slice(-3).map(d => `${d.who || ''} ${d.text || ''}`).join('\n');
+    const neighText = (st.neighborStories || []).slice(-2).map(ns => ns.text || '').join('\n');
+    const holText = st.holiday ? `${st.holiday.name || ''}` : '';
+    const combinedRecent = [recentMsgsText, notesText, intriguesText, arcsText, linesText, compText, placeText, dreamsText, neighText, holText].join('\n');
+
+    for (const n of (st.npcs || [])) {
+        if (!n || !n.name) continue;
+        if (n.favorite || n.isMainChar || isNameMentionedInText(n.name, combinedRecent)) {
+            active.add(normName(n.name));
+        }
+    }
+    return active;
+}
+
+function isHeroActiveInCurrentScene(heroName, activeSet, st) {
+    if (!heroName || !activeSet) return true;
+    const k = normName(heroName);
+    if (activeSet.has(k)) return true;
+    for (const aName of activeSet) {
+        if (matchesCharacterName(heroName, aName)) return true;
+    }
+    return false;
+}
+
 function formatRelationships(st, forThink = false) {
-    const list = st.relationships || [];
+    const list = st?.relationships || [];
     if (!list.length) return '(пока нет)';
     return list.map(r => {
         const arrow = r.arrow || '↔';
@@ -1919,16 +1968,46 @@ function formatNpcs(list, forThink = false, st = store()) {
     const sorted = [...(list || [])].sort((a, b) => (!!b.favorite - !!a.favorite) || a.id - b.id);
     all.push(...sorted);
     if (!all.length) return '(пока нет)';
-    return all.map(n => {
+    const useSmartFocus = !forThink && settings().tokenSaverMode !== false && all.length > 3;
+    const activeSet = useSmartFocus ? getActiveSceneHeroSet(st) : null;
+    const fullLines = [];
+    const sleepingLines = [];
+
+    for (const n of all) {
         ensureNpcScales(n, st);
-        const favTag = n.favorite ? ' [❤️ ГЛАВНЫЙ ФАВОРИТ ИГРОКА]' : '';
-        const formattedCard = String(n.card || '').trim().replace(/\n+/g, '\n   ');
-        let line = `— ${n.name}${favTag}: ${formattedCard}`;
-        if (forThink) line += ' (существующий текст описания НЕ сокращай и НЕ переписывай — если в чате открылись важные новые факты об этом герое, добавь их через NPCFACT)';
-        if (n.status) line += `\n   Сейчас: ${n.status}`;
-        line += `\n   ${formatNpcScaleSummary(n)}`;
-        return line;
-    }).join('\n');
+        const isActive = !useSmartFocus || n.isMainChar || n.favorite || isHeroActiveInCurrentScene(n.name, activeSet, st);
+        if (isActive) {
+            const favTag = n.favorite ? ' [❤️ ГЛАВНЫЙ ФАВОРИТ ИГРОКА]' : '';
+            const formattedCard = String(n.card || '').trim().replace(/\n+/g, '\n   ');
+            let line = `— ${n.name}${favTag}: ${formattedCard}`;
+            if (forThink) line += ' (существующий текст описания НЕ сокращай и НЕ переписывай — если в чате открылись важные новые факты об этом герое, добавь их через NPCFACT)';
+            if (n.status) line += `\n   Сейчас: ${n.status}`;
+            line += `\n   ${formatNpcScaleSummary(n)}`;
+            fullLines.push(line);
+        } else {
+            // Если карточка короткая (до 420 символов) — не режем её вообще! Сжимаем только огромные многоабзацные досье отсутствующих за кадром НПС,
+            // оставляя первые ~420 символов (кто это + внешность + характер), статус, шкалу дружбы и мечту/вкусы, чтобы при внезапном входе в сцену модель знала их внешность и манеру речи!
+            const rawCard = String(n.card || '').replace(/\s*\/\/\s*/g, ' ').replace(/\s+/g, ' ').trim();
+            let shortBio = rawCard;
+            if (rawCard.length > 420) {
+                const cut = rawCard.slice(0, 420);
+                const lastDot = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf(';'));
+                shortBio = (lastDot > 180 ? cut.slice(0, lastDot + 1) : cut + '…');
+            }
+            const extraTraits = [
+                n.status ? `Сейчас: ${n.status}` : '',
+                `Дружба: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)})`,
+                n.dream ? `Мечта: ${n.dream}` : '',
+                n.likes ? `Любит: ${n.likes}` : '',
+            ].filter(Boolean).join(' | ');
+            sleepingLines.push(`— ${n.name}: ${shortBio}${extraTraits ? ` [${extraTraits}]` : ''}`);
+        }
+    }
+
+    if (sleepingLines.length) {
+        fullLines.push(`\n[Второстепенные знакомые за кадром (сейчас не в сцене — краткая справка):\n${sleepingLines.join('\n')}]`);
+    }
+    return fullLines.join('\n');
 }
 
 function buildNpcSection(st) {
@@ -2166,31 +2245,73 @@ function updateInjection() {
 ${st.storySummary.trim()}]`
         : '';
     const wardBlock = st ? [wardrobeInjection(st), gachaInjection(st)].filter(Boolean).join('\n\n') : '';
-    const actionBlock = (s.actionPrompts && st) ? buildActionPromptsInjection() : '';
+    const autoActionsEveryTurn = !!(s.actionPrompts && st && !s.actionPromptsOnClickOnly);
+    const actionBlock = autoActionsEveryTurn ? buildActionPromptsInjection() : '';
     if (!s.enabled || !st || (!st.notes.length && !showIntrigues && !showNpcs && !showRels && !showArcs && !timeBlock && !livingBlock && !linesBlock && !wardBlock && !actionBlock && !summaryBlock)) {
         c.setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+        c.setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
+        c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
         return;
     }
-    const blocks = [];
-    if (summaryBlock) blocks.push(summaryBlock);
-    if (timeBlock) blocks.push(timeBlock);
-    if (livingBlock) blocks.push(livingBlock);
-    if (wardBlock) blocks.push(wardBlock);
-    if (linesBlock) blocks.push(linesBlock);
-    if (showNpcs) blocks.push(NPC_INJECT_HEADER + '\n' + formatNpcs(st.npcs, false, st));
-    if (showRels) blocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
-    if (showArcs) blocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
-    if (st.notes.length) blocks.push(fillTemplate(s.injectPrompt, st.notes));
-    if (showIntrigues) blocks.push(INTRIGUE_INJECT_HEADER + '\n' + formatIntrigues(st.intrigues));
-    c.setExtensionPrompt(
-        INJECT_KEY,
-        blocks.join('\n\n'),
-        POS_IN_CHAT,
-        Number(s.depth) || 0,
-        false,
-        Number(s.role) || 0,
-    );
-    if (!s.enabled || !s.actionPrompts || !st) {
+
+    if (s.tokenSaverMode !== false) {
+        // 💎 РЕЖИМ ЭКОНОМИИ ТОКЕНОВ БЕЗ ПОТЕРИ ВНИМАНИЯ МОДЕЛИ:
+        // 1) Только неизменяемое «📜 Саммари прошлых глав» (события ДО начала текущего чата) ставится в хронологическое начало чата (depth = 999),
+        //    где оно не двигается при новых постах и кэшируется на 100%!
+        // 2) Все активные механики сюжета (Мир, Тренды, Сны, Арки, Тайны, Заявленные линии, Время, Локация, Наряд, Герои, Связи и Задумки)
+        //    остаются на рабочей глубине s.depth у конца чата, чтобы модель держала их в полном фокусе и ничего не забывала!
+        c.setExtensionPrompt(
+            INJECT_STATIC_KEY,
+            summaryBlock || '',
+            POS_IN_CHAT,
+            999,
+            false,
+            Number(s.role) || 0,
+        );
+
+        const dynamicBlocks = [];
+        if (timeBlock) dynamicBlocks.push(timeBlock);
+        if (livingBlock) dynamicBlocks.push(livingBlock);
+        if (wardBlock) dynamicBlocks.push(wardBlock);
+        if (linesBlock) dynamicBlocks.push(linesBlock);
+        if (showNpcs) dynamicBlocks.push(NPC_INJECT_HEADER + '\n' + formatNpcs(st.npcs, false, st));
+        if (showRels) dynamicBlocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
+        if (showArcs) dynamicBlocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
+        if (st.notes.length) dynamicBlocks.push(fillTemplate(s.injectPrompt, st.notes));
+        if (showIntrigues) dynamicBlocks.push(INTRIGUE_INJECT_HEADER + '\n' + formatIntrigues(st.intrigues));
+
+        c.setExtensionPrompt(
+            INJECT_KEY,
+            dynamicBlocks.join('\n\n'),
+            POS_IN_CHAT,
+            Number(s.depth) || 0,
+            false,
+            Number(s.role) || 0,
+        );
+    } else {
+        c.setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
+        const blocks = [];
+        if (summaryBlock) blocks.push(summaryBlock);
+        if (timeBlock) blocks.push(timeBlock);
+        if (livingBlock) blocks.push(livingBlock);
+        if (wardBlock) blocks.push(wardBlock);
+        if (linesBlock) blocks.push(linesBlock);
+        if (showNpcs) blocks.push(NPC_INJECT_HEADER + '\n' + formatNpcs(st.npcs, false, st));
+        if (showRels) blocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
+        if (showArcs) blocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
+        if (st.notes.length) blocks.push(fillTemplate(s.injectPrompt, st.notes));
+        if (showIntrigues) blocks.push(INTRIGUE_INJECT_HEADER + '\n' + formatIntrigues(st.intrigues));
+        c.setExtensionPrompt(
+            INJECT_KEY,
+            blocks.join('\n\n'),
+            POS_IN_CHAT,
+            Number(s.depth) || 0,
+            false,
+            Number(s.role) || 0,
+        );
+    }
+
+    if (!s.enabled || !autoActionsEveryTurn) {
         c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
     } else {
         c.setExtensionPrompt(
@@ -2433,7 +2554,7 @@ async function quietGenerateOnce(prompt) {
         ownPrompt = '';
         ownPromptIsSelfContained = false;
         const st = store();
-        if (s.enabled && s.actionPrompts && st && !busy) {
+        if (s.enabled && s.actionPrompts && !s.actionPromptsOnClickOnly && st && !busy) {
             c.setExtensionPrompt(ACTION_INJECT_KEY, buildActionPromptsInjection(), POS_IN_CHAT, 0, false, Number(s.role) || 0);
         }
         if (ffPending && ffActiveText) {
@@ -2500,6 +2621,17 @@ async function quietGenerate(prompt) {
     return stripActionTags(normalizeSpaces(await quietGenerateRetry(prompt)));
 }
 
+function adaptWriterNoteForTask(rawWriterNote, isComicStripTask) {
+    let note = String(rawWriterNote || '').trim();
+    if (!note) return '';
+    if (isComicStripTask) {
+        // Если в пользовательском промпте для GLM написано «Выдай ТОЛЬКО строки CAST и SCENE», заменяем это требование на формат 3 кадров комикса, чтобы GLM не игнорировал PANEL1..3!
+        note = note.replace(/выдай\s+только\s+строки\s+CAST\s+и\s+SCENE[^\n.]*/gi, 'В РЕЖИМЕ КОМИКСА выдай ТОЛЬКО строки CAST, PANEL1, PANEL2, PANEL3 и QUOTE1, QUOTE2, QUOTE3 (БЕЗ общей строки SCENE!)');
+        note += '\n\n[ВАЖНОЕ ПРАВИЛО ДЛЯ 3-КАДРОВОГО КОМИКСА (PANEL1, PANEL2, PANEL3):\n1) Выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: и QUOTE1:, QUOTE2:, QUOTE3: (строку SCENE писать НЕ нужно!).\n2) КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать в один кадр 4–7 человек (не пиши 4boys, 2girls, six people)! В каждом кадре рисуй ТОЛЬКО 1–2 персонажей (максимум 3), которые говорят реплику QUOTE этого кадра и взаимодействуют именно в этот момент!\n3) В PANEL1 покажи участников 1-й реплики (QUOTE1); в PANEL2 — участников 2-й реплики (QUOTE2) в ДРУГОЙ позе и с другого ракурса; в PANEL3 — СОЛЬНЫЙ крупный план лица/эмоции (1boy, solo, close-up или 1girl, solo, close-up) говорящего QUOTE3 без wide shot и без толпы!\n4) Не переводи метафоры буквально: вместо "lion mane" у человека пиши "thick wild hair", вместо "greenish-pale" пиши "pale skin, unwell, sweatdrop".]';
+    }
+    return note;
+}
+
 async function generateViaImagePromptSource(taskPrompt) {
     const s = settings();
     const src = String(s.imgPromptSource || '').trim();
@@ -2507,10 +2639,7 @@ async function generateViaImagePromptSource(taskPrompt) {
 
     const rawWriterNote = String(s.imgPromptWriterNote || '').trim();
     const isComicStripTask = /\bPANEL1\s*:/i.test(String(taskPrompt || ''));
-    const comicWriterOverride = isComicStripTask
-        ? '\n\n[ВАЖНОЕ ИСКЛЮЧЕНИЕ ДЛЯ РАСКАДРОВКИ КОМИКСА: сейчас запрошена 3-кадровая раскадровка комикса (PANEL1, PANEL2, PANEL3)! Игнорируй любое требование выше вида «выдай только строку SCENE» или «оберни ответ в один блок <nai_imagen>». Ты ОБЯЗАН вывести строки CAST:, PANEL1:, PANEL2:, PANEL3: (и QUOTE1..QUOTE3, если они указаны в шаблоне), где каждый PANEL описывает совершенно РАЗНЫЙ последовательный момент и ракурс из поста!]'
-        : '';
-    const writerNote = rawWriterNote ? (rawWriterNote + comicWriterOverride) : '';
+    const writerNote = adaptWriterNoteForTask(rawWriterNote, isComicStripTask);
     const writerBlock = writerNote
         ? `[Авторская инструкция составителю промптов картинок (соблюдай обязательно!):
 ${writerNote}]
@@ -2577,10 +2706,7 @@ async function quietGenerateImagePrompt(prompt) {
     }
     const rawWriterNote = String(s.imgPromptWriterNote || '').trim();
     const isComicStripTask = /\bPANEL1\s*:/i.test(String(prompt || ''));
-    const comicWriterOverride = isComicStripTask
-        ? '\n\n[ВАЖНОЕ ИСКЛЮЧЕНИЕ ДЛЯ РАСКАДРОВКИ КОМИКСА: сейчас запрошена 3-кадровая раскадровка комикса! Не ограничивайся одной строкой SCENE — обязательно выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: (и QUOTE1..QUOTE3, если запрошены), где каждый кадр показывает разный момент и ракурс!]'
-        : '';
-    const writerNote = rawWriterNote ? (rawWriterNote + comicWriterOverride) : '';
+    const writerNote = adaptWriterNoteForTask(rawWriterNote, isComicStripTask);
     const writerPrefix = writerNote
         ? `[Авторская инструкция составителю промптов картинок (соблюдай обязательно!):
 ${writerNote}]
@@ -2632,7 +2758,7 @@ function parseAndApply(raw) {
 
     if (!text || /^NONE[.!]?$/i.test(text)) return res;
 
-    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|TASK_?DONE|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|HOME_?ROOM|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|NONE)(?:\b|[\s\[:：—–-])/i;
+    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|BDAY|TASK(?:_?DONE)?|RESULT|MEDAL|TRACE|STORY|SECRET|DIARY|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|HOME_?ROOM|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|NONE)(?:\b|[\s\[:：—–-])/i;
     const mergedLines = [];
     for (const rawLine of text.split(/\r?\n/)) {
         const cleaned = bracketTag(rawLine.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, '')).trim();
@@ -3277,6 +3403,7 @@ async function think(manual = false) {
     setStatus('Модель листает блокнот…');
     // убираем инъекцию на время размышления, чтобы блокнот не дублировался
     ctx().setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
+    ctx().setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
     ctx().setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
 
     try {
@@ -6031,13 +6158,15 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
             : '';
         if (comicOpts.stripMode) {
             comicInstruction = `💬 РЕЖИМ РАСКАДРОВКИ КОМИКСА ИЗ 3 РАЗНЫХ КАДРОВ (СТИЛЬ «${cStyle.name}»):
-Разбей события текущего сообщения по хронологии на 3 СОВЕРШЕННО РАЗНЫХ последовательных кадра (Начало → Середина → Финал):
-⚠️ ГЛАВНОЕ ПРАВИЛО ПРОТИВ ДУБЛИРОВАНИЯ: СТРОГО ЗАПРЕЩЕНО рисовать одну и ту же позу, один и тот же предмет в руках (например, одну и ту же еду/контейнер/кружку/телефон) или одинаковую композицию во всех 3 кадрах! Каждый кадр обязан показывать НОВЫЙ момент, ДРУГУЮ позу и ДРУГОЙ план камеры:
-— PANEL1 (Кадр 1 — Начало сцены / Завязка, горизонтальный общий или средний план \`wide shot, medium shot\`): кто где находится, обстановка комнаты/места и первое действие в начале поста. Если в кадре 1 видны два персонажа, в конце строки PANEL1 обязательно добавь через двойную черту их слоты для этого кадра: \`|| CHAR1: теги 1-го персонажа и его позы в кадре 1 || CHAR2: теги 2-го персонажа и его позы в кадре 1\`.
-— PANEL2 (Кадр 2 — Середина сцены / Смена действия и ракурса, вертикальный кадр \`dynamic angle, medium close-up, cowboy shot\`): ДРУГОЙ момент из середины поста — смена позы, движение, жест рукой, прикосновение, передача предмета, взгляд вблизи или реакция второго героя. НЕ ПОВТОРЯЙ позу и бытовые предметы из PANEL1! (Если в кадре 2 оба героя — добавь в конце \`|| CHAR1: ... || CHAR2: ...\` с их НОВЫМИ позами для кадра 2; если в кадре 2 фокус на одном герое — пиши \`1girl, solo\` или \`1boy, solo\` без CHAR2).
-— PANEL3 (Кадр 3 — Финал сцены / Крупный эмоциональный план, вертикальный портрет \`close-up, extreme close-up on face and eyes, portrait, depth of field\`): СОЛЬНЫЙ крупный план лица, глаз, мимики, румянца/ушек или яркой финальной эмоции ОДНОГО ключевого героя (\`1girl, solo, close-up\` или \`1boy, solo, close-up\`) без второго персонажа на фоне и БЕЗ бытовых предметов/еды/контейнеров из первых кадров!
-В КАЖДОМ из PANEL1, PANEL2, PANEL3 пиши полный самодостаточный английский промпт (для NovelAI — короткими тегами Danbooru: точное число людей в ЭТОМ кадре \`1girl, 1boy\` или \`1girl, solo\`, внешность и одежда только тех, кто виден в ЭТОМ кадре, ракурс, поза, мимика и фон).
-${wantLines ? `Также выпиши до 3 коротких ДОСЛОВНЫХ реплик на русском языке, которые РЕАЛЬНО произнесены в ГЛАВНОМ ЦЕЛЕВОМ ПОСТЕ (не выдумывай отсебятину!), в строках QUOTE1: Имя говорящего из CAST | точная короткая фраза, QUOTE2: Имя говорящего из CAST | фраза, QUOTE3: Имя говорящего из CAST | фраза.` : ''}${quoteSpeakerRule}${monoRule}`;
+Разбей события текущего сообщения по хронологии на 3 СОВЕРШЕННО РАЗНЫХ последовательных кадра (Кадр 1 под QUOTE1 → Кадр 2 под QUOTE2 → Кадр 3 под QUOTE3):
+⚠️ ГЛАВНЫЕ ПРАВИЛА ПРОТИВ КАШИ И ДУБЛИРОВАНИЯ В КАДРАХ:
+1) НЕ РИСУЙ ТОЛПУ В ОДНОМ КАДРЕ: даже если в комнате находятся 4–7 человек, КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать всех 4–7 человек в один кадр комикса (НЕ пиши \`4boys, 2girls\`, \`six people\`)! В КАЖДОМ отдельном кадре (PANEL1, PANEL2, PANEL3) выбирай ТОЛЬКО 1 или 2 персонажей (максимум 3), которые говорят реплику QUOTE этого кадра или непосредственно взаимодействуют именно в эту секунду!
+2) НЕ ЗАПРЕЩАЕТСЯ менять состав персонажей от кадра к кадру: например, в PANEL1 покажи того, кто произносит QUOTE1 (и того, к кому он обращается); в PANEL2 — тех, кто участвует в моменте QUOTE2; в PANEL3 — сольный крупный план того, кто произносит QUOTE3!
+3) БЕЗ БУКВАЛЬНЫХ МЕТАФОР: никогда не переводи «львиная грива волос» у человека как \`lion mane\` (иначе нарисуется голова льва-фурри! Пиши \`thick voluminous wild hair\`) и не переводи «позеленевший от тошноты» как \`greenish-pale\` (иначе кожа станет зелёной как у зомби! Пиши \`pale skin, unwell, sweatdrop\`).
+— PANEL1 (Кадр 1 — Завязка / Момент QUOTE1, \`medium shot\` или \`cowboy shot\`): 1–2 персонажа этого момента, их внешность, одежда, действие и обстановка. Если в кадре 1 два персонажа — обязательно добавь в конце строки: \`|| CHAR1: пол (1boy/1girl), внешность, одежда и поза 1-го в кадре 1 || CHAR2: пол, внешность, одежда и поза 2-го в кадре 1\`.
+— PANEL2 (Кадр 2 — Развитие / Момент QUOTE2, \`dynamic angle, medium close-up, cowboy shot\`): ДРУГОЙ момент из середины поста (1–2 персонажа из момента QUOTE2, другой жест/поза/ракурс, без повторения позы из PANEL1!). Если в кадре 2 два персонажа — добавь в конце \`|| CHAR1: ... || CHAR2: ...\`; если один — пиши \`1boy, solo\` или \`1girl, solo\`.
+— PANEL3 (Кадр 3 — Финал / Момент QUOTE3, \`close-up, portrait, depth of field\`): СОЛЬНЫЙ крупный план лица и мимики (\`1girl, solo, close-up, upper body\` или \`1boy, solo, close-up, upper body\`) того персонажа, который произносит QUOTE3 или ярко реагирует в конце! В PANEL3 СТРОГО ЗАПРЕЩЕНО писать \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\` или перечислять остальных людей в комнате!
+${wantLines ? `Также выпиши до 3 коротких ДОСЛОВНЫХ реплик на русском языке из ГЛАВНОГО ЦЕЛЕВОГО ПОСТА (строго в соответствии с тем, кто изображён в PANEL1, PANEL2, PANEL3!) в строках QUOTE1: Имя говорящего | точная короткая фраза, QUOTE2: Имя говорящего | фраза, QUOTE3: Имя говорящего | фраза.` : ''}${quoteSpeakerRule}${monoRule}`;
         } else {
             comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ КОМИКСА / МАНГИ («${cStyle.name}»):
 Построй композицию в виде многокадровой страницы комикса из 3–4 фреймов на одном листе (${isNaiSource ? `начни строку SCENE с тегов раскладки: ${cStyle.naiTags}` : cStyle.promptEn}):
@@ -6082,8 +6211,8 @@ QUOTE2: Имя говорящего из CAST | короткая дословн�
 2) РАЗДЕЛЕНИЕ 2–4+ ПЕРСОНАЖЕЙ БЕЗ СЛИЯНИЯ: если в кадре несколько парней или несколько девушек (например, 2 парня и 2 девушки), в начале строки SCENE пиши ТОЛЬКО суммарное количество (\`2boys, 2girls, multiple boys, multiple girls\`) и НЕ пиши внутри SCENE тег \`1boy\` или \`1girl\`, чтобы генератор не слепил двух парней в одного!
 3) Дополнительно (если в кадре 2 и более персонажей) после строки SCENE выпиши каждого персонажа отдельной строкой \`CHAR1:\`, \`CHAR2:\`, \`CHAR3:\`, \`CHAR4:\` (только короткие английские теги этого конкретного персонажа: его пол \`boy\`/\`girl\`, каноничный тег Danbooru если есть, внешность, одежда, поза и мимика) — они будут переданы в отдельные слоты персонажей NovelAI V5!`,
         hasCustomWriter
-            ? `[ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ АВТОРА ПО ПРОМПТУ]:\n${settings().imgPromptWriterNote.trim()}`
-            : (settings().imageSource === 'novelai' ? DEFAULT_NAI_WRITER_PROMPT : ''),
+            ? `[ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ АВТОРА ПО ПРОМПТУ]:\n${adaptWriterNoteForTask(settings().imgPromptWriterNote.trim(), !!(comicOpts && comicOpts.enabled && comicOpts.stripMode))}`
+            : (settings().imageSource === 'novelai' ? adaptWriterNoteForTask(DEFAULT_NAI_WRITER_PROMPT, !!(comicOpts && comicOpts.enabled && comicOpts.stripMode)) : ''),
         'Ответь строго по шаблону без пояснений:',
         `CAST: кто именно виден в сцене через запятую (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
         ...(comicOpts && comicOpts.enabled && comicOpts.stripMode
@@ -6433,13 +6562,46 @@ function stripMultiPanelTagsForSingleFrame(styleTags) {
         .join(', ');
 }
 
+function sanitizeLiteralMetaphorTags(promptStr) {
+    if (!promptStr) return '';
+    return String(promptStr)
+        .replace(/\blion(?:'s)?\s+mane\b/gi, 'thick voluminous wild hair')
+        .replace(/\bgreenish[-\s]+pale\b/gi, 'pale skin, unwell, sweatdrop')
+        .replace(/\bgreenish\s+(?:skin|face|complexion)\b/gi, 'pale skin, unwell');
+}
+
+function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
+    let p = sanitizeLiteralMetaphorTags(String(rawPrompt || '').trim());
+    if (!p) return '';
+    const isCloseUpOrSolo = /\b(solo|close-up|extreme close-up|portrait)\b/i.test(p) || panelIdx === 2;
+    if (isCloseUpOrSolo && /\b(solo|close-up|extreme close-up)\b/i.test(p)) {
+        // Если кадр заявлен как solo / close-up (особенно PANEL3), удаляем противоречащие теги общего плана и толпы, из-за которых NovelAI делит кадр пополам!
+        p = p
+            .replace(/\b(?:wide establishing shot|wide shot|full body|medium two-shot|two-shot|group shot|crowd|[2-9]boys|[2-9]girls|multiple boys|multiple girls|(?:three|four|five|six|seven)\s+people[^,]*)\b\s*,?/gi, '')
+            .replace(/,\s*,+/g, ', ')
+            .replace(/^\s*,\s*|\s*,\s*$/g, '');
+    }
+    return p;
+}
+
 function stripActionAndPropTagsFromCharCaption(cap) {
     if (!cap) return '';
-    const actionRe = /\b(sitting|lying|standing|holding|peeling|eating|drinking|reaching|touching|hugging|kissing|leaning|kneeling|crouching|walking|running|plastic container|container|shrimp|food|bowl|plate|cup|mug|glass|phone|cigarette|bed|hospital bed|pillow|blanket|sheet|table|chair|looking at|hand on|hands|arms|crossed arms|reaching out)\b/i;
-    return String(cap)
+    const actionRe = /\b(sitting|lying|standing|holding|peeling|eating|drinking|reaching|touching|hugging|kissing|leaning|kneeling|crouching|walking|running|gesturing|turning|stuffing|clutching|plastic container|container|shrimp|food|bowl|plate|cup|mug|glass|phone|cigarette|bed|hospital bed|pillow|blanket|sheet|table|chair|looking at|hand on|hands|arms|crossed arms|reaching out|wide shot|full body|wide establishing shot|medium two-shot|six people|five people|four people)\b/i;
+    const identityRe = /\b(man|woman|boy|girl|male|female|hair|eyes|ears|tail|horns|wings|piercings|glasses|suit|shirt|jacket|dress|coat|sweater|uniform|tall|short|curvy|lean|muscular|pale|freckles|beard|scars|demi-cat|demi-dog)\b/i;
+    return sanitizeLiteralMetaphorTags(String(cap))
         .split(',')
-        .map(t => t.trim())
-        .filter(t => t && !actionRe.test(t))
+        .map(t => {
+            const tr = t.trim();
+            if (!tr) return '';
+            if (!actionRe.test(tr)) return tr;
+            if (identityRe.test(tr)) {
+                // Оставляем внешность/одежду героя в начале фразы, отрезая только хвост с действием и мебелью
+                const cleanedClause = tr.replace(/\s+\b(?:beside|behind|near|at the|by the|walking|standing|sitting|lying|turning|gesturing|holding|clutching|stuffing|peeling|eating|drinking|looking|leaning|reaching|crouching|kneeling)\b.*$/i, '').trim();
+                if (cleanedClause && identityRe.test(cleanedClause)) return cleanedClause;
+            }
+            return '';
+        })
+        .filter(Boolean)
         .join(', ');
 }
 
@@ -6464,40 +6626,59 @@ function parsePanelTextAndCharSlots(rawPanelStr) {
 }
 
 function buildDistinctComicPanelsFallback(baseDesc, charCaptions, isNai = true) {
-    const cleanBase = String(baseDesc || '').trim();
-    const caps = Array.isArray(charCaptions) ? charCaptions.filter(Boolean) : [];
-    const char1Identity = caps[0] ? stripActionAndPropTagsFromCharCaption(caps[0]) : '';
-    const char2Identity = caps[1] ? stripActionAndPropTagsFromCharCaption(caps[1]) : '';
+    const cleanBase = sanitizeLiteralMetaphorTags(String(baseDesc || '').trim());
+    const caps = Array.isArray(charCaptions) ? charCaptions.filter(Boolean).map(c => sanitizeLiteralMetaphorTags(c)) : [];
 
-    // Кадр 1: общий/средний план взаимодействия (исходная сцена)
-    const panel1Core = cleanBase || [char1Identity, char2Identity, 'indoor scene, medium shot'].filter(Boolean).join(', ');
-    const panel1Slots = caps.length >= 2 ? ` || CHAR1: ${caps[0]} || CHAR2: ${caps[1]}` : '';
-    const panel1 = `wide establishing shot, medium two-shot, ${panel1Core}${panel1Slots}`;
+    // Если слоты CHAR не пришли, но в строке SCENE перечислены несколько людей (man/woman/boy/girl), выделяем их описания отдельно, чтобы не пихать всю толпу в каждый кадр!
+    const allTokens = cleanBase.split(',').map(t => t.trim()).filter(Boolean);
+    const charTokenRe = /\b(man|woman|boy|girl|male|female|demi-cat|demi-dog|blonde|dark-haired|copper hair|grey hair|greying)\b/i;
+    const countOrCamRe = /\b([1-9]boys?|[1-9]girls?|multiple boys|multiple girls|wide shot|full body|wide establishing shot|medium shot|two-shot|six people|five people|four people|three people|standing apart)\b/i;
+    const envTokens = allTokens.filter(t => !charTokenRe.test(t) && !countOrCamRe.test(t)).slice(0, 6);
+    const charClauses = allTokens.filter(t => charTokenRe.test(t) && !/^(?:[1-9]boys?|[1-9]girls?|multiple boys|multiple girls)$/i.test(t));
 
-    // Кадр 2: смена ракурса и действия — крупный план взаимодействия / жеста второго персонажа или диалога вблизи без повторения композиции
-    let panel2 = '';
-    if (char2Identity && char1Identity) {
-        const c1Pose2 = `${char1Identity}, looking at partner, listening, subtle emotional reaction, upper body`;
-        const c2Pose2 = `${char2Identity}, speaking, expressive gesture, leaning closer, dynamic angle, upper body, focus on hands and expression`;
-        panel2 = `dynamic angle, cowboy shot, medium close-up, two-shot interaction, shifting posture, expressive dialogue, ${char1Identity}, ${char2Identity}, depth of field || CHAR1: ${c1Pose2} || CHAR2: ${c2Pose2}`;
-    } else if (char1Identity) {
-        panel2 = `dynamic angle, medium close-up, ${char1Identity}, shifting posture, expressive hand gesture, emotional tension, detailed background`;
+    const char1Identity = caps[0] ? stripActionAndPropTagsFromCharCaption(caps[0]) : (charClauses[0] || '');
+    const char2Identity = caps[1] ? stripActionAndPropTagsFromCharCaption(caps[1]) : (charClauses[1] || '');
+    const char3Identity = caps[2] ? stripActionAndPropTagsFromCharCaption(caps[2]) : (charClauses[2] || charClauses[0] || '');
+    const envStr = envTokens.join(', ') || 'indoors, detailed background';
+
+    // Кадр 1: 1–2 персонажа из завязки сцены (средний план)
+    let panel1 = '';
+    if (char1Identity && char2Identity) {
+        const g1 = /\b(woman|girl|female|1girl)\b/i.test(char1Identity) ? '1girl' : '1boy';
+        const g2 = /\b(woman|girl|female|1girl)\b/i.test(char2Identity) ? '1girl' : '1boy';
+        const countTag = (g1 === '1boy' && g2 === '1boy') ? '2boys, multiple boys' : ((g1 === '1girl' && g2 === '1girl') ? '2girls, multiple girls' : '1boy, 1girl');
+        panel1 = `${countTag}, medium shot, cowboy shot, ${envStr}, ${char1Identity}, ${char2Identity} || CHAR1: ${g1}, ${char1Identity} || CHAR2: ${g2}, ${char2Identity}`;
     } else {
-        const strippedBase = stripActionAndPropTagsFromCharCaption(cleanBase) || cleanBase;
-        panel2 = `dynamic angle, medium close-up, focus on hand gesture and changing posture, ${strippedBase}, depth of field`;
+        panel1 = `medium shot, ${cleanBase}`;
     }
 
-    // Кадр 3: сольный крупный эмоциональный план лица и глаз 1-го персонажа (БЕЗ второго персонажа и БЕЗ бытовых предметов из 1-го кадра!)
-    let panel3 = '';
-    const soloTarget = char1Identity || char2Identity;
-    if (soloTarget) {
-        const genderTag = /\b(1boy|male|man)\b/i.test(soloTarget) ? '1boy, solo' : '1girl, solo';
-        const cleanedSolo = soloTarget.replace(/\b(1girl|1boy|2girls|2boys|multiple boys|multiple girls)\b\s*,?/gi, '').trim();
-        panel3 = `${genderTag}, close-up, extreme close-up on face and eyes, portrait, ${cleanedSolo}, expressive eyes, emotional reaction, subtle blush, detailed eyelashes, blurry background, bokeh, cinematic lighting`;
+    // Кадр 2: смена ракурса и действия (второй и третий персонаж ИЛИ смена позы вблизи, без толпы и без wide shot)
+    let panel2 = '';
+    const p2A = char2Identity || char1Identity;
+    const p2B = (charClauses.length >= 3 ? char3Identity : char1Identity);
+    if (p2A && p2B && p2A !== p2B) {
+        const gA = /\b(woman|girl|female|1girl)\b/i.test(p2A) ? '1girl' : '1boy';
+        const gB = /\b(woman|girl|female|1girl)\b/i.test(p2B) ? '1girl' : '1boy';
+        const countTag2 = (gA === '1boy' && gB === '1boy') ? '2boys, multiple boys' : ((gA === '1girl' && gB === '1girl') ? '2girls, multiple girls' : '1boy, 1girl');
+        const stripA = stripActionAndPropTagsFromCharCaption(p2A) || p2A;
+        const stripB = stripActionAndPropTagsFromCharCaption(p2B) || p2B;
+        panel2 = `${countTag2}, dynamic angle, medium close-up, upper body, expressive dialogue, gesturing, ${stripA}, ${stripB}, ${envStr}, depth of field || CHAR1: ${gA}, ${stripA}, speaking, expressive hand gesture, upper body || CHAR2: ${gB}, ${stripB}, looking at speaker, emotional reaction, upper body`;
+    } else if (p2A) {
+        const gA = /\b(woman|girl|female|1girl)\b/i.test(p2A) ? '1girl, solo' : '1boy, solo';
+        panel2 = `${gA}, dynamic angle, medium close-up, upper body, ${stripActionAndPropTagsFromCharCaption(p2A) || p2A}, expressive hand gesture, shifting posture, ${envStr}, depth of field`;
     } else {
-        const genderTag = /\b1girl\b/i.test(cleanBase) ? '1girl, solo' : (/\b1boy\b/i.test(cleanBase) ? '1boy, solo' : 'solo');
-        const strippedBase = stripActionAndPropTagsFromCharCaption(cleanBase).replace(/\b(1girl|1boy|2girls|2boys|multiple boys|multiple girls)\b\s*,?/gi, '').trim();
-        panel3 = `${genderTag}, close-up, extreme close-up on face and eyes, portrait, expressive emotional reaction, detailed eyes, blurry background, bokeh, ${strippedBase}`;
+        panel2 = cleanSingleComicPanelPrompt(`dynamic angle, medium close-up, upper body, ${stripActionAndPropTagsFromCharCaption(cleanBase)}`, 1);
+    }
+
+    // Кадр 3: строго СОЛЬНЫЙ крупный эмоциональный план одного героя (1boy, solo, close-up ИЛИ 1girl, solo, close-up) БЕЗ толпы и БЕЗ wide shot/full body!
+    const soloTarget = char3Identity || char2Identity || char1Identity;
+    let panel3 = '';
+    if (soloTarget) {
+        const genderTag = /\b(woman|girl|female|1girl)\b/i.test(soloTarget) ? '1girl, solo' : '1boy, solo';
+        const cleanedSolo = stripActionAndPropTagsFromCharCaption(soloTarget).replace(/\b([1-9]girls?|[1-9]boys?|multiple boys|multiple girls|wide shot|full body)\b\s*,?/gi, '').trim();
+        panel3 = `${genderTag}, close-up, portrait, upper body, focus on face and expressive eyes, ${cleanedSolo}, emotional reaction, detailed eyes, blurry background, bokeh, dramatic lighting`;
+    } else {
+        panel3 = `solo, close-up, portrait, upper body, expressive emotional reaction, detailed eyes, blurry background, bokeh`;
     }
 
     return [panel1, panel2, panel3];
@@ -6661,7 +6842,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 if (fallbackLines.length) desc = fallbackLines.join(', ').trim();
             }
             const splitDesc = splitPositiveAndNegativePrompt(desc);
-            desc = splitDesc.positive;
+            desc = sanitizeLiteralMetaphorTags(splitDesc.positive);
             if (splitDesc.negative) {
                 extraNeg = [extraNeg, splitDesc.negative].filter(Boolean).join(', ');
                 logImageDiag('Из строки SCENE автоматически вырезан блок | NEGATIVE и перенесён в негативный промпт', splitDesc.negative);
@@ -6849,7 +7030,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             for (let fIdx = 0; fIdx < framesToDraw.length; fIdx++) {
                 sceneDrawingStartedAt = Date.now(); // обновляем таймер на каждом кадре полосы, чтобы 3 кадра не сбрасывались по таймауту!
                 const parsedPanel = parsePanelTextAndCharSlots(framesToDraw[fIdx]);
-                let rawFrameDesc = parsedPanel.prompt || framesToDraw[fIdx];
+                let rawFrameDesc = cleanSingleComicPanelPrompt(parsedPanel.prompt || framesToDraw[fIdx], fIdx);
                 if (/\b[2-6]boys\b/i.test(rawFrameDesc)) {
                     rawFrameDesc = rawFrameDesc.replace(/\b1boy\s*:/gi, 'male:').replace(/,\s*1boy\b/gi, ', male');
                 }
@@ -8082,6 +8263,8 @@ async function drawBoxItemsSheetBatch(st, items, kindGroup = 'perfume') {
             if (ac.title.toLowerCase() === x.title.toLowerCase()) {
                 ac.image = url;
                 ac.crop = x.crop;
+                ac.imageLayout = x.imageLayout;
+                ac.isSingleImage = !!x.isSingleImage;
             }
         });
     });
@@ -8530,6 +8713,7 @@ async function attachAccentCropsFromActive(a) {
     } catch (e) { crops = []; }
     for (let idx = 0; idx < a.accents.length; idx++) {
         if (idx >= n) break;
+        if (a.accents[idx].isSingleImage && a.accents[idx].image) continue;
         const r = Math.floor(idx / L.cols), c = idx % L.cols;
         const colW = 1 / L.cols, rowH = 1 / L.rows;
         const fallback = { x: c * colW + colW * 0.08, y: r * rowH + rowH * 0.08, w: colW * 0.84, h: rowH * 0.84 };
@@ -9801,7 +9985,17 @@ async function showWardrobePopup() {
                 if (hEntry.layout) a.imageLayout = hEntry.layout;
                 if (Array.isArray(hEntry.individualImages) && hEntry.individualImages.length) {
                     a.individualImages = [...hEntry.individualImages];
-                    a.options.forEach((opt, oIdx) => { if (hEntry.individualImages[oIdx]) opt.image = hEntry.individualImages[oIdx]; });
+                    a.options.forEach((opt, oIdx) => {
+                        if (hEntry.individualImages[oIdx]) {
+                            opt.image = hEntry.individualImages[oIdx];
+                            opt.isSingleImage = true;
+                            opt.imageLayout = { rows: 1, cols: 1 };
+                            opt.crop = { x: 0, y: 0, w: 1, h: 1 };
+                        }
+                    });
+                } else {
+                    a.individualImages = null;
+                    a.options.forEach(opt => { opt.isSingleImage = false; });
                 }
                 await attachLookCropsFromActive(a);
                 toSave.forEach(idx => {
@@ -10047,8 +10241,8 @@ async function finalizeTravel(pl, { skipDays = 0, companion = '' } = {}) {
         : '';
     const isSolo = !companion || !companion.trim() || /^в одиночку$/i.test(companion.trim());
     st.map.currentCompanion = isSolo ? 'solo' : companion.trim();
-    const charNamesNorm = (names.chars.length ? names.chars : [names.char]).map(c => normName(c));
-    const companionHasMainChar = !isSolo && charNamesNorm.some(cn => cn && normName(companion).includes(cn));
+    const mainCharCandidates = names.chars.length ? names.chars : [names.char];
+    const companionHasMainChar = !isSolo && mainCharCandidates.some(cn => cn && (matchesCharacterName(cn, companion) || isNameMentionedInText(cn, companion)));
     const compText = isSolo ? ' В одиночку.' : ` Вместе с: ${companion.trim()}.`;
     const hooksInfo = pl.hooks ? ` Известные особенности и зацепки этого места: ${String(pl.hooks).replace(/[.\s]+$/, '')}.` : '';
     const poiPrompt = livingWorldOn(st)
@@ -12827,7 +13021,8 @@ ${allHeroes.map(h => `DIARY [${h.name}]: текст дневниковой за�
                 const line = rawLine.trim().replace(/^[-*•>\d.)\s]+/, '');
                 if (!line) continue;
                 const m = line.match(/^DIARY\s*\[([^\]]+)\]\s*[:：—–-]?\s*(.*)$/i)
-                    || line.match(/^(?:ДНЕВНИК|ЗАПИСЬ)\s*\[([^\]]+)\]\s*[:：—–-]?\s*(.*)$/i);
+                    || line.match(/^(?:ДНЕВНИК|ЗАПИСЬ)\s*\[([^\]]+)\]\s*[:：—–-]?\s*(.*)$/i)
+                    || line.match(/^(?:DIARY|ДНЕВНИК|ЗАПИСЬ)\s+([^\[:：—–-]{2,45}?)\s*[:：—–-]\s*(.+)$/i);
                 if (m) {
                     const rawName = m[1].trim();
                     const foundHero = allHeroes.find(h => normName(h.name) === normName(rawName) || isNameMentionedInText(h.name, rawName) || isNameMentionedInText(rawName, h.name));
@@ -12970,6 +13165,23 @@ async function openAllDiariesForDayModal(initialDate = '') {
                 closePopupOf(el);
                 openNpcDiaryPopup(h);
             });
+            if (shownEntry) {
+                const editBtn = $('<div class="menu_button" style="margin:0; padding:3px 7px; font-size:0.78em; width:auto;" title="Изменить эту запись"><i class="fa-solid fa-pen"></i></div>').on('click', async () => {
+                    const updated = await askText(`Запись дневника (${h.name}):`, shownEntry.text);
+                    if (updated && updated.trim()) {
+                        shownEntry.text = stripActionTags(updated.trim());
+                        await commit();
+                        renderAll();
+                    }
+                });
+                const delBtn = $('<div class="menu_button" style="margin:0; padding:3px 7px; font-size:0.78em; width:auto;" title="Удалить эту запись"><i class="fa-solid fa-trash"></i></div>').on('click', async () => {
+                    const idx = h.diary.indexOf(shownEntry);
+                    if (idx >= 0) h.diary.splice(idx, 1);
+                    await commit();
+                    renderAll();
+                });
+                acts.append(editBtn, delBtn);
+            }
             acts.append(oneBtn, openFullBtn);
             head.append(acts);
             card.append(head);
@@ -14251,7 +14463,8 @@ function renderPanel(forceFull = false) {
     }
 
     // Ленивая отрисовка ТОЛЬКО открытой вкладки Блокнота (не создаём сотни скрытых DOM-узлов и картинок всех 8 вкладок разом!)
-    if (bookTab === 'ward') safeRender('гардероб', renderWardrobe, st);
+    if (bookTab === 'plot') safeRender('направление', renderDirection, true);
+    else if (bookTab === 'ward') safeRender('гардероб', renderWardrobe, st);
     else if (bookTab === 'box') safeRender('шкатулка', renderBox, st);
     else if (bookTab === 'map') safeRender('карта', renderMap, st);
     else if (bookTab === 'album') safeRender('альбом', renderAlbum, st);
@@ -14526,8 +14739,8 @@ function collectHeroHistoryDigest(n, st) {
         .map(r => `• ${r.a} ${r.arrow || '↔'} ${r.b}${r.type ? ` [${r.type}]` : ''}: ${r.desc}`)
         .join('\n');
     const arcHits = [
-        ...(st?.arcs || []).filter(a => normName(a.who) === normName(n.name)).map(a => `• Арка: ${a.text}${a.current ? ` (${a.current})` : ''}`),
-        ...(st?.evolved || []).filter(ev => normName(ev.who) === normName(n.name)).map(ev => `• Развитие характера: ${ev.text}`),
+        ...(st?.arcs || []).filter(a => matchesCharacterName(a.who, n.name)).map(a => `• Арка: ${a.text}${a.current ? ` (${a.current})` : ''}`),
+        ...(st?.evolved || []).filter(ev => matchesCharacterName(ev.who, n.name)).map(ev => `• Развитие характера: ${ev.text}`),
     ].join('\n');
     const diaryHits = (n?.diary || []).slice(-4).map(d => `• Запись дневника (${d.date || ''}): ${String(d.text || '').slice(0, 350)}`).join('\n');
     const extraMeta = [
@@ -15009,7 +15222,7 @@ async function openNpcCardPopup(n) {
 
         // 3. Связи и подарки
         const rels = (st.relationships || []).filter(r => matchesCharacterName(r.a, n.name) || matchesCharacterName(r.b, n.name));
-        const gifts = (st.wardrobe?.box || []).filter(x => normName(x.giftedTo) === normName(n.name));
+        const gifts = (st.wardrobe?.box || []).filter(x => x.giftedTo && matchesCharacterName(x.giftedTo, n.name));
         const relBox = $('<div class="nnb-note" style="margin:6px 0; padding:10px 12px;"></div>');
         relBox.append('<div style="font-weight:700; margin-bottom:4px;">Связи и подарки</div>');
         if (gifts.length) {
@@ -15196,7 +15409,7 @@ async function openNpcUniverseModal(st) {
                     const src = roster[rIdx];
                     if (!src) return;
                     const mcCard = ensureMainCharCard(st);
-                    let target = (mcCard && normName(mcCard.name) === normName(src.name)) ? mcCard : findNpc(st, src.name);
+                    let target = (mcCard && matchesCharacterName(mcCard.name, src.name)) ? mcCard : findNpc(st, src.name);
                     if (!target) {
                         target = { id: st.nextNpcId++, name: src.name, locked: true, at: ctx().chat.length };
                         st.npcs.push(target);
@@ -15231,7 +15444,7 @@ async function openNpcUniverseModal(st) {
                         }
                         if (Array.isArray(src.relationships)) {
                             src.relationships.forEach(rel => {
-                                const exists = (st.relationships || []).some(r => normName(r.a) === normName(rel.a) && normName(r.b) === normName(rel.b));
+                                const exists = (st.relationships || []).some(r => matchesCharacterName(r.a, rel.a) && matchesCharacterName(r.b, rel.b));
                                 if (!exists) {
                                     st.relationships.push({ ...structuredClone(rel), id: st.nextRelId++, at: ctx().chat.length });
                                 }
@@ -15708,7 +15921,7 @@ function renderNpcs(st) {
             const arr = r.arrow === '→' ? (matchesCharacterName(r.a, n.name) ? '→' : '←') : '↔';
             return `${arr} ${other}${r.type ? ` (${r.type})` : ''}`;
         }).join(' · ');
-        const gifts = (st.wardrobe?.box || []).filter(x => normName(x.giftedTo) === normName(n.name));
+        const gifts = (st.wardrobe?.box || []).filter(x => x.giftedTo && matchesCharacterName(x.giftedTo, n.name));
         const giftStr = gifts.length ? `🎁 ${gifts.map(g => g.title).join(', ')}` : '';
 
         const statusAndRels = [
@@ -16145,7 +16358,9 @@ async function cancelHoliday(st, hol) {
         st.time.custom = st.time.custom.filter(c => {
             const normC = normName(c.name).replace(/^день рождения:\s*/i, '');
             const normWho = normName(c.who || '');
-            return normC !== normHolName && normWho !== normHolName;
+            if (normC === normHolName || normWho === normHolName) return false;
+            if (c.bday && c.who && matchesCharacterName(c.who, normHolName)) return false;
+            return true;
         });
     }
     st.medals = (st.medals || []).filter(m => m.holiday !== hol.name);
@@ -16481,7 +16696,8 @@ function renderChronicleAndMedals(st, det) {
         if (!text || !text.trim()) return;
         const when = await askText('Какая дата? Например «14 октября» или «14.10.2024». Оставь пустым — запишется в сегодняшний день истории');
         if (when === null) return;
-        let date = when.trim() ? parseDateText(when, '1900-01-01') : st.time.date;
+        const baseRefDate = (st.time.date && /^\d{4}-\d{2}-\d{2}$/.test(st.time.date)) ? st.time.date : '2024-10-12';
+        let date = when.trim() ? parseDateText(when, baseRefDate) : st.time.date;
         if (!date) return toastr.warning('Не поняла дату', '📖 Дневник');
         if (st.time.date && date > st.time.date && !/\d{4}/.test(when)) date = `${Number(st.time.date.slice(0, 4)) - 1}${date.slice(4)}`;
         addEvent(st, date, text);
@@ -16645,6 +16861,14 @@ function ensurePresetArrays() {
     if (!Array.isArray(s.naiStylePresets)) s.naiStylePresets = [];
     if (!Array.isArray(s.imgWriterPresets) || !s.imgWriterPresets.length) {
         s.imgWriterPresets = structuredClone(BUILTIN_NAI_WRITER_PRESETS);
+    } else {
+        // Авто-обновление старого встроенного пресета #1, чтобы он поддерживал раскадровку комиксов PANEL1..3
+        if (s.imgWriterPresets[0] && /выдай\s+только\s+строки\s+CAST\s+и\s+SCENE/i.test(String(s.imgWriterPresets[0].value || ''))) {
+            s.imgWriterPresets[0] = structuredClone(BUILTIN_NAI_WRITER_PRESETS[0]);
+        }
+    }
+    if (s.imgPromptWriterNote && /выдай\s+только\s+строки\s+CAST\s+и\s+SCENE\s+без\s+рассуждений/i.test(String(s.imgPromptWriterNote))) {
+        s.imgPromptWriterNote = DEFAULT_NAI_WRITER_PROMPT;
     }
 }
 
@@ -16695,7 +16919,17 @@ async function openChatTurboSettingsPopup() {
     el.append('<div class="nnb-pop-sub">Когда в ролевой накапливается больше 25–30 постов (особенно с таблицами/HTML Двача или Телеграма) и 10+ картинок, браузер начинает тратить сотни мегабайт видеопамяти на одновременную отрисовку всех старых постов при каждом нажатии клавиши. Турбо-режим решает эту проблему автоматически (при этом <b>ИИ по-прежнему видит и помнит 100% сообщений чата</b>!).</div>');
 
     const box = $('<div class="nnb-direction" style="gap:10px;"></div>');
-    const cbRow = $('<label class="checkbox_label" style="font-weight:700;"><input type="checkbox"> Включить ⚡ Турбо-режим чата (авто-сворачивание старых DOM-постов и выгрузка старых картинок из видеопамяти)</label>');
+    const tokenSaverRow = $('<div class="nnb-note" style="margin:0 0 6px 0; padding:10px 12px; border-left:3px solid var(--SmartThemeQuoteColor, #e0c068);"></div>');
+    const tsLabel = $('<label class="checkbox_label" style="font-weight:700;"><input type="checkbox"> 💎 Умная экономия токенов без потери качества (активный радар героев + кэш Саммари)</label>');
+    const tsCb = tsLabel.find('input').prop('checked', s.tokenSaverMode !== false);
+    const actClickLabel = $('<label class="checkbox_label" style="margin-top:6px; font-size:0.9em;"><input type="checkbox"> 💡 Генерировать варианты хода только по клику на лампочку под постом (экономит дорогие выходные токены на каждом ответе)</label>');
+    const actClickCb = actClickLabel.find('input').prop('checked', !!s.actionPromptsOnClickOnly);
+    tokenSaverRow.append(tsLabel);
+    tokenSaverRow.append('<div class="nnb-npc-status" style="margin-top:4px; font-size:0.82em; line-height:1.4;">Сохраняет 100% постов чата, всех связей, арок, тайн и снов у конца чата: 1) закрепляет неизменяемое «📜 Саммари прошлых глав» в начале чата для <b>Prompt Cache</b>; 2) передаёт полное многоабзацное досье для {{char}}, ❤️ фаворитов и всех НПС, упомянутых в последних 10 постах, текущей локации, задумках, арках или тайнах (а огромные биографии совсем далёких фоновых НПС бережно сокращает до ~420 символов внешности и характера, мгновенно разворачивая их обратно при первом же упоминании имени).</div>');
+    tokenSaverRow.append(actClickLabel);
+    box.append(tokenSaverRow);
+
+    const cbRow = $('<label class="checkbox_label" style="font-weight:700;"><input type="checkbox"> Включить ⚡ Турбо-режим чата (авто-сворачивание старых DOM-постов на экране и выгрузка старых картинок из ОЗУ)</label>');
     const cb = cbRow.find('input').prop('checked', s.chatTurboMode !== false);
     box.append(cbRow);
 
@@ -16735,13 +16969,18 @@ async function openChatTurboSettingsPopup() {
     el.append(box);
 
     const saveApply = () => {
+        s.tokenSaverMode = tsCb.prop('checked');
+        s.actionPromptsOnClickOnly = actClickCb.prop('checked');
         s.chatTurboMode = cb.prop('checked');
         s.chatMaxVisibleMsgs = Number(msgSel.val());
         s.chatMaxLiveImages = Number(imgSel.val());
         turboExtraShownMsgs = 0;
         saveSettings();
+        updateInjection();
         applyChatTurboOptimization();
     };
+    tsCb.on('change', saveApply);
+    actClickCb.on('change', saveApply);
     cb.on('change', saveApply);
     msgSel.on('change', saveApply);
     imgSel.on('change', saveApply);
