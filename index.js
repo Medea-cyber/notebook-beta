@@ -1291,6 +1291,7 @@ const defaults = {
     sceneCameraMode: 'ask',
     comicStyleId: 'comicbright',
     comicLinesMode: 'auto',
+    comicFramesPerPage: 3,
     customComicStyles: [],
     imageRef: true,
     showToasts: true,
@@ -2634,9 +2635,9 @@ function adaptWriterNoteForTask(rawWriterNote, isComicStripTask) {
     let note = String(rawWriterNote || '').trim();
     if (!note) return '';
     if (isComicStripTask) {
-        // Если в пользовательском промпте для GLM написано «Выдай ТОЛЬКО строки CAST и SCENE», заменяем это требование на формат 3 кадров комикса, чтобы GLM не игнорировал PANEL1..3!
-        note = note.replace(/выдай\s+только\s+строки\s+CAST\s+и\s+SCENE[^\n.]*/gi, 'В РЕЖИМЕ КОМИКСА выдай ТОЛЬКО строки CAST, PANEL1, PANEL2, PANEL3 и QUOTE1, QUOTE2, QUOTE3 (БЕЗ общей строки SCENE!)');
-        note += '\n\n[ВАЖНОЕ ПРАВИЛО ДЛЯ 3-КАДРОВОГО КОМИКСА (PANEL1, PANEL2, PANEL3):\n1) Выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: и QUOTE1:, QUOTE2:, QUOTE3: (строку SCENE писать НЕ нужно!).\n2) КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать в один кадр 4–7 человек (не пиши 4boys, 2girls, six people)! В каждом кадре рисуй ТОЛЬКО 1–2 персонажей (максимум 3), которые говорят реплику QUOTE этого кадра и взаимодействуют именно в этот момент!\n3) В PANEL1 покажи участников 1-й реплики (QUOTE1); в PANEL2 — участников 2-й реплики (QUOTE2) в ДРУГОЙ позе и с другого ракурса; в PANEL3 — СОЛЬНЫЙ крупный план лица/эмоции (1boy, solo, close-up или 1girl, solo, close-up) говорящего QUOTE3 без wide shot и без толпы!\n4) Не переводи метафоры буквально: вместо "lion mane" у человека пиши "thick wild hair", вместо "greenish-pale" пиши "pale skin, unwell, sweatdrop".]';
+        // Если в пользовательском промпте для GLM написано «Выдай ТОЛЬКО строки CAST и SCENE», заменяем это требование на формат кадров комикса, чтобы GLM не игнорировал PANEL1..4!
+        note = note.replace(/выдай\s+только\s+строки\s+CAST\s+и\s+SCENE[^\n.]*/gi, 'В РЕЖИМЕ КОМИКСА выдай ТОЛЬКО строки CAST, PANEL1..PANEL3 (или PANEL4) и QUOTE1..QUOTE3 (или QUOTE4) БЕЗ общей строки SCENE!');
+        note += '\n\n[ВАЖНОЕ ПРАВИЛО ДЛЯ РАСКАДРОВКИ МАНХВЫ / КОМИКСА (PANEL1..PANEL3/4):\n1) Выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: (и PANEL4:, если запрошено 4 фрейма) + QUOTE1:, QUOTE2:, QUOTE3: (строку SCENE писать НЕ нужно!).\n2) В КАЖДОЙ строке QUOTE пиши ПОЛНОЕ, ЗАКОНЧЕННОЕ предложение из прямой речи до точки/восклицательного/вопросительного знака (до 145 символов) — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО обрывать фразу многоточием на середине мысли!\n3) 🔍 ИСКЛЮЧЕНИЕ ДЛЯ КРУПНЫХ ФРЕЙМОВ ДЕТАЛЕЙ (ЖИВОТНЫЕ, ПРЕДМЕТЫ, РУКИ, ИНТИМ 18+): правила выше про обязательные теги 1boy/1girl, калибровку полного роста (tall lean adult man, long male legs, wider male shoulders) и описание лиц/причёсок действуют ТОЛЬКО для кадров с людьми в полный/средний рост! Если в отрывке есть животное/питомец (например, змея, кот, собака), важный предмет, тактильный жест рук ИЛИ эротика/интим 18+ (гениталии, проникновение, ласки крупным планом) — ОБЯЗАТЕЛЬНО сделай один из фреймов (PANEL2 или PANEL3) КРУПНЫМ ФРЕЙМОМ ЭТОЙ ДЕТАЛИ БЕЗ лиц и БЕЗ тегов роста (для животного/предмета пиши: no humans, animal focus / object focus, close-up, macro shot, ...; для эротики 18+ или рук пиши: nsfw, explicit, close-up, intimate close-up, head out of frame, cropped, focus on [конкретная деталь тела/гениталий/рук]).\n4) В остальных кадрах НЕ пихай толпу (4–7 человек): рисуй 1–2 участников текущего момента, а для эмоционального портрета используй сольный план по плечи/грудь (1boy, solo, close-up, portrait, upper body или 1girl, solo, close-up, portrait, upper body).\n5) Не переводи метафоры буквально: вместо "lion mane" у человека пиши "thick wild hair", вместо "greenish-pale" пиши "pale skin, unwell, sweatdrop".]';
     }
     return note;
 }
@@ -5331,7 +5332,8 @@ function canDrawScene() {
 function collectRecentScenePrompts(st, chat, beforeIdx, maxCount = 5) {
     const list = [];
     if (Array.isArray(chat)) {
-        for (let i = Math.min(beforeIdx - 1, chat.length - 1); i >= 0 && list.length < maxCount; i--) {
+        // Если для текущего поста уже нарисована 1-я страница манхвы, включаем её промпт первым, чтобы на 2-й и 3-й странице этого же поста одежда и внешность героев были 1-в-1!
+        for (let i = Math.min(beforeIdx, chat.length - 1); i >= 0 && list.length < maxCount; i--) {
             const d = chat[i]?.extra?.nnbScene?.desc || chat[i]?.extra?.nsiScene?.desc;
             if (d && String(d).trim() && !list.includes(String(d).trim())) {
                 list.unshift(String(d).trim());
@@ -5517,6 +5519,136 @@ function getComicStyleById(id) {
     return all.find(x => x.id === id) || all[0];
 }
 
+// Разбивка длинного поста на последовательные смысловые кусочки (эпизоды), чтобы каждая страница манхвы (из 3–4 фреймов) детально экранизировала свой кусочек поста без потери концовки!
+function splitPostIntoComicChunks(rawPostText, targetChunkChars = 580) {
+    const clean = stripTags(stripActionTags(String(rawPostText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n').trim();
+    if (!clean) return [];
+    const maxPages = 6;
+    const effectiveTarget = Math.max(targetChunkChars, Math.ceil(clean.length / maxPages));
+    const rawLines = clean.split(/\n+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const paras = [];
+    for (const line of rawLines) {
+        if (line.length > effectiveTarget * 1.18) {
+            const sents = line.split(/(?<=[.!?…»”"])\s+/).filter(Boolean);
+            let buf = '';
+            for (const sn of sents) {
+                if (buf && (buf.length + sn.length) > Math.round(effectiveTarget * 0.72)) {
+                    paras.push(buf.trim());
+                    buf = sn;
+                } else {
+                    buf = buf ? `${buf} ${sn}` : sn;
+                }
+            }
+            if (buf.trim()) paras.push(buf.trim());
+        } else {
+            paras.push(line);
+        }
+    }
+
+    const chunks = [];
+    let cur = [];
+    let curLen = 0;
+    for (let i = 0; i < paras.length; i++) {
+        const p = paras[i];
+        if (cur.length > 0 && (curLen + p.length > effectiveTarget) && chunks.length < maxPages - 1) {
+            chunks.push(cur.join('\n\n'));
+            cur = [p];
+            curLen = p.length;
+        } else {
+            cur.push(p);
+            curLen += p.length;
+        }
+    }
+    if (cur.length) {
+        const minTail = Math.min(150, Math.floor(effectiveTarget * 0.28));
+        if (chunks.length > 0 && curLen < minTail) {
+            chunks[chunks.length - 1] += '\n\n' + cur.join('\n\n');
+        } else {
+            chunks.push(cur.join('\n\n'));
+        }
+    }
+    return chunks.map((txt, idx) => {
+        const flat = txt.replace(/\s+/g, ' ').trim();
+        const preview = flat.length <= 72 ? flat : `${flat.slice(0, 52).trim()}…`;
+        return {
+            index: idx,
+            total: chunks.length,
+            text: txt,
+            preview,
+        };
+    });
+}
+
+function formatCompleteQuoteSentence(rawStr, maxChars = 165) {
+    let s = String(rawStr || '').replace(/\s+/g, ' ').replace(/^[«"„“]+|[»"”]+$/g, '').trim();
+    if (!s) return '';
+    if (s.length <= maxChars) return s;
+    // Если реплика состоит из нескольких предложений — берём 1–2 полных предложения целиком до точки/знака, чтобы мысль НЕ обрывалась на середине!
+    const sentences = s.split(/(?<=[.!?…])\s+/).filter(Boolean);
+    if (sentences.length > 1) {
+        let acc = '';
+        for (const sent of sentences) {
+            const next = acc ? `${acc} ${sent}` : sent;
+            if (next.length <= maxChars) acc = next;
+            else break;
+        }
+        if (acc && acc.length >= 12) return acc.trim();
+        if (sentences[0].length <= maxChars + 20) return sentences[0].trim();
+    }
+    // Если одно предложение всё ещё очень длинное (>165 симв.), режем по логической паузе (запятой/тире/союзу) ближе к концу
+    const sub = s.slice(0, maxChars);
+    const clauseBreak = Math.max(sub.lastIndexOf(' — '), sub.lastIndexOf(' – '), sub.lastIndexOf('; '), sub.lastIndexOf(', '));
+    if (clauseBreak > 55) {
+        return sub.slice(0, clauseBreak).replace(/[,;:\s—–-]+$/, '') + '…';
+    }
+    const sp = sub.lastIndexOf(' ');
+    return (sp > 40 ? sub.slice(0, sp) : sub).replace(/[,;:\s]+$/, '') + '…';
+}
+
+// Авто-восстановление оборванной реплики по тексту поста (учитывает русские кавычки «...» и отрезает слова автора после тире «, — сказала она»)
+function restoreFullQuoteFromSource(rawQuote, sourceText) {
+    let s = String(rawQuote || '').replace(/\s+/g, ' ').replace(/^[«"„“]+|[»"”]+$/g, '').trim();
+    if (!s || !sourceText) return s;
+    const looksTruncated = s.endsWith('...') || s.endsWith('…') || !/[.!?…»"”)]$/.test(s);
+    if (!looksTruncated) return s;
+    const prefix = s.replace(/[.…,;:\s—–-]+$/, '').trim();
+    if (prefix.length < 10) return s;
+
+    const cleanSrc = stripTags(stripActionTags(String(sourceText))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n');
+    const lowSrc = cleanSrc.toLowerCase().replace(/ё/g, 'е');
+    const lowPref = prefix.toLowerCase().replace(/ё/g, 'е');
+    let hitIdx = lowSrc.indexOf(lowPref);
+    if (hitIdx < 0 && lowPref.length >= 24) {
+        hitIdx = lowSrc.indexOf(lowPref.slice(0, 24).trim());
+    }
+    if (hitIdx < 0) return s;
+
+    let lineRem = cleanSrc.slice(hitIdx, hitIdx + 320).split('\n')[0].replace(/\s+/g, ' ').trim();
+    // 1) Если реплика в тексте закрывается кавычкой («...» или "..."), останавливаемся строго на закрывающей кавычке!
+    const closeQ = lineRem.search(/[»”"]/);
+    const openQ = lineRem.search(/[«“]/);
+    if (closeQ >= 0 && (openQ < 0 || closeQ < openQ)) {
+        lineRem = lineRem.slice(0, closeQ).trim();
+    }
+    // 2) Если это диалог через тире с авторской ремаркой («— Реплика, — хмыкнул Энджел.»), отрезаем авторскую ремарку!
+    const dashParts = lineRem.split(/\s+[—–-]\s+/);
+    if (dashParts.length > 1) {
+        let firstSpeech = dashParts[0].trim().replace(/[,;:\s]+$/, '');
+        if (firstSpeech && !/[.!?…]$/.test(firstSpeech)) firstSpeech += '.';
+        if (firstSpeech.length >= prefix.length) {
+            lineRem = firstSpeech;
+        }
+    }
+    // 3) Останавливаемся на конце того предложения, которое было оборвано
+    if (lineRem.length > prefix.length) {
+        const tailMatch = lineRem.slice(prefix.length).match(/^[^.!?…]*[.!?…]/);
+        if (tailMatch && tailMatch[0]) {
+            lineRem = (lineRem.slice(0, prefix.length) + tailMatch[0]).trim();
+        }
+    }
+    return lineRem || s;
+}
+
 // Извлечение и проверка настоящих прямых реплик из поста (по алгоритму «Мяфля · Кадр»: не менее 65% совпадения слов с текстом поста, чтобы ИИ не выдумывал отсебятину!)
 function extractRealQuotesFromPostText(rawText, defaultSpeaker = '') {
     const clean = stripTags(stripActionTags(String(rawText || ''))).replace(/<[^>]+>/g, '');
@@ -5534,27 +5666,18 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '') {
                 return j < kept.length - 1 && !/[.!?…]$/.test(t) ? t + '.' : t;
             }).join(' ');
         }
-        s = s.replace(/^[«"„“]|[»"”]+$/g, '').replace(/[\s,;:—–-]+$/, '').trim();
-        if (s.length > 62) {
-            const firstSent = s.split(/(?<=[.!?…])\s+/)[0] || s;
-            s = firstSent.trim();
-        }
-        if (s.length > 62) {
-            const cut = s.slice(0, 60);
-            const sp = cut.lastIndexOf(' ');
-            s = (sp > 20 ? cut.slice(0, sp) : cut).replace(/[,;:\s]+$/, '') + '…';
-        }
+        s = formatCompleteQuoteSentence(s, 165);
         return s.length >= 2 ? s : '';
     };
 
-    const qRe = /[«“"]([^«»“”"\n]{2,240}?)[»”"]/g;
+    const qRe = /[«“"]([^«»“”"\n]{2,260}?)[»”"]/g;
     let m;
-    while ((m = qRe.exec(clean)) !== null && candidates.length < 8) {
+    while ((m = qRe.exec(clean)) !== null && candidates.length < 10) {
         const sp = shortenSpeech(m[1]);
         if (sp) candidates.push(sp);
     }
-    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,240})/g;
-    while ((m = dRe.exec(clean)) !== null && candidates.length < 8) {
+    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,260})/g;
+    while ((m = dRe.exec(clean)) !== null && candidates.length < 10) {
         const sp = shortenSpeech(m[1]);
         if (sp) candidates.push(sp);
     }
@@ -5631,7 +5754,6 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null) 
     if (!qShort) return '';
     const idx = norm(cleanPost).indexOf(qShort);
     if (idx < 0) return '';
-    // Осматриваем окрестность цитаты (140 символов до и 140 символов после реплики)
     const windowBefore = cleanPost.slice(Math.max(0, idx - 140), idx);
     const windowAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 140));
     const nearContext = `${windowBefore} ${windowAfter}`;
@@ -5642,7 +5764,6 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null) 
     for (const npc of (st?.npcs || [])) {
         if (npc?.name) candidates.push(npc.name);
     }
-    // Оставляем только тех кандидатов, которые реально есть в CAST (если CAST не пустой) и в самом посте
     const activeCast = Array.isArray(cast) ? cast.filter(c => c && c !== '__none__') : [];
     const validCandidates = candidates.filter(cName => {
         if (!isNameMentionedInText(cName, cleanPost)) return false;
@@ -5663,7 +5784,6 @@ function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, ca
     const activeCast = Array.isArray(cast) ? cast.filter(c => c && c !== '__none__') : [];
 
     if (spk) {
-        // Если модель по шаблону подписала реплику именем главного {{char}}, но главного {{char}} НЕТ в CAST или НЕТ в тексте поста — сбрасываем ложное имя!
         const isMainCharName = names.char && (isNameMentionedInText(names.char, spk) || isNameMentionedInText(spk, names.char));
         if (isMainCharName) {
             const mainInCast = !activeCast.length || activeCast.some(c => isNameMentionedInText(names.char, c) || isNameMentionedInText(c, names.char));
@@ -5672,7 +5792,6 @@ function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, ca
                 return inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st) || '';
             }
         }
-        // Если указан любой другой говорящий, которого вообще нет ни в CAST, ни в тексте поста — тоже очищаем
         if (activeCast.length > 0) {
             const spkInCast = activeCast.some(c => isNameMentionedInText(spk, c) || isNameMentionedInText(c, spk));
             const spkInPost = isNameMentionedInText(spk, lastPostText);
@@ -5685,16 +5804,16 @@ function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, ca
     return inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st) || '';
 }
 
-function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defaultSpeaker = '', cast = [], st = null) {
+function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defaultSpeaker = '', cast = [], st = null, desiredCount = 3) {
     const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
-    // Проверяем цитаты в первую очередь по ТЕКУЩЕМУ посту (lastPostText), чтобы не хватать старые реплики из прошлых локаций!
     const normLastPost = ' ' + norm(lastPostText || storyText) + ' ';
     const normFullStory = ' ' + norm(storyText + ' ' + lastPostText) + ' ';
     const verified = [];
     const seen = new Set();
+    const maxQ = Math.max(3, Math.min(4, Number(desiredCount) || 3));
 
     for (const q of (llmQuotes || [])) {
-        const rawTxt = String(q?.text || '').replace(/^[«"„“]|[»"”]+$/g, '').trim();
+        const rawTxt = String(q?.text || '').replace(/^[«"„“]+|[»"”]+$/g, '').trim();
         if (!rawTxt) continue;
         const words = norm(rawTxt).split(/\s+/).filter(w => w.length > 2);
         let ok = false;
@@ -5706,12 +5825,8 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
             ok = (hitsPost / words.length) >= 0.65 || (!lastPostText && (hitsFull / words.length) >= 0.65);
         }
         if (ok) {
-            let shortTxt = rawTxt;
-            if (shortTxt.length > 64) {
-                const cut = shortTxt.slice(0, 62);
-                const sp = cut.lastIndexOf(' ');
-                shortTxt = (sp > 20 ? cut.slice(0, sp) : cut) + '…';
-            }
+            let shortTxt = restoreFullQuoteFromSource(rawTxt, lastPostText || storyText);
+            shortTxt = formatCompleteQuoteSentence(shortTxt, 165);
             const key = norm(shortTxt);
             if (key && !seen.has(key)) {
                 seen.add(key);
@@ -5725,22 +5840,27 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         }
     }
 
-    if (verified.length < 2) {
+    if (verified.length < maxQ) {
         const fallback = extractRealQuotesFromPostText(lastPostText || storyText, '');
+        const usedPanels = new Set(verified.map(v => Number(v.panel)));
         for (const fb of fallback) {
             const key = norm(fb.text);
-            if (key && !seen.has(key) && verified.length < 4) {
+            if (key && !seen.has(key) && verified.length < maxQ) {
                 seen.add(key);
+                let freePanel = 1;
+                while (usedPanels.has(freePanel) && freePanel <= maxQ) freePanel++;
+                usedPanels.add(freePanel);
                 const cleanSpk = validateAndSanitizeQuoteSpeaker(fb.speaker || defaultSpeaker, fb.text, lastPostText || storyText, cast, st);
                 verified.push({
-                    panel: verified.length + 1,
+                    panel: freePanel,
                     speaker: cleanSpk,
                     text: fb.text,
                 });
             }
         }
+        verified.sort((a, b) => (Number(a.panel) || 1) - (Number(b.panel) || 1));
     }
-    return verified.slice(0, 4);
+    return verified.slice(0, maxQ);
 }
 
 function drawRoundedRectPath(ctx2d, x, y, w, h, r) {
@@ -5756,6 +5876,150 @@ function drawRoundedRectPath(ctx2d, x, y, w, h, r) {
     ctx2d.lineTo(x, y + rad);
     ctx2d.quadraticCurveTo(x, y, x + rad, y);
     ctx2d.closePath();
+}
+
+function getStitchedPagePanelRects(W, H, comicOpts = null) {
+    const isWebtoonCanvas = (W === 860 && H >= 1500) || (comicOpts?.stripMode && (comicOpts?.styleId === 'webtoon' || comicOpts?.styleId === 'yonkoma') && W <= 920 && H >= 1400);
+    if (isWebtoonCanvas) {
+        const pad = Math.round(W * (24 / 860));
+        const gap = Math.round(W * (28 / 860));
+        const panelW = W - pad * 2;
+        const panelH = Math.round(W * (780 / 860));
+        const n = Math.max(2, Math.min(4, Math.round((H - pad * 2 + gap) / (panelH + gap))));
+        const rects = [];
+        for (let i = 0; i < n; i++) {
+            rects.push({ x: pad, y: pad + i * (panelH + gap), w: panelW, h: panelH });
+        }
+        return rects;
+    }
+    const isStitchedPage = (W === 1200 && H >= 1600) || (comicOpts?.stripMode && W >= 1000 && H >= 1400);
+    if (!isStitchedPage) return null;
+    const pad = Math.round(W * (26 / 1200));
+    const gap = Math.round(W * (20 / 1200));
+    const innerW = W - pad * 2;
+    const innerH = H - pad * 2;
+    const framesN = Number(comicOpts?.framesPerPage) || (H >= 1800 ? 4 : 3);
+    if (framesN >= 4) {
+        const row1H = Math.floor(innerH * 0.31);
+        const row2H = Math.floor(innerH * 0.36);
+        const row3H = innerH - row1H - row2H - gap * 2;
+        const midW = Math.floor((innerW - gap) / 2);
+        return [
+            { x: pad, y: pad, w: innerW, h: row1H },
+            { x: pad, y: pad + row1H + gap, w: midW, h: row2H },
+            { x: pad + midW + gap, y: pad + row1H + gap, w: innerW - midW - gap, h: row2H },
+            { x: pad, y: pad + row1H + row2H + gap * 2, w: innerW, h: row3H },
+        ];
+    }
+    const topH = Math.floor(innerH * 0.47);
+    const botH = innerH - topH - gap;
+    const botW = Math.floor((innerW - gap) / 2);
+    return [
+        { x: pad, y: pad, w: innerW, h: topH },
+        { x: pad, y: pad + topH + gap, w: botW, h: botH },
+        { x: pad + botW + gap, y: pad + topH + gap, w: innerW - botW - gap, h: botH },
+    ];
+}
+
+function wrapTextLinesForBubble(ctx2d, text, maxTextW, fontSize) {
+    ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+        const test = cur ? `${cur} ${w}` : w;
+        if (ctx2d.measureText(test).width > maxTextW && cur) {
+            lines.push(cur);
+            cur = w;
+        } else {
+            cur = test;
+        }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+}
+
+// Единая отрисовка аккуратных манхва-облачков с адаптивным размером шрифта (без обрезки строк и строго по нижнему краю каждого фрейма, чтобы никогда не закрывать лица!)
+function drawManhwaBubblesOnCanvas(ctx2d, panelRects, quotes) {
+    if (!Array.isArray(panelRects) || !panelRects.length || !Array.isArray(quotes) || !quotes.length) return;
+    const validQuotes = quotes.filter(q => q && q.text && String(q.text).trim()).slice(0, panelRects.length);
+    const usedPanelIndices = new Set();
+
+    validQuotes.forEach((q, idx) => {
+        let pIdx = (Number(q.panel) >= 1 && Number(q.panel) <= panelRects.length) ? (Number(q.panel) - 1) : idx;
+        if (usedPanelIndices.has(pIdx)) {
+            pIdx = 0;
+            while (usedPanelIndices.has(pIdx) && pIdx < panelRects.length - 1) pIdx++;
+        }
+        usedPanelIndices.add(pIdx);
+        const rect = panelRects[Math.min(pIdx, panelRects.length - 1)];
+
+        const maxBW = Math.round(rect.w * 0.92);
+        const padX = 14, padY = 9;
+        const maxTextW = maxBW - padX * 2;
+        const spk = String(q.speaker || '').trim();
+
+        // Единый гармоничный размер шрифта по всей странице (20–22px) с автоматическим уменьшением, если реплика длинная, чтобы НИКОГДА не отрезать строки!
+        let fontSize = Math.min(22, Math.max(16, Math.round(rect.w * 0.036)));
+        let finalLines = [];
+        let speakerSize = 14;
+        let lineH = 22;
+        let spkH = 0;
+        let bh = 50;
+
+        while (fontSize >= 12) {
+            finalLines = wrapTextLinesForBubble(ctx2d, q.text, maxTextW, fontSize);
+            speakerSize = Math.max(11, Math.round(fontSize * 0.80));
+            lineH = Math.round(fontSize * 1.22);
+            spkH = spk ? Math.round(speakerSize * 1.24) : 0;
+            bh = finalLines.length * lineH + padY * 2 + spkH;
+            if (finalLines.length <= 5 && bh <= Math.round(rect.h * 0.34)) break;
+            if (fontSize === 12) break;
+            fontSize--;
+        }
+
+        ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        let tw = 0;
+        finalLines.forEach(l => { tw = Math.max(tw, ctx2d.measureText(l).width); });
+        if (spk) {
+            ctx2d.font = `700 ${speakerSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+            tw = Math.max(tw, ctx2d.measureText(spk).width + 12);
+        }
+        const bw = Math.min(maxBW, Math.max(150, Math.ceil(tw) + padX * 2));
+        // ВСЕГДА размещаем облачко ВНИЗУ каждого фрейма по центру, чтобы оно НИКОГДА не перекрывало головы и лица персонажей в верхней части кадра!
+        const bx = rect.x + Math.max(8, Math.round((rect.w - bw) / 2));
+        const by = Math.max(rect.y + 8, rect.y + rect.h - bh - 10);
+
+        ctx2d.save();
+        ctx2d.shadowColor = 'rgba(0,0,0,0.32)';
+        ctx2d.shadowBlur = 8;
+        ctx2d.shadowOffsetY = 2;
+        drawRoundedRectPath(ctx2d, bx, by, bw, bh, 16);
+        ctx2d.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx2d.fill();
+        ctx2d.lineWidth = 2.5;
+        ctx2d.strokeStyle = '#18141c';
+        ctx2d.stroke();
+        ctx2d.restore();
+
+        let cy = by + padY;
+        if (spk) {
+            ctx2d.font = `700 ${speakerSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+            ctx2d.fillStyle = '#5c4b8a';
+            ctx2d.textAlign = 'center';
+            ctx2d.textBaseline = 'top';
+            ctx2d.fillText(spk, bx + Math.round(bw / 2), cy);
+            cy += spkH;
+        }
+        ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        ctx2d.fillStyle = '#141218';
+        ctx2d.textAlign = 'center';
+        ctx2d.textBaseline = 'top';
+        finalLines.forEach(l => {
+            ctx2d.fillText(l, bx + Math.round(bw / 2), cy);
+            cy += lineH;
+        });
+    });
 }
 
 // Отрисовка аккуратных комикс-облачков с русскими репликами поверх готовой картинки на Canvas
@@ -5778,108 +6042,67 @@ async function overlayComicBubblesOnDataUrl(imageUrl, quotes, comicOpts = null) 
                 ctx2d.drawImage(img, 0, 0, W, H);
 
                 const validQuotes = quotes.filter(q => q && q.text && String(q.text).trim()).slice(0, 4);
-                const count = validQuotes.length;
-                if (!count) { resolve(imageUrl); return; }
+                if (!validQuotes.length) { resolve(imageUrl); return; }
 
-                const fontSize = Math.max(15, Math.round(W * 0.022));
-                const speakerFontSize = Math.max(12, Math.round(fontSize * 0.78));
-                const lineHeight = Math.round(fontSize * 1.28);
-                const maxBubbleW = Math.round(W * 0.56);
-                const padX = Math.round(fontSize * 0.85);
-                const padY = Math.round(fontSize * 0.65);
+                // Если это склеенная страница манхвы (3 или 4 фрейма) или вертикальный вебтун — используем единую пофреймовую раскладку облачков внизу каждого фрейма!
+                const stitchedRects = getStitchedPagePanelRects(W, H, comicOpts);
+                if (stitchedRects && stitchedRects.length) {
+                    drawManhwaBubblesOnCanvas(ctx2d, stitchedRects, validQuotes);
+                    resolve(cv.toDataURL('image/png'));
+                    return;
+                }
 
-                const wrapLines = (text, maxW) => {
-                    ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-                    const words = String(text).split(/\s+/);
-                    const lines = [];
-                    let cur = '';
-                    for (const w of words) {
-                        const test = cur ? `${cur} ${w}` : w;
-                        if (ctx2d.measureText(test).width > maxW && cur) {
-                            lines.push(cur);
-                            cur = w;
-                        } else {
-                            cur = test;
-                        }
-                    }
-                    if (cur) lines.push(cur);
-                    return lines.slice(0, 3);
-                };
+                // Для одиночного кадра (без панелей) раскладываем облачка в нижней трети кадра снизу вверх без пересечений между собой и без перекрытия лиц в центре/сверху!
+                const padX = 14, padY = 8;
+                const maxBubbleW = Math.round(W * 0.84);
+                let curBottomY = H - Math.round(H * 0.025);
 
-                // Позиции облачков по высоте страницы (чередуем левый и правый край, чтобы не закрывать лица в центре)
-                const yAnchors = count === 1
-                    ? [0.10]
-                    : count === 2
-                        ? [0.07, 0.78]
-                        : count === 3
-                            ? [0.06, 0.44, 0.80]
-                            : [0.05, 0.31, 0.58, 0.82];
-
-                validQuotes.forEach((q, idx) => {
+                for (let idx = validQuotes.length - 1; idx >= 0; idx--) {
+                    const q = validQuotes[idx];
                     const isRight = idx % 2 === 1;
-                    const wrapped = wrapLines(q.text, maxBubbleW - padX * 2);
+                    let fontSize = Math.min(20, Math.max(14, Math.round(W * 0.021)));
+                    let wrapped = [];
+                    let speakerFontSize = 12;
+                    let lineHeight = 20;
+                    let speakerOffset = 0;
+                    let boxH = 44;
+                    const speakerStr = String(q.speaker || '').trim();
+
+                    while (fontSize >= 12) {
+                        wrapped = wrapTextLinesForBubble(ctx2d, q.text, maxBubbleW - padX * 2, fontSize);
+                        speakerFontSize = Math.max(11, Math.round(fontSize * 0.80));
+                        lineHeight = Math.round(fontSize * 1.22);
+                        speakerOffset = speakerStr ? Math.round(speakerFontSize * 1.22) : 0;
+                        boxH = wrapped.length * lineHeight + padY * 2 + speakerOffset;
+                        if (wrapped.length <= 4) break;
+                        if (fontSize === 12) break;
+                        fontSize--;
+                    }
+
                     ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
                     let textW = 0;
                     wrapped.forEach(l => { textW = Math.max(textW, ctx2d.measureText(l).width); });
-                    const speakerStr = String(q.speaker || '').trim();
                     if (speakerStr) {
                         ctx2d.font = `700 ${speakerFontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
                         textW = Math.max(textW, ctx2d.measureText(speakerStr).width + 12);
                     }
-                    const boxW = Math.min(maxBubbleW, Math.max(Math.round(W * 0.24), Math.ceil(textW) + padX * 2));
-                    const speakerOffset = speakerStr ? Math.round(speakerFontSize * 1.25) : 0;
-                    const boxH = wrapped.length * lineHeight + padY * 2 + speakerOffset;
-
+                    const boxW = Math.min(maxBubbleW, Math.max(Math.round(W * 0.32), Math.ceil(textW) + padX * 2));
                     const marginX = Math.round(W * 0.035);
-                    let bx = isRight ? Math.max(marginX, W - marginX - boxW) : marginX;
-                    let by = Math.max(Math.round(H * 0.025), Math.min(H - boxH - Math.round(H * 0.03), Math.round(H * yAnchors[idx])));
-                    // Если это 3-кадровая склеенная страница манги (1200x1680: 1 широкий кадр сверху + 2 внизу слева и справа), ставим облачка точно внутрь каждого из 3 фреймов!
-                    const isStitched3Page = (W === 1200 && H === 1680) || (comicOpts?.stripMode && comicOpts?.styleId !== 'webtoon' && comicOpts?.styleId !== 'yonkoma');
-                    if (isStitched3Page && count >= 2) {
-                        const pad = Math.round(W * (26 / 1200));
-                        const gap = Math.round(W * (20 / 1200));
-                        const innerW = W - pad * 2;
-                        const innerH = H - pad * 2;
-                        const topH = Math.floor(innerH * 0.47);
-                        const botH = innerH - topH - gap;
-                        const botW = Math.floor((innerW - gap) / 2);
-                        const pRects = [
-                            { x: pad, y: pad, w: innerW, h: topH },
-                            { x: pad, y: pad + topH + gap, w: botW, h: botH },
-                            { x: pad + botW + gap, y: pad + topH + gap, w: innerW - botW - gap, h: botH },
-                        ];
-                        const r = pRects[Math.min(idx, 2)];
-                        const clampedW = Math.min(boxW, r.w - 24);
-                        bx = (idx % 2 === 1) ? Math.max(r.x + 12, r.x + r.w - clampedW - 14) : (r.x + 14);
-                        by = (idx === 0) ? Math.max(r.y + 12, r.y + r.h - boxH - 14) : (r.y + 14);
-                    }
-                    const radius = Math.min(22, Math.round(boxH * 0.32));
+                    const bx = validQuotes.length === 1
+                        ? Math.round((W - boxW) / 2)
+                        : (isRight ? Math.max(marginX, W - marginX - boxW) : marginX);
+                    const by = Math.max(Math.round(H * 0.03), curBottomY - boxH);
+                    curBottomY = by - 8;
 
                     ctx2d.save();
                     ctx2d.shadowColor = 'rgba(0, 0, 0, 0.28)';
                     ctx2d.shadowBlur = 10;
                     ctx2d.shadowOffsetY = 3;
-
-                    // Рисуем белое комикс-облачко с хвостиком
-                    drawRoundedRectPath(ctx2d, bx, by, boxW, boxH, radius);
+                    drawRoundedRectPath(ctx2d, bx, by, boxW, boxH, Math.min(20, Math.round(boxH * 0.32)));
                     ctx2d.fillStyle = 'rgba(255, 255, 255, 0.95)';
                     ctx2d.fill();
                     ctx2d.lineWidth = Math.max(2, Math.round(W * 0.003));
                     ctx2d.strokeStyle = '#18141f';
-                    ctx2d.stroke();
-
-                    // Хвостик облачка
-                    const tailX = isRight ? bx + Math.round(boxW * 0.72) : bx + Math.round(boxW * 0.28);
-                    const tailDir = idx === count - 1 ? -1 : 1;
-                    const tailBaseY = tailDir > 0 ? by + boxH : by;
-                    ctx2d.shadowColor = 'transparent';
-                    ctx2d.beginPath();
-                    ctx2d.moveTo(tailX - 9, tailBaseY);
-                    ctx2d.lineTo(tailX + (isRight ? -4 : 4), tailBaseY + tailDir * 13);
-                    ctx2d.lineTo(tailX + 9, tailBaseY);
-                    ctx2d.closePath();
-                    ctx2d.fillStyle = 'rgba(255, 255, 255, 0.95)';
-                    ctx2d.fill();
                     ctx2d.stroke();
                     ctx2d.restore();
 
@@ -5892,7 +6115,6 @@ async function overlayComicBubblesOnDataUrl(imageUrl, quotes, comicOpts = null) 
                         ctx2d.fillText(speakerStr, bx + Math.round(boxW / 2), curY);
                         curY += speakerOffset;
                     }
-
                     ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
                     ctx2d.fillStyle = '#141218';
                     ctx2d.textAlign = 'center';
@@ -5901,7 +6123,7 @@ async function overlayComicBubblesOnDataUrl(imageUrl, quotes, comicOpts = null) 
                         ctx2d.fillText(lineStr, bx + Math.round(boxW / 2), curY);
                         curY += lineHeight;
                     });
-                });
+                }
 
                 resolve(cv.toDataURL('image/png'));
             } catch (e) {
@@ -5940,7 +6162,7 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
     const cv = document.createElement('canvas');
     const ctx2d = cv.getContext('2d');
 
-    // Функция отрисовки картинки с заполнением фрейма (object-fit: cover с фокусом чуть выше центра для лиц)
+    // Отрисовка картинки с заполнением фрейма (sy = 0.05 бережно сохраняет макушки волос у верхней рамки и удерживает лица в верхней половине кадра вдали от нижнего облачка текста!)
     const drawCover = (img, x, y, w, h) => {
         const iw = img.naturalWidth || 832;
         const ih = img.naturalHeight || 1216;
@@ -5948,7 +6170,7 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
         const sw = w / scale;
         const sh = h / scale;
         const sx = Math.max(0, (iw - sw) / 2);
-        const sy = Math.max(0, (ih - sh) * 0.28);
+        const sy = Math.max(0, (ih - sh) * 0.05);
         ctx2d.save();
         ctx2d.beginPath();
         ctx2d.rect(x, y, w, h);
@@ -5980,7 +6202,7 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
         }
     } else {
         const W = 1200;
-        const H = 1680;
+        const H = n >= 4 ? 1900 : 1680;
         const pad = 26;
         const gap = 20;
         cv.width = W;
@@ -6011,13 +6233,15 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
                 { x: pad + botW + gap, y: pad + topH + gap, w: innerW - botW - gap, h: botH }
             );
         } else {
-            const pw = Math.floor((innerW - gap) / 2);
-            const ph = Math.floor((innerH - gap) / 2);
+            const row1H = Math.floor(innerH * 0.31);
+            const row2H = Math.floor(innerH * 0.36);
+            const row3H = innerH - row1H - row2H - gap * 2;
+            const midW = Math.floor((innerW - gap) / 2);
             const coords = [
-                { x: pad, y: pad, w: pw, h: ph },
-                { x: pad + pw + gap, y: pad, w: innerW - pw - gap, h: ph },
-                { x: pad, y: pad + ph + gap, w: pw, h: innerH - ph - gap },
-                { x: pad + pw + gap, y: pad + ph + gap, w: innerW - pw - gap, h: innerH - ph - gap },
+                { x: pad, y: pad, w: innerW, h: row1H },
+                { x: pad, y: pad + row1H + gap, w: midW, h: row2H },
+                { x: pad + midW + gap, y: pad + row1H + gap, w: innerW - midW - gap, h: row2H },
+                { x: pad, y: pad + row1H + row2H + gap * 2, w: innerW, h: row3H },
             ];
             for (let i = 0; i < Math.min(4, n); i++) {
                 drawCover(loadedImgs[i], coords[i].x, coords[i].y, coords[i].w, coords[i].h);
@@ -6027,73 +6251,7 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
     }
 
     if (withBubbles && Array.isArray(quotes) && quotes.length) {
-        quotes.slice(0, panelRects.length).forEach((q, idx) => {
-            if (!q || !q.text) return;
-            const rect = panelRects[Math.min(idx, panelRects.length - 1)];
-            const fontSize = Math.max(16, Math.round(rect.w * 0.032));
-            const speakerSize = Math.max(13, Math.round(fontSize * 0.78));
-            const lineH = Math.round(fontSize * 1.26);
-            const maxBW = Math.round(rect.w * 0.78);
-            const padX = 14, padY = 10;
-
-            ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-            const words = String(q.text).split(/\s+/);
-            const lines = [];
-            let cur = '';
-            for (const w of words) {
-                const test = cur ? `${cur} ${w}` : w;
-                if (ctx2d.measureText(test).width > maxBW - padX * 2 && cur) {
-                    lines.push(cur);
-                    cur = w;
-                } else {
-                    cur = test;
-                }
-            }
-            if (cur) lines.push(cur);
-            const finalLines = lines.slice(0, 3);
-            let tw = 0;
-            finalLines.forEach(l => { tw = Math.max(tw, ctx2d.measureText(l).width); });
-            const spk = String(q.speaker || '').trim();
-            if (spk) {
-                ctx2d.font = `700 ${speakerSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-                tw = Math.max(tw, ctx2d.measureText(spk).width + 10);
-            }
-            const bw = Math.min(maxBW, Math.max(140, Math.ceil(tw) + padX * 2));
-            const spkH = spk ? Math.round(speakerSize * 1.25) : 0;
-            const bh = finalLines.length * lineH + padY * 2 + spkH;
-            const isRight = idx % 2 === 1;
-            const bx = isRight ? rect.x + rect.w - bw - 14 : rect.x + 14;
-            const by = (idx % 2 === 0) ? rect.y + rect.h - bh - 14 : rect.y + 14;
-
-            ctx2d.save();
-            ctx2d.shadowColor = 'rgba(0,0,0,0.32)';
-            ctx2d.shadowBlur = 8;
-            drawRoundedRectPath(ctx2d, bx, by, bw, bh, 16);
-            ctx2d.fillStyle = 'rgba(255,255,255,0.95)';
-            ctx2d.fill();
-            ctx2d.lineWidth = 2.5;
-            ctx2d.strokeStyle = '#18141c';
-            ctx2d.stroke();
-            ctx2d.restore();
-
-            let cy = by + padY;
-            if (spk) {
-                ctx2d.font = `700 ${speakerSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-                ctx2d.fillStyle = '#5c4b8a';
-                ctx2d.textAlign = 'center';
-                ctx2d.textBaseline = 'top';
-                ctx2d.fillText(spk, bx + Math.round(bw / 2), cy);
-                cy += spkH;
-            }
-            ctx2d.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
-            ctx2d.fillStyle = '#141218';
-            ctx2d.textAlign = 'center';
-            ctx2d.textBaseline = 'top';
-            finalLines.forEach(l => {
-                ctx2d.fillText(l, bx + Math.round(bw / 2), cy);
-                cy += lineH;
-            });
-        });
+        drawManhwaBubblesOnCanvas(ctx2d, panelRects, quotes);
     }
 
     return cv.toDataURL('image/png');
@@ -6126,10 +6284,17 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         ? `[Краткая предыстория диалога (ТОЛЬКО для понимания того, кто с кем разговаривает — НЕ бери отсюда старую локацию, если в целевом посте герои уже перешли в другое место!)]:\n` +
           prevContextMsgs.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 320)}»`).join('\n\n')
         : '';
-    const moment = targetPostMsg
-        ? `[🎯 ГЛАВНЫЙ ЦЕЛЕВОЙ ПОСТ ДЛЯ ИЛЛЮСТРАЦИИ — определяй ЛОКАЦИЮ (дом/квартира/комната/улица и т.д.), КТО ПРИСУТСТВУЕТ В СЦЕНЕ и ЧТО ОНИ ДЕЛАЮТ СТРОГО ПО ЭТОМУ ПОСТУ!]:\n` +
-          `${targetPostMsg.is_user ? names.user : (targetPostMsg.name || names.char)}: «${stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 4500)}»`
-        : '';
+    const fullTargetText = targetPostMsg ? stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '') : '';
+    const hasSpecificChunk = !!(comicOpts?.enabled && comicOpts?.chunkText && String(comicOpts.chunkText).trim());
+    const chunkHeaderNote = hasSpecificChunk
+        ? `[Краткая справка по началу этого поста (ТОЛЬКО для понимания помещения/локации, где находятся герои): «${fullTargetText.slice(0, 380)}»]\n\n` +
+          `[🎯 ЦЕЛЕВОЙ КУСОЧЕК ПОСТА ДЛЯ ЭТОЙ СТРАНИЦЫ МАНХВЫ (СТРАНИЦА ${(Number(comicOpts.chunkIndex) || 0) + 1} ИЗ ${Number(comicOpts.chunkTotal) || 1}) — СТРОЙ ВСЕ ФРЕЙМЫ (PANEL1..PANEL${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) И БЕРИ ВСЕ РЕПЛИКИ (QUOTE1..QUOTE${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) ИСКЛЮЧИТЕЛЬНО ИЗ ЭТОГО КУСОЧКА ТЕКСТА!]:\n` +
+          `${targetPostMsg?.is_user ? names.user : (targetPostMsg?.name || names.char)}: «${String(comicOpts.chunkText).trim()}»`
+        : (targetPostMsg
+            ? `[🎯 ГЛАВНЫЙ ЦЕЛЕВОЙ ПОСТ ДЛЯ ИЛЛЮСТРАЦИИ — определяй ЛОКАЦИЮ (дом/квартира/комната/улица и т.д.), КТО ПРИСУТСТВУЕТ В СЦЕНЕ и ЧТО ОНИ ДЕЛАЮТ СТРОГО ПО ЭТОМУ ПОСТУ!]:\n` +
+              `${targetPostMsg.is_user ? names.user : (targetPostMsg.name || names.char)}: «${fullTargetText.slice(0, 4500)}»`
+            : '');
+    const moment = chunkHeaderNote;
     const a = st.wardrobe?.active;
     const outfit = (!isPov && a?.status === 'worn') ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
     const rawPersonaDesc = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
@@ -6169,20 +6334,31 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         const monoRule = isMonoStyle
             ? `\n⚫⚪ СТРОГИЙ ЧЁРНО-БЕЛЫЙ МАНГА-СТИЛЬ (MONOCHROME / GREYSCALE — БЕЗ ЦВЕТОВ!): этот комикс рисуется СТРОГО чёрно-белой тушью и скринтонами! В строках SCENE, PANEL1..3 и CHAR1..4 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать любые названия цветов (НЕ пиши blonde, red, blue, green, yellow, orange, pink, purple, brown, pastel, colorful)! Заменяй цвета волос и одежды на ч/б тон: вместо blonde hair пиши light hair / white screentone hair, вместо тёмных волос — dark inked hair, вместо цветных глаз — detailed manga eyes!`
             : '';
+        const framesN = Number(comicOpts.framesPerPage) === 4 ? 4 : 3;
         const quoteSpeakerRule = wantLines
-            ? `\n⚠️ ПРАВИЛО ПОДПИСИ РЕПЛИК (QUOTE1..QUOTE3): перед чертой | пиши имя ТОЛЬКО того персонажа из текущего поста (из списка CAST), который реально произносит эту фразу! СТРОГО ЗАПРЕЩЕНО подписывать чужие реплики именем ${names.char}, если ${names.char} нет в этой сцене и разговаривают другие персонажи (НПС)! Если не уверена, чья именно реплика — пиши просто текст реплики без имени.`
+            ? `\n⚠️ ПРАВИЛО ПОЛНЫХ РЕПЛИК И ПОДПИСЕЙ (QUOTE1..QUOTE${framesN}):
+1) НЕ ОБРЫВАЙ ФРАЗЫ НА ПОЛУСЛОВЕ: для каждой строки QUOTE выбирай ЗАКОНЧЕННОЕ предложение или законченную мысль из прямой речи в целевом кусочке поста целиком до точки / восклицательного / вопросительного знака (до 145 символов)! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО обрывать предложение многоточием «...» посередине фразы!
+2) Перед чертой | пиши имя ТОЛЬКО того персонажа из списка CAST, который реально произносит эту реплику в тексте! СТРОГО ЗАПРЕЩЕНО подписывать чужие реплики именем ${names.char}, если говорит другой персонаж.`
             : '';
         if (comicOpts.stripMode) {
-            comicInstruction = `💬 РЕЖИМ РАСКАДРОВКИ КОМИКСА ИЗ 3 РАЗНЫХ КАДРОВ (СТИЛЬ «${cStyle.name}»):
-Разбей события текущего сообщения по хронологии на 3 СОВЕРШЕННО РАЗНЫХ последовательных кадра (Кадр 1 под QUOTE1 → Кадр 2 под QUOTE2 → Кадр 3 под QUOTE3):
-⚠️ ГЛАВНЫЕ ПРАВИЛА ПРОТИВ КАШИ И ДУБЛИРОВАНИЯ В КАДРАХ:
-1) НЕ РИСУЙ ТОЛПУ В ОДНОМ КАДРЕ: даже если в комнате находятся 4–7 человек, КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать всех 4–7 человек в один кадр комикса (НЕ пиши \`4boys, 2girls\`, \`six people\`)! В КАЖДОМ отдельном кадре (PANEL1, PANEL2, PANEL3) выбирай ТОЛЬКО 1 или 2 персонажей (максимум 3), которые говорят реплику QUOTE этого кадра или непосредственно взаимодействуют именно в эту секунду!
-2) НЕ ЗАПРЕЩАЕТСЯ менять состав персонажей от кадра к кадру: например, в PANEL1 покажи того, кто произносит QUOTE1 (и того, к кому он обращается); в PANEL2 — тех, кто участвует в моменте QUOTE2; в PANEL3 — сольный крупный план того, кто произносит QUOTE3!
-3) БЕЗ БУКВАЛЬНЫХ МЕТАФОР: никогда не переводи «львиная грива волос» у человека как \`lion mane\` (иначе нарисуется голова льва-фурри! Пиши \`thick voluminous wild hair\`) и не переводи «позеленевший от тошноты» как \`greenish-pale\` (иначе кожа станет зелёной как у зомби! Пиши \`pale skin, unwell, sweatdrop\`).
-— PANEL1 (Кадр 1 — Завязка / Момент QUOTE1, \`medium shot\` или \`cowboy shot\`): 1–2 персонажа этого момента, их внешность, одежда, действие и обстановка. Если в кадре 1 два персонажа — обязательно добавь в конце строки: \`|| CHAR1: пол (1boy/1girl), внешность, одежда и поза 1-го в кадре 1 || CHAR2: пол, внешность, одежда и поза 2-го в кадре 1\`.
-— PANEL2 (Кадр 2 — Развитие / Момент QUOTE2, \`dynamic angle, medium close-up, cowboy shot\`): ДРУГОЙ момент из середины поста (1–2 персонажа из момента QUOTE2, другой жест/поза/ракурс, без повторения позы из PANEL1!). Если в кадре 2 два персонажа — добавь в конце \`|| CHAR1: ... || CHAR2: ...\`; если один — пиши \`1boy, solo\` или \`1girl, solo\`.
-— PANEL3 (Кадр 3 — Финал / Момент QUOTE3, \`close-up, portrait, depth of field\`): СОЛЬНЫЙ крупный план лица и мимики (\`1girl, solo, close-up, upper body\` или \`1boy, solo, close-up, upper body\`) того персонажа, который произносит QUOTE3 или ярко реагирует в конце! В PANEL3 СТРОГО ЗАПРЕЩЕНО писать \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\` или перечислять остальных людей в комнате!
-${wantLines ? `Также выпиши до 3 коротких ДОСЛОВНЫХ реплик на русском языке из ГЛАВНОГО ЦЕЛЕВОГО ПОСТА (строго в соответствии с тем, кто изображён в PANEL1, PANEL2, PANEL3!) в строках QUOTE1: Имя говорящего | точная короткая фраза, QUOTE2: Имя говорящего | фраза, QUOTE3: Имя говорящего | фраза.` : ''}${quoteSpeakerRule}${monoRule}`;
+            const panel4Line = framesN === 4
+                ? `\n— PANEL4 (Кадр 4 — Финальный акцент этого кусочка поста / Момент QUOTE4, \`close-up, portrait, upper body\` или \`medium close-up\`): яркая финальная эмоция, реакция или действие в конце этого отрывка (1–2 персонажа, без wide shot и без толпы).`
+                : '';
+            comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ МАНХВЫ ИЗ ${framesN} РАЗНЫХ КАДРОВ ПО КУСОЧКУ ПОСТА (СТИЛЬ «${cStyle.name}»):
+Разбей события целевого отрывка по хронологии на ${framesN} СОВЕРШЕННО РАЗНЫХ последовательных кадра (PANEL1..PANEL${framesN}):
+⚠️ ГЛАВНЫЕ ПРАВИЛА РЕЖИССУРЫ И КРУПНЫХ ФРЕЙМОВ ДЕТАЛЕЙ:
+1) 🔍 КРУПНЫЕ ФРЕЙМЫ ДЕТАЛЕЙ ПО КОНТЕКСТУ (ОБЯЗАТЕЛЬНО, КОГДА ПОДХОДИТ ПО ТЕКСТУ!):
+   В настоящей манхве на странице не рисуют в каждом фрейме просто стоящих по пояс людей! Внимательно проверь текст отрывка: если в нём есть яркая деталь, животное, предмет, жест или интим — обязательно отдай ЦЕЛЫЙ ОТДЕЛЬНЫЙ ФРЕЙМ (обычно PANEL2 или PANEL3) под подробный крупный план этой детали:
+   • ЖИВОТНОЕ / ПИТОМЕЦ / СУЩЕСТВО (например, у подруги дома змея, кот, собака, птица и т.д.): сделай отдельный фрейм, где крупным планом показано ИМЕННО ЭТО ЖИВОТНОЕ (\`no humans, animal focus, close-up, macro shot, snake / python / cat..., detailed scales/fur, terrarium / branch, depth of field\`) — БЕЗ тегов \`1boy/1girl\`, БЕЗ лиц людей и БЕЗ калибровки роста!
+   • ЗНАЧИМЫЙ ПРЕДМЕТ / ЕДА / УЛИКА В ФОКУСЕ ВНИМАНИЯ (чашка, бокал, письмо, экран телефона, украшение, ключ, нож, блюдо): сделай отдельный предметный макро-фрейм (\`no humans, object focus, close-up, macro shot, ...\` или с руками в кадре без головы: \`close-up, hand focus, object focus, head out of frame, cropped, ...\`).
+   • ЭРОТИКА / 18+ / NSFW СЦЕНА: если в отрывке описана интимная близость, раздевание, ласки, возбуждение, гениталии или проникновение — ОБЯЗАТЕЛЬНО выдели целый фрейм (PANEL2 или PANEL3) под откровенный анатомический крупный план без цензуры (\`nsfw, explicit, close-up, intimate close-up, head out of frame, cropped, [точные теги Danbooru из текста: genitals / penis / erection / pussy / penetration / fingering / oral / breasts focus / thighs / hands gripping hips], sweat, detailed skin, depth of field\`)! В таком анатомическом кадре-детали НЕ описывай причёски/лица и НЕ вставляй теги полного роста (\`tall lean adult man, long male legs\`), чтобы весь кадр занимала именно интимная деталь!
+   • ТАКТИЛЬНЫЙ ЖЕСТ / ПРИКОСНОВЕНИЕ (дрожащие пальцы, переплетённые кисти, хватка за запястье/воротник, поцелуй в шею/губы): \`close-up, hand focus / lips focus / neck focus, head out of frame, cropped, depth of field\`.
+2) НЕ РИСУЙ ТОЛПУ В ОДНОМ КАДРЕ: КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать 4–7 человек в один кадр комикса (НЕ пиши \`4boys, 2girls\`, \`six people\`)! В кадрах с людьми выбирай ТОЛЬКО 1 или 2 персонажей (максимум 3), которые говорят реплику QUOTE этого кадра или непосредственно взаимодействуют именно в эту секунду!
+3) БЕЗ БУКВАЛЬНЫХ МЕТАФОР: никогда не переводи «львиная грива волос» у человека как \`lion mane\` (пиши \`thick voluminous wild hair\`) и не переводи «позеленевший» как \`greenish-pale\` (пиши \`pale skin, unwell, sweatdrop\`).
+— PANEL1 (Кадр 1 — Завязка отрывка / Момент QUOTE1, \`medium shot\` или \`cowboy shot\`): 1–2 персонажа этого момента, их внешность, одежда, действие и обстановка. Если в кадре 1 два персонажа — добавь в конце строки: \`|| CHAR1: пол (1boy/1girl), внешность, одежда и поза 1-го || CHAR2: пол, внешность, одежда и поза 2-го\`.
+— PANEL2 (Кадр 2 — КРУПНЫЙ ФРЕЙМ ДЕТАЛИ по контексту: животное/змея, важный предмет, тактильный жест рук, ИЛИ в 18+ сцене — крупный план гениталий/интимного контакта \`head out of frame, close-up\`; а если в отрывке нет таких деталей — смена ракурса и действия 1–2 героев \`dynamic angle, medium close-up\`).
+— PANEL3 (Кадр 3 — СОЛЬНЫЙ крупный план лица и эмоции говорящего QUOTE3 \`1girl, solo, close-up, portrait, upper body\` или \`1boy, solo, close-up, portrait, upper body\`, ЛИБО крупный фрейм детали/интима, если во 2-м кадре был средний план диалога! В сольном и детальном кадре ЗАПРЕЩЕНО писать \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\`!).${panel4Line}
+${wantLines ? `Также выпиши ${framesN} ДОСЛОВНЫЕ законченные реплики на русском языке из целевого отрывка поста (строго полными предложениями без обрыва фразы!) в строках QUOTE1..QUOTE${framesN}.` : ''}${quoteSpeakerRule}${monoRule}`;
         } else {
             comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ КОМИКСА / МАНГИ («${cStyle.name}»):
 Построй композицию в виде многокадровой страницы комикса из 3–4 фреймов на одном листе (${isNaiSource ? `начни строку SCENE с тегов раскладки: ${cStyle.naiTags}` : cStyle.promptEn}):
@@ -6190,8 +6366,8 @@ ${wantLines ? `Также выпиши до 3 коротких ДОСЛОВНЫ�
 — Для каждого видимого персонажа укажи, что делает его левая и правая рука (строго по 2 руки у каждого человека, без лишних конечностей!).
 ${(!isNaiSource && wantLines) ? `— Включи в описание SCENE 2–3 белых облачка реплик (speech bubbles) с ДОСЛОВНЫМИ короткими фразами на русском языке из текста поста.` : `— Внутри самой строки SCENE НЕ пиши русский текст (облачка с русскими репликами система аккуратно наложит поверх готового рисунка сама!).`}
 ${wantLines ? `После основных строк обязательно выпиши 2–3 короткие ДОСЛОВНЫЕ реплики из текста поста в формате:
-QUOTE1: Имя говорящего | короткая дословная реплика из поста (до 55 символов)
-QUOTE2: Имя говорящего из CAST | короткая дословная реплика из поста` : ''}${quoteSpeakerRule}${monoRule}`;
+QUOTE1: Имя говорящего | полная законченная реплика из поста до точки (без обрыва на полуслове!)
+QUOTE2: Имя говорящего из CAST | полная законченная реплика из поста до точки` : ''}${quoteSpeakerRule}${monoRule}`;
         }
     }
 
@@ -6233,16 +6409,19 @@ QUOTE2: Имя говорящего из CAST | короткая дословн�
         `CAST: кто именно виден в сцене через запятую (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
         ...(comicOpts && comicOpts.enabled && comicOpts.stripMode
             ? [
-                'PANEL1: полный английский промпт 1-го кадра (начало сцены, wide/medium shot, внешность + одежда + обстановка; если в кадре 1 два персонажа — добавь в конце строки: || CHAR1: теги 1-го перса в кадре 1 || CHAR2: теги 2-го перса в кадре 1)',
-                'PANEL2: полный английский промпт 2-го кадра (середина сцены, ДРУГОЕ действие/жест/поза, medium close-up / cowboy shot, без повторения позы из PANEL1; если в кадре 2 два персонажа — добавь в конце: || CHAR1: теги 1-го перса в кадре 2 || CHAR2: теги 2-го перса в кадре 2)',
-                'PANEL3: полный английский промпт 3-го кадра (финал сцены, СОЛЬНЫЙ крупный план лица/глаз/эмоции одного героя: 1girl, solo, close-up ИЛИ 1boy, solo, close-up, внешность лица/волос/ушек, мимика, размытый фон — БЕЗ второго персонажа и БЕЗ предметов/еды из первых кадров!)',
+                'PANEL1: полный английский промпт 1-го кадра (момент QUOTE1, medium/cowboy shot, 1–2 персонажа + внешность + одежда + обстановка; если двоих — добавь в конце: || CHAR1: теги 1-го || CHAR2: теги 2-го)',
+                'PANEL2: полный английский промпт 2-го кадра (ЕСЛИ в отрывке есть животное/змея/питомец, важный предмет, выразительное касание рук ИЛИ 18+ интим/гениталии — сделай этот фрейм КРУПНЫМ ПЛАНОМ ДЕТАЛИ: no humans, animal focus / object focus, close-up ИЛИ nsfw, explicit, close-up, head out of frame, intimate focus; иначе — другое действие 1–2 героев, medium close-up)',
+                'PANEL3: полный английский промпт 3-го кадра (СОЛЬНЫЙ крупный план лица/эмоции одного героя: 1girl, solo, close-up, portrait, upper body ИЛИ 1boy, solo, close-up, portrait, upper body — либо крупный фрейм детали/интима, если в PANEL2 был диалог; БЕЗ wide shot и БЕЗ толпы!)',
+                ...(Number(comicOpts.framesPerPage) === 4 ? ['PANEL4: полный английский промпт 4-го кадра (финальный момент отрывка под QUOTE4, 1–2 персонажа, выразительная эмоция или жест)'] : []),
             ]
             : [
                 'SCENE: общий промпт сцены на английском в одну строку (количество персонажей 1boy/1girl или 2boys/2girls, ракурс, взаимодействие, внешность и одежда каждого, окружение и свет — короткими тегами Danbooru)',
                 'CHAR1: (если в кадре >= 2 человек) английские теги 1-го персонажа в кадре (внешность, канон-тег, одежда, поза, эмоция)',
                 'CHAR2: (если в кадре >= 2 человек) английские теги 2-го персонажа в кадре (и далее CHAR3:, CHAR4: для 3-го и 4-го персонажа)',
             ]),
-        (comicOpts && comicOpts.enabled && comicOpts.linesMode !== 'off') ? 'QUOTE1: Имя говорящего | короткая дословная реплика из поста на русском\nQUOTE2: Имя говорящего | короткая дословная реплика из поста на русском\nQUOTE3: Имя говорящего | короткая дословная реплика из поста на русском' : '',
+        (comicOpts && comicOpts.enabled && comicOpts.linesMode !== 'off')
+            ? ('QUOTE1: Имя говорящего | полная законченная фраза из отрывка до точки (без обрыва на полуслове!)\nQUOTE2: Имя говорящего | полная законченная фраза из отрывка\nQUOTE3: Имя говорящего | полная законченная фраза из отрывка' + (Number(comicOpts.framesPerPage) === 4 ? '\nQUOTE4: Имя говорящего | полная законченная фраза из отрывка' : ''))
+            : '',
         (comicOpts && comicOpts.enabled) ? 'ВАЖНО: в режиме комикса обязательно выведи все запрошенные строки выше (PANEL1, PANEL2, PANEL3 должны описывать 3 РАЗНЫХ момента и ракурса, не дублируй одну и ту же позу)!' : '',
         ']',
     ].filter(Boolean).join('\n\n');
@@ -6332,7 +6511,7 @@ function findSavedSceneMeta(mesId) {
     return null;
 }
 
-async function askSceneCameraMode(existingMeta = null, forceAsk = false) {
+async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId = undefined) {
     const mode = settings().sceneCameraMode || 'ask';
     if (!forceAsk && mode !== 'ask' && !hasValidSceneMeta(existingMeta)) return { mode };
     return new Promise(resolve => {
@@ -6513,35 +6692,106 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false) {
         styleRow.append(styleSel, addCustomStyleBtn);
         comicBox.append(styleRow);
 
-        const linesRow = $('<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:0.84em;"></div>');
-        linesRow.append('<span style="opacity:0.85;">Облачка с репликами:</span>');
-        const linesSel = $('<select class="text_pole" style="flex:1; min-width:180px; margin:0; font-size:0.95em; padding:3px 8px;"></select>');
-        linesSel.append('<option value="auto">💬 С репликами из поста (проверенные цитаты)</option>');
+        const chatArr = ctx().chat || [];
+        let targetPostIdx = Number.isInteger(mesId) ? mesId : (chatArr.length - 1);
+        while (targetPostIdx >= 0 && (!chatArr[targetPostIdx] || chatArr[targetPostIdx].is_system)) targetPostIdx--;
+        const targetPostRaw = chatArr[targetPostIdx]?.mes || '';
+        const postChunks = splitPostIntoComicChunks(targetPostRaw);
+
+        const framesAndLinesRow = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:8px; margin-bottom:8px; font-size:0.84em;"></div>');
+        const framesCol = $('<div><div style="opacity:0.85; margin-bottom:2px;">Фреймов на одной странице:</div></div>');
+        const framesSel = $('<select class="text_pole" style="width:100%; margin:0; font-size:0.95em; padding:3px 8px;"></select>');
+        framesSel.append('<option value="3">3 фрейма (1 сверху + 2 снизу)</option>');
+        framesSel.append('<option value="4">4 фрейма (манхва: 1 + 2 + 1)</option>');
+        framesSel.val(String(settings().comicFramesPerPage || 3));
+        framesSel.on('change', function () {
+            settings().comicFramesPerPage = Number($(this).val()) === 4 ? 4 : 3;
+            saveSettings();
+        });
+        framesCol.append(framesSel);
+
+        const linesCol = $('<div><div style="opacity:0.85; margin-bottom:2px;">Облачка с репликами (внизу фреймов):</div></div>');
+        const linesSel = $('<select class="text_pole" style="width:100%; margin:0; font-size:0.95em; padding:3px 8px;"></select>');
+        linesSel.append('<option value="auto">💬 Полные реплики из отрывка (внизу, не закрывают лица)</option>');
         linesSel.append('<option value="off">🎨 Без текста (чистые фреймы без облачков)</option>');
         linesSel.val(settings().comicLinesMode || 'auto');
         linesSel.on('change', function () {
             settings().comicLinesMode = String($(this).val() || 'auto');
             saveSettings();
         });
-        linesRow.append(linesSel);
-        comicBox.append(linesRow);
+        linesCol.append(linesSel);
+        framesAndLinesRow.append(framesCol, linesCol);
+        comicBox.append(framesAndLinesRow);
+
+        const chunkRow = $('<div style="margin-bottom:8px; font-size:0.84em;"></div>');
+        chunkRow.append(`<div style="font-weight:600; margin-bottom:3px;">📖 По какому кусочку поста рисуем манхву? <span style="font-weight:400; opacity:0.8;">(пост разбит на ${postChunks.length} эп. — по 1 странице на кусочек, чтобы влезли все детали и реплики!)</span></div>`);
+        const chunkSel = $('<select class="text_pole" style="width:100%; margin:0; font-size:0.94em; padding:4px 8px;"></select>');
+        postChunks.forEach((chObj, cIdx) => {
+            chunkSel.append($('<option></option>').val(String(cIdx)).text(`📄 Страница ${cIdx + 1} из ${postChunks.length} (кусочек #${cIdx + 1}: «${chObj.preview}»)`));
+        });
+        if (postChunks.length > 1) {
+            chunkSel.append($('<option value="all_chunks"></option>').text(`📚 Сразу ВСЯ ГЛАВА: нарисовать все ${postChunks.length} страниц подряд по каждому кусочку поста!`));
+        }
+        chunkSel.append('<option value="full_post">📝 Весь пост целиком на 1 общую страницу</option>');
+        chunkSel.val('0');
+        chunkRow.append(chunkSel);
+        comicBox.append(chunkRow);
+
+        const buildComicPayload = (overrideChunkVal = null) => {
+            const cVal = overrideChunkVal !== null ? overrideChunkVal : String(chunkSel.val() || '0');
+            const fPerPage = Number(framesSel.val()) === 4 ? 4 : 3;
+            if (cVal === 'all_chunks' && postChunks.length > 1) {
+                return {
+                    mode: 'third',
+                    forcedCast: getForcedCast(),
+                    whisper: getWhisper(),
+                    multiChunkChapter: postChunks,
+                    comicOpts: {
+                        enabled: true,
+                        stripMode: true,
+                        framesPerPage: fPerPage,
+                        styleId: String(styleSel.val() || 'comicbright'),
+                        linesMode: String(linesSel.val() || 'auto'),
+                        chunkTotal: postChunks.length,
+                    },
+                };
+            }
+            const cIdx = cVal === 'full_post' ? -1 : Number(cVal);
+            const chosenChunk = (cIdx >= 0 && postChunks[cIdx]) ? postChunks[cIdx] : null;
+            return {
+                mode: 'third',
+                forcedCast: getForcedCast(),
+                whisper: getWhisper(),
+                comicOpts: {
+                    enabled: true,
+                    stripMode: true,
+                    framesPerPage: fPerPage,
+                    styleId: String(styleSel.val() || 'comicbright'),
+                    linesMode: String(linesSel.val() || 'auto'),
+                    chunkIndex: chosenChunk ? chosenChunk.index : 0,
+                    chunkTotal: chosenChunk ? chosenChunk.total : 1,
+                    chunkText: chosenChunk ? chosenChunk.text : '',
+                },
+            };
+        };
 
         const comicBtns = $('<div style="display:flex; flex-direction:column; gap:6px;"></div>');
         const stripComicBtn = $(`
-            <div class="menu_button nnb-btn-primary" style="margin:0; padding:8px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:700;" title="Делит пост на 3 РАЗНЫХ момента (1: Завязка → 2: Смена действия/жеста → 3: Крупный план лица/эмоции), генерирует 3 отдельных кадра и склеивает в страницу комикса!">
-                <i class="fa-solid fa-table-columns"></i> 🎞 Нарисовать комикс-страницу (3 разных кадра: 1 → 2 → 3)
+            <div class="menu_button nnb-btn-primary" style="margin:0; padding:8px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:700;" title="Рисует страницу манхвы (3 или 4 фрейма) строго по выбранному кусочку поста (или всю главу по всем кусочкам)!">
+                <i class="fa-solid fa-table-columns"></i> 🎞 Нарисовать страницу манхвы по выбранному кусочку поста
             </div>
-        `).on('click', () => finish({
-            mode: 'third',
-            forcedCast: getForcedCast(),
-            whisper: getWhisper(),
-            comicOpts: {
-                enabled: true,
-                stripMode: true,
-                styleId: String(styleSel.val() || 'comicbright'),
-                linesMode: String(linesSel.val() || 'auto'),
-            },
-        }));
+        `).on('click', () => finish(buildComicPayload()));
+
+        if (postChunks.length > 1) {
+            const fullChapterBtn = $(`
+                <div class="menu_button" style="margin:0; padding:7px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:700; border-color:var(--SmartThemeQuoteColor, #e0c068);" title="По очереди нарисует отдельную страницу манхвы (по 3–4 фрейма) для каждого из ${postChunks.length} кусочков этого поста и соберёт из них многостраничную главу!">
+                    <i class="fa-solid fa-book-open"></i> 📚 Сгенерировать сразу всю главу манхвы (${postChunks.length} стр. по кусочкам поста)
+                </div>
+            `).on('click', () => finish(buildComicPayload('all_chunks')));
+            comicBtns.append(stripComicBtn, fullChapterBtn);
+        } else {
+            comicBtns.append(stripComicBtn);
+        }
 
         const singleComicBtn = $(`
             <div class="menu_button" style="margin:0; padding:7px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:600; font-size:0.92em;" title="Рисует 1 одиночный кадр в выбранном стиле манги/манхвы/комикса (без деления листа на панели)">
@@ -6559,7 +6809,7 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false) {
             },
         }));
 
-        comicBtns.append(stripComicBtn, singleComicBtn);
+        comicBtns.append(singleComicBtn);
         comicBox.append(comicBtns);
         el.append(comicBox);
         openPopup(el).then(() => {
@@ -6586,12 +6836,49 @@ function sanitizeLiteralMetaphorTags(promptStr) {
         .replace(/\bgreenish\s+(?:skin|face|complexion)\b/gi, 'pale skin, unwell');
 }
 
+function isDetailOrMacroPanelPrompt(rawPrompt) {
+    const p = String(rawPrompt || '').toLowerCase();
+    if (!p) return false;
+    if (/\b(no humans|animal focus|object focus|food focus|weapon focus|still life|flower focus|head out of frame|face out of frame|cropped head|headless|hand focus|hands focus|focus on hands|foot focus|feet focus|lower body focus|pelvic focus|groin focus|intimate close-up|penetration close-up|sex close-up|macro shot)\b/i.test(p)) {
+        return true;
+    }
+    // Если это close-up / macro на животном (змея, кот, пёс и т.д.) или на интимной анатомии 18+ без портрета лица
+    const hasCloseUp = /\b(close-up|extreme close-up|macro|focus on)\b/i.test(p);
+    const hasPortraitFace = /\b(portrait|face focus|expressive face|looking at viewer)\b/i.test(p);
+    if (hasCloseUp && !hasPortraitFace) {
+        if (/\b(snake|python|cobra|viper|serpent|lizard|reptile|terrarium|spider|scorpion|frog|toad|turtle|hamster|rat|mouse|rabbit|ferret|parrot|raven|crow|owl|fish|aquarium)\b/i.test(p)) {
+            return true;
+        }
+        if (/\b(genitals|penis|erection|testicles|pussy|vagina|clitoris|labia|anus|crotch|groin|pubic|insertion|penetration|vaginal|anal|cum|ejaculation|creampie|fellatio|cunnilingus|handjob|fingering|paizuri|nipples|areolae|breasts focus|ass focus|butt focus|thighs focus)\b/i.test(p)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     let p = sanitizeLiteralMetaphorTags(String(rawPrompt || '').trim());
     if (!p) return '';
-    const isCloseUpOrSolo = /\b(solo|close-up|extreme close-up|portrait)\b/i.test(p) || panelIdx === 2;
-    if (isCloseUpOrSolo && /\b(solo|close-up|extreme close-up)\b/i.test(p)) {
-        // Если кадр заявлен как solo / close-up (особенно PANEL3), удаляем противоречащие теги общего плана и толпы, из-за которых NovelAI делит кадр пополам!
+
+    if (isDetailOrMacroPanelPrompt(p)) {
+        // Если это крупный фрейм детали (змея/животное, предмет, руки или 18+ интимный план без лиц):
+        // 1) Убираем случайно попавшие из шаблона теги калибровки полного роста и общих планов, чтобы они не заставляли NovelAI рисовать людей в полный рост вместо детали!
+        p = p
+            .replace(/1\.3::tall lean adult man[^:]*::\s*,?/gi, '')
+            .replace(/-1\.5::otoko no ko[^:]*::\s*,?/gi, '')
+            .replace(/\b(?:tall lean adult man|adult male proportions|man slightly taller than woman|equal head and body scale|long male legs|wider male shoulders|wide establishing shot|wide shot|full body|cowboy shot|medium two-shot|two-shot|group shot|crowd|portrait|upper body|[2-9]boys|[2-9]girls|multiple boys|multiple girls|(?:three|four|five|six|seven)\s+people[^,]*)\b\s*,?/gi, '');
+        // 2) Если это чистый кадр животного или предмета (no humans / animal focus / object focus), убираем 1boy/1girl, чтобы NovelAI рисовал только само животное/предмет на весь фрейм!
+        if (/\b(no humans|animal focus|object focus|food focus|still life|weapon focus)\b/i.test(p)) {
+            p = p.replace(/\b(?:[1-9]boys?|[1-9]girls?|male|female|adult man|adult woman)\b\s*:?\s*,?/gi, '');
+        }
+        return p.replace(/,\s*,+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').trim();
+    }
+
+    // Для портретных кадров лиц заменяем макро-крупный план одних глаз (extreme close-up on face and eyes) на портрет по плечи/грудь (close-up, portrait, upper body),
+    // чтобы лицо всегда располагалось в верхней половине кадра, а нижняя четверть (грудь/плечи) оставалась свободной под облачко реплики!
+    p = p.replace(/\bextreme\s+close-up\s+on\s+(?:face|eyes)(?:\s+and\s+(?:eyes|face))?\b/gi, 'close-up, portrait, upper body');
+    const isCloseUpOrSolo = /\b(solo|close-up|portrait)\b/i.test(p) || panelIdx === 2;
+    if (isCloseUpOrSolo && /\b(solo|close-up|portrait)\b/i.test(p)) {
         p = p
             .replace(/\b(?:wide establishing shot|wide shot|full body|medium two-shot|two-shot|group shot|crowd|[2-9]boys|[2-9]girls|multiple boys|multiple girls|(?:three|four|five|six|seven)\s+people[^,]*)\b\s*,?/gi, '')
             .replace(/,\s*,+/g, ', ')
@@ -6697,14 +6984,24 @@ function buildDistinctComicPanelsFallback(baseDesc, charCaptions, isNai = true) 
         panel3 = `solo, close-up, portrait, upper body, expressive emotional reaction, detailed eyes, blurry background, bokeh`;
     }
 
-    return [panel1, panel2, panel3];
+    const panel4 = char1Identity
+        ? `${/\b(woman|girl|female|1girl)\b/i.test(char1Identity) ? '1girl, solo' : '1boy, solo'}, medium close-up, dynamic angle, upper body, ${stripActionAndPropTagsFromCharCaption(char1Identity).replace(/\b([1-9]girls?|[1-9]boys?|multiple boys|multiple girls|wide shot|full body)\b\s*,?/gi, '').trim()}, expressive reaction, detailed background, dramatic lighting`
+        : panel2;
+    return [panel1, panel2, panel3, panel4];
 }
 
 function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, whoNames = []) {
     const cleanDesc = String(frameDesc || '');
+    // Если этот фрейм — крупный план детали (животное/змея, предмет, руки или 18+ интимный крупный план без головы/лица),
+    // НЕ передаём в NovelAI портретный аватар-референс (images) и слоты полных фигур (charCaptions), чтобы NovelAI не пытался пририсовать поверх змеи или детали стоящего человека с лицом!
+    if (isDetailOrMacroPanelPrompt(cleanDesc)) {
+        return baseRefs ? { ...baseRefs, images: [], charCaptions: [], note: '' } : null;
+    }
     const hasGirls = /\b([1-6]girls?|female|woman|girl)\b/i.test(cleanDesc);
     const hasBoys = /\b([1-6]boys?|male|man|boy)\b/i.test(cleanDesc);
-    const isExplicitSolo = /\bsolo\b/i.test(cleanDesc) || (hasGirls && !hasBoys && !/\b[2-6]girls\b/i.test(cleanDesc)) || (hasBoys && !hasGirls && !/\b[2-6]boys\b/i.test(cleanDesc));
+    const hasMultiGirls = /\b([2-6]girls|multiple girls|two women|two girls)\b/i.test(cleanDesc);
+    const hasMultiBoys = /\b([2-6]boys|multiple boys|two men|two boys)\b/i.test(cleanDesc);
+    const isExplicitSolo = /\bsolo\b/i.test(cleanDesc) || (hasGirls && !hasBoys && !hasMultiGirls) || (hasBoys && !hasGirls && !hasMultiBoys);
 
     let activeCharCaps = [];
     if (!isExplicitSolo) {
@@ -6829,7 +7126,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     inSceneBlock = false;
                     const chCap = m[2].trim().replace(/\]$/, '');
                     if (chCap) {
-                        if (lastPanelIndex >= 0 && panelPrompts[lastPanelIndex]) {
+                        // Приклеиваем CHAR к конкретному PANEL только если это 1-й кадр ИЛИ в предыдущих кадрах уже были свои слоты || CHAR;
+                        // если же модель вывела общие CHAR1..CHAR4 в самом конце ответа после всех PANEL1..3, складываем их в общий массив charCaptions!
+                        const isPerPanelChar = lastPanelIndex === 0 || (lastPanelIndex > 0 && panelPrompts[0] && /\|\|\s*CHAR\d+/i.test(panelPrompts[0]));
+                        if (lastPanelIndex >= 0 && panelPrompts[lastPanelIndex] && isPerPanelChar) {
                             panelPrompts[lastPanelIndex] += ` || CHAR${m[1]}: ${chCap}`;
                         } else {
                             charCaptions.push(chCap);
@@ -7009,10 +7309,13 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             if (activeComicOpts.linesMode !== 'off' && !verifiedQuotes.length) {
                 const targetMsgObj = ctx().chat?.[targetMesIdx];
                 const prevMsgObj = targetMesIdx > 0 ? ctx().chat?.[targetMesIdx - 1] : null;
-                const postTxt = String(targetMsgObj?.mes || '');
-                const storyTxt = [prevMsgObj?.mes || '', postTxt].join('\n');
-                // НЕ передаём names.char как defaultSpeaker, чтобы в сценах между НПС их реплики не подписывались именем отсутствующего {{char}}!
-                verifiedQuotes = verifyComicQuotesAgainstStory(rawLlmQuotes, storyTxt, postTxt, '', cast, st);
+                const fullPostTxt = String(targetMsgObj?.mes || '');
+                // Если рисуется конкретный кусочек поста (chunkText), проверяем и извлекаем реплики в первую очередь именно из этого кусочка!
+                const primaryQuoteSource = (activeComicOpts.chunkText && String(activeComicOpts.chunkText).trim())
+                    ? String(activeComicOpts.chunkText).trim()
+                    : fullPostTxt;
+                const storyTxt = [prevMsgObj?.mes || '', fullPostTxt].join('\n');
+                verifiedQuotes = verifyComicQuotesAgainstStory(rawLlmQuotes, fullPostTxt || storyTxt, primaryQuoteSource, '', cast, st, Number(activeComicOpts.framesPerPage) === 4 ? 4 : 3);
                 if (!isNai && verifiedQuotes.length) {
                     prompt += `\nSpeech bubbles (Cyrillic text written exactly as given, never invent other words): ` +
                         verifiedQuotes.map((q, idx) => `Panel ${idx + 1}${q.speaker ? ` (${q.speaker})` : ''}: «${q.text}»`).join('; ');
@@ -7025,13 +7328,13 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         if (activeComicOpts?.enabled && activeComicOpts.stripMode) {
             const cStyle = getComicStyleById(activeComicOpts.styleId);
             const isWebtoonStrip = cStyle?.id === 'webtoon' || cStyle?.id === 'yonkoma';
+            const framesCount = Number(activeComicOpts.framesPerPage) === 4 ? 4 : 3;
             if (!Array.isArray(panelPrompts) || panelPrompts.length < 2) {
                 const generatedFallbackPanels = buildDistinctComicPanelsFallback(desc || prompt, charCaptions, isNai);
                 panelPrompts.length = 0;
-                panelPrompts.push(...generatedFallbackPanels);
-                logImageDiag('Модель промптов не вернула отдельные строки PANEL1..PANEL3 — автоматически построены 3 разных кадра (общий план → смена ракурса/жеста → сольный крупный план эмоции)', panelPrompts.join('\n'));
+                panelPrompts.push(...generatedFallbackPanels.slice(0, framesCount));
+                logImageDiag(`Модель промптов не вернула отдельные строки PANEL1..PANEL${framesCount} — автоматически построены ${framesCount} разных кадра`, panelPrompts.join('\n'));
             } else {
-                // Проверяем, не выдала ли модель 3 почти одинаковых кадра: если 3-й кадр всё ещё содержит те же бытовые предметы/2 людей без крупного плана, усиливаем различие ракурсов
                 const p0 = String(panelPrompts[0] || '').toLowerCase();
                 const p2 = String(panelPrompts[2] || '').toLowerCase();
                 if (panelPrompts.length >= 3 && p0 && p2 && p0 === p2) {
@@ -7039,12 +7342,16 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     panelPrompts[1] = distinct[1];
                     panelPrompts[2] = distinct[2];
                 }
+                while (panelPrompts.length < framesCount) {
+                    const distinct = buildDistinctComicPanelsFallback(desc || panelPrompts[0], charCaptions, isNai);
+                    panelPrompts.push(distinct[panelPrompts.length] || distinct[distinct.length - 1]);
+                }
             }
-            const framesToDraw = panelPrompts.slice(0, 3);
+            const framesToDraw = panelPrompts.slice(0, framesCount);
             const singleFrameNaiStyle = stripMultiPanelTagsForSingleFrame(cStyle?.naiTags || '');
             const frameUrls = [];
             for (let fIdx = 0; fIdx < framesToDraw.length; fIdx++) {
-                sceneDrawingStartedAt = Date.now(); // обновляем таймер на каждом кадре полосы, чтобы 3 кадра не сбрасывались по таймауту!
+                sceneDrawingStartedAt = Date.now(); // обновляем таймер на каждом кадре полосы, чтобы 3–4 кадра не сбрасывались по таймауту!
                 const parsedPanel = parsePanelTextAndCharSlots(framesToDraw[fIdx]);
                 let rawFrameDesc = cleanSingleComicPanelPrompt(parsedPanel.prompt || framesToDraw[fIdx], fIdx);
                 if (/\b[2-6]boys\b/i.test(rawFrameDesc)) {
@@ -7062,8 +7369,9 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     ? (parsedPanel.charCaptions || []).map(c => enforceMonochromeMangaPrompt(c, false))
                     : parsedPanel.charCaptions;
                 const frameRefs = buildRefsForSingleComicFrame(refs, cleanRawFrame, cleanPanelCaps, fIdx, who);
-                // Для 3-кадровой страницы манги 1-й верхний фрейм широкий (landscape), а 2-й и 3-й нижние — вертикальные (portrait); для вебтуна — квадратные/горизонтальные
-                const frameOrient = isWebtoonStrip ? 'square' : (fIdx === 0 && framesToDraw.length === 3 ? 'landscape' : 'portrait');
+                // Для 3 кадров: 1-й landscape + 2-й и 3-й portrait; для 4 кадров (манхва 1+2+1): 1-й и 4-й landscape, 2-й и 3-й portrait
+                const isWideRowFrame = (framesToDraw.length === 3 && fIdx === 0) || (framesToDraw.length === 4 && (fIdx === 0 || fIdx === 3));
+                const frameOrient = isWebtoonStrip ? 'square' : (isWideRowFrame ? 'landscape' : 'portrait');
                 logImageDiag(`Комикс-полоса: рисуем кадр ${fIdx + 1} из ${framesToDraw.length} (${frameOrient}, слотов CHAR: ${frameRefs?.charCaptions?.length || 0})`, framePrompt);
                 toastr.info(`🎨 Рисуем кадр комикса ${fIdx + 1} из ${framesToDraw.length}…`, '💬 Комикс по кадрам', { timeOut: 15000 });
                 const fUrl = await withTimeout(drawPicture(framePrompt, frameRefs, frameOrient), 120000, `кадр комикса ${fIdx + 1}`);
@@ -7085,7 +7393,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             // Если это комикс в NovelAI и включены реплики из поста — накладываем аккуратные русские облачка реплик (а чистую версию без текста тоже сохраняем в историю поста!)
             if (activeComicOpts?.enabled && isNai && activeComicOpts.linesMode !== 'off' && verifiedQuotes.length > 0 && rawUrl) {
                 cleanUnletteredUrl = rawUrl;
-                const letteredDataUrl = await overlayComicBubblesOnDataUrl(rawUrl, verifiedQuotes);
+                const letteredDataUrl = await overlayComicBubblesOnDataUrl(rawUrl, verifiedQuotes, activeComicOpts);
                 if (letteredDataUrl && letteredDataUrl !== rawUrl) {
                     url = await storeImage(letteredDataUrl);
                 }
@@ -7095,6 +7403,18 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         logImageDiag('Картинка успешно получена и сохранена!', url ? String(url).slice(0, 120) : '');
         const prevCleanMap = (reuseMeta?.cleanUrlMap && typeof reuseMeta.cleanUrlMap === 'object') ? { ...reuseMeta.cleanUrlMap } : {};
         if (url && cleanUnletteredUrl) prevCleanMap[url] = cleanUnletteredUrl;
+        const prevPageMetaMap = (reuseMeta?.pageMetaMap && typeof reuseMeta.pageMetaMap === 'object') ? { ...reuseMeta.pageMetaMap } : {};
+        if (url) {
+            prevPageMetaMap[url] = {
+                desc,
+                prompt,
+                charCaptions: [...charCaptions],
+                panelPrompts: [...panelPrompts],
+                comicQuotes: [...verifiedQuotes],
+                comicOpts: activeComicOpts ? { ...activeComicOpts } : null,
+                cleanUnletteredUrl: cleanUnletteredUrl || url,
+            };
+        }
         const sceneMeta = {
             desc,
             extraNeg,
@@ -7109,6 +7429,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             panelPrompts,
             cleanUnletteredUrl: cleanUnletteredUrl || '',
             cleanUrlMap: prevCleanMap,
+            pageMetaMap: prevPageMetaMap,
         };
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
@@ -7138,16 +7459,45 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
         const m = c.chat[i];
         if (!m || m.is_system) continue;
         m.extra = m.extra || {};
-        const prevHistory = Array.isArray(m.extra.nnbScene?.history) ? [...m.extra.nnbScene.history] : (m.extra.nnbScene?.url ? [m.extra.nnbScene.url] : []);
-        if (sceneMeta?.cleanUnletteredUrl && sceneMeta.cleanUnletteredUrl !== url && !prevHistory.includes(sceneMeta.cleanUnletteredUrl)) {
-            prevHistory.push(sceneMeta.cleanUnletteredUrl);
-        }
+        const oldScene = m.extra.nnbScene || {};
+        const prevHistory = Array.isArray(oldScene.history) ? [...oldScene.history] : (oldScene.url ? [oldScene.url] : []);
         if (url && !prevHistory.includes(url)) prevHistory.push(url);
         if (sceneMeta) {
-            m.extra.nnbScene = { ...sceneMeta, url, history: prevHistory, mesId: i };
+            const mergedCleanMap = { ...(oldScene.cleanUrlMap || {}), ...(sceneMeta.cleanUrlMap || {}) };
+            if (url && sceneMeta.cleanUnletteredUrl) mergedCleanMap[url] = sceneMeta.cleanUnletteredUrl;
+            const mergedPageMetaMap = { ...(oldScene.pageMetaMap || {}), ...(sceneMeta.pageMetaMap || {}) };
+            const activePageMeta = mergedPageMetaMap[url] || null;
+            m.extra.nnbScene = {
+                ...oldScene,
+                ...sceneMeta,
+                ...(activePageMeta ? {
+                    desc: activePageMeta.desc || sceneMeta.desc,
+                    prompt: activePageMeta.prompt || sceneMeta.prompt,
+                    charCaptions: activePageMeta.charCaptions || sceneMeta.charCaptions,
+                    panelPrompts: activePageMeta.panelPrompts || sceneMeta.panelPrompts,
+                    comicQuotes: activePageMeta.comicQuotes || sceneMeta.comicQuotes,
+                    comicOpts: activePageMeta.comicOpts || sceneMeta.comicOpts,
+                    cleanUnletteredUrl: activePageMeta.cleanUnletteredUrl || sceneMeta.cleanUnletteredUrl,
+                } : {}),
+                url,
+                history: prevHistory,
+                cleanUrlMap: mergedCleanMap,
+                pageMetaMap: mergedPageMetaMap,
+                mesId: i,
+            };
         } else if (m.extra.nnbScene) {
             m.extra.nnbScene.url = url;
             m.extra.nnbScene.history = prevHistory;
+            const pageData = m.extra.nnbScene.pageMetaMap?.[url];
+            if (pageData) {
+                m.extra.nnbScene.desc = pageData.desc || m.extra.nnbScene.desc;
+                m.extra.nnbScene.prompt = pageData.prompt || m.extra.nnbScene.prompt;
+                m.extra.nnbScene.charCaptions = pageData.charCaptions || m.extra.nnbScene.charCaptions;
+                m.extra.nnbScene.panelPrompts = pageData.panelPrompts || m.extra.nnbScene.panelPrompts;
+                m.extra.nnbScene.comicQuotes = pageData.comicQuotes || m.extra.nnbScene.comicQuotes;
+                m.extra.nnbScene.comicOpts = pageData.comicOpts || m.extra.nnbScene.comicOpts;
+                m.extra.nnbScene.cleanUnletteredUrl = pageData.cleanUnletteredUrl || m.extra.nnbScene.cleanUnletteredUrl;
+            }
         }
         // Все варианты сохраняются в галерее поста и в альбоме до ручной очистки пользователем
         const imgDesc = Object.getOwnPropertyDescriptor(m.extra, 'image');
@@ -7463,6 +7813,26 @@ async function offloadAllBase64InChatAndMeta(st) {
                 await offloadField(sc, 'url');
                 await offloadField(sc, 'cleanUnletteredUrl');
                 await offloadArray(sc.history);
+                if (sc.cleanUrlMap && typeof sc.cleanUrlMap === 'object') {
+                    const nextCleanMap = {};
+                    for (const [k, v] of Object.entries(sc.cleanUrlMap)) {
+                        const nk = await convertOne(k);
+                        const nv = await convertOne(v);
+                        if (nk) nextCleanMap[nk] = nv;
+                    }
+                    sc.cleanUrlMap = nextCleanMap;
+                }
+                if (sc.pageMetaMap && typeof sc.pageMetaMap === 'object') {
+                    const nextPageMap = {};
+                    for (const [k, v] of Object.entries(sc.pageMetaMap)) {
+                        const nk = await convertOne(k);
+                        if (v && typeof v === 'object') {
+                            await offloadField(v, 'cleanUnletteredUrl');
+                        }
+                        if (nk) nextPageMap[nk] = v;
+                    }
+                    sc.pageMetaMap = nextPageMap;
+                }
             }
             if (Array.isArray(m.extra.media)) {
                 for (const med of m.extra.media) {
@@ -7577,11 +7947,36 @@ async function cleanupBloatedAlbumAndChat(st) {
         if (sc && sc.url) {
             chosenUrls.add(sc.url);
             if (Array.isArray(sc.history) && sc.history.length > 1) {
+                // Если в истории поста лежит многостраничная глава манхвы (разные кусочки поста chunkIndex в pageMetaMap),
+                // бережно сохраняем последнюю страницу каждого кусочка главы, удаляя только старые черновые дубли одного и того же кусочка!
+                const keptByChunk = new Map();
+                let hasMultiChunkPages = false;
                 sc.history.forEach(u => {
-                    if (u && u !== sc.url) discardedDraftUrls.add(u);
+                    const pm = sc.pageMetaMap?.[u];
+                    if (pm?.comicOpts?.stripMode && Number(pm?.comicOpts?.chunkTotal) > 1) {
+                        hasMultiChunkPages = true;
+                        keptByChunk.set(Number(pm.comicOpts.chunkIndex) || 0, u);
+                    }
                 });
-                removedVariants += (sc.history.length - 1);
-                sc.history = [sc.url];
+                const keptSet = new Set([sc.url]);
+                if (hasMultiChunkPages) {
+                    for (const u of keptByChunk.values()) {
+                        if (u) {
+                            keptSet.add(u);
+                            chosenUrls.add(u);
+                        }
+                    }
+                }
+                const nextHist = [];
+                sc.history.forEach(u => {
+                    if (u && keptSet.has(u) && !nextHist.includes(u)) {
+                        nextHist.push(u);
+                    } else if (u) {
+                        discardedDraftUrls.add(u);
+                    }
+                });
+                removedVariants += Math.max(0, sc.history.length - nextHist.length);
+                sc.history = nextHist.length ? nextHist : [sc.url];
             }
             if (Array.isArray(m.extra.media) && m.extra.media.length > 1) {
                 m.extra.media = m.extra.media.filter(x => x.url === sc.url || x.source !== 'generated');
@@ -7724,25 +8119,61 @@ async function redrawSceneBySamePrompt(mesId, customMeta = null) {
     }
 }
 
-// 🎬: рисуем в фоне и ставим картинку отдельным блоком под постом (без перекрывающих текст всплывающих окон!)
+// 🎬: рисуем в фоне и ставим картинку отдельным блоком под постом (с поддержкой многостраничной главы манхвы по кусочкам поста!)
 async function showScenePopup(mesId, forceAsk = false) {
     if (!Number.isInteger(mesId)) mesId = undefined;
     if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится под постом сама', '🎬 Сцена');
     const existingMeta = findSavedSceneMeta(mesId);
-    const choice = await askSceneCameraMode(existingMeta, forceAsk);
+    const choice = await askSceneCameraMode(existingMeta, forceAsk, mesId);
     if (!choice) return;
     const camMode = choice.mode || 'third';
     const reuseMeta = choice.reuseMeta || null;
     const forcedCast = choice.forcedCast || null;
     const whisper = choice.whisper || '';
     const comicOpts = choice.comicOpts || null;
+
+    if (Array.isArray(choice.multiChunkChapter) && choice.multiChunkChapter.length > 1 && comicOpts?.enabled) {
+        const chunks = choice.multiChunkChapter;
+        const note = toastr.info(`Рисуем полноценную главу манхвы из ${chunks.length} страниц (по кусочкам поста)… Каждая готовая страница сразу появится под постом!`, '📚 Глава манхвы', { timeOut: 180000, extendedTimeOut: 30000, tapToDismiss: true });
+        let pagesDone = 0;
+        try {
+            for (let i = 0; i < chunks.length; i++) {
+                const chObj = chunks[i];
+                const chunkComicOpts = {
+                    ...comicOpts,
+                    chunkIndex: chObj.index,
+                    chunkTotal: chObj.total,
+                    chunkText: chObj.text,
+                };
+                toastr.info(`📖 Рисуем страницу манхвы ${i + 1} из ${chunks.length} (кусочек #${i + 1})…`, '📚 Глава манхвы', { timeOut: 25000 });
+                const pageRes = await drawScene(null, mesId, camMode, null, forcedCast, whisper, chunkComicOpts);
+                if (pageRes?.url) {
+                    pagesDone++;
+                    await attachToLastMessage(pageRes.url, mesId, pageRes.sceneMeta, true);
+                }
+            }
+            if (pagesDone > 0) {
+                toastr.success(`Готова глава манхвы из ${pagesDone} страниц! Листай страницы стрелками ◀ ▶ под постом или нажми «📜 Читать лентой»!`, '📚 Глава манхвы', { timeOut: 8000 });
+            }
+        } catch (e) {
+            console.error('[npc_notebook] multiChunkChapter error:', e);
+        } finally {
+            sceneDrawing = false;
+            try { toastr.clear(note); } catch (e) { /* ignore */ }
+        }
+        return;
+    }
+
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean';
+    const chunkBadge = (comicOpts?.enabled && comicOpts?.chunkTotal > 1)
+        ? ` (Страница ${(Number(comicOpts.chunkIndex) || 0) + 1} из ${comicOpts.chunkTotal})`
+        : '';
     const toastMsg = reuseMeta
         ? 'Перерисовываю сцену по готовому промпту… Нажми на уведомление, чтобы скрыть.'
         : comicOpts?.enabled
-            ? (comicOpts.stripMode ? 'Рисую 3 кадра комикса и склеиваю страницу с репликами…' : 'Рисую страницу комикса / манги по текущей сцене…')
+            ? (comicOpts.stripMode ? `Рисую страницу манхвы${chunkBadge} (${Number(comicOpts.framesPerPage) === 4 ? 4 : 3} кадра) и склеиваю с полными репликами…` : 'Рисую страницу комикса / манги по текущей сцене…')
             : (isPov ? 'Рисую сцену от первого лица (POV)… Нажми на уведомление, чтобы скрыть.' : 'Рисую сцену (взгляд со стороны)… Нажми на уведомление, чтобы скрыть.');
-    const note = toastr.info(toastMsg, comicOpts?.enabled ? '💬 Комикс' : '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
+    const note = toastr.info(toastMsg, comicOpts?.enabled ? '💬 Манхва / Комикс' : '🎬 Сцена', { timeOut: 60000, extendedTimeOut: 15000, tapToDismiss: true });
     let res = null;
     try {
         res = await drawScene(null, mesId, camMode, reuseMeta, forcedCast, whisper, comicOpts);
@@ -7755,6 +8186,87 @@ async function showScenePopup(mesId, forceAsk = false) {
     if (res?.url) {
         await attachToLastMessage(res.url, mesId, res.sceneMeta);
     }
+}
+
+function findNextUndrawnChunkIndex(sceneMeta, totalChunks) {
+    if (!sceneMeta || totalChunks <= 1) return -1;
+    const drawnIndices = new Set();
+    const hist = Array.isArray(sceneMeta.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta.url ? [sceneMeta.url] : []);
+    for (const u of hist) {
+        const pm = sceneMeta.pageMetaMap?.[u];
+        const cOpts = pm?.comicOpts || (u === sceneMeta.url ? sceneMeta.comicOpts : null);
+        if (cOpts?.stripMode && Number.isInteger(Number(cOpts.chunkIndex))) {
+            drawnIndices.add(Number(cOpts.chunkIndex));
+        }
+    }
+    if (!drawnIndices.size && sceneMeta.comicOpts?.stripMode) {
+        drawnIndices.add(Number(sceneMeta.comicOpts.chunkIndex) || 0);
+    }
+    for (let i = 0; i < totalChunks; i++) {
+        if (!drawnIndices.has(i)) return i;
+    }
+    return -1;
+}
+
+async function drawNextComicChunkPage(mesId, baseSceneMeta) {
+    if (sceneDrawing) return toastr.info('Сцена уже рисуется — подожди завершения текущего кадра', '📖 Манхва');
+    const c = ctx();
+    const targetIdx = Number.isInteger(mesId) ? mesId : (c.chat.length - 1);
+    const msg = c.chat?.[targetIdx];
+    if (!msg?.mes) return;
+    const chunks = splitPostIntoComicChunks(msg.mes);
+    if (chunks.length <= 1) {
+        return toastr.info('Этот пост короткий и целиком помещается на одну страницу!', '📖 Манхва');
+    }
+    const liveSceneMeta = c.chat?.[targetIdx]?.extra?.nnbScene || baseSceneMeta;
+    const prevOpts = baseSceneMeta?.comicOpts || liveSceneMeta?.comicOpts || {};
+    let nextIdx = findNextUndrawnChunkIndex(liveSceneMeta, chunks.length);
+    if (nextIdx < 0) {
+        nextIdx = Math.min(chunks.length - 1, (Number(prevOpts.chunkIndex) || 0) + 1);
+    }
+    const chObj = chunks[nextIdx];
+    const nextComicOpts = {
+        enabled: true,
+        stripMode: true,
+        framesPerPage: Number(prevOpts.framesPerPage) === 4 ? 4 : (Number(settings().comicFramesPerPage) === 4 ? 4 : 3),
+        styleId: prevOpts.styleId || settings().comicStyleId || 'comicbright',
+        linesMode: prevOpts.linesMode || settings().comicLinesMode || 'auto',
+        chunkIndex: chObj.index,
+        chunkTotal: chObj.total,
+        chunkText: chObj.text,
+    };
+    const note = toastr.info(`Рисуем страницу манхвы ${nextIdx + 1} из ${chunks.length} (кусочек #${nextIdx + 1}: «${escapeHtml(chObj.preview)}»)…`, '📖 Следующая страница манхвы', { escapeHtml: false, timeOut: 75000, extendedTimeOut: 15000 });
+    let res = null;
+    try {
+        res = await drawScene(null, targetIdx, baseSceneMeta?.camMode || 'third', null, baseSceneMeta?.cast?.filter(x => x !== '__none__') || null, '', nextComicOpts);
+    } finally {
+        sceneDrawing = false;
+        try { toastr.clear(note); } catch (e) { /* ignore */ }
+    }
+    if (res?.url) {
+        await attachToLastMessage(res.url, targetIdx, res.sceneMeta);
+        toastr.success(`Страница ${nextIdx + 1} из ${chunks.length} готова и добавлена к посту!`, '📖 Манхва');
+    }
+}
+
+async function openManhwaVerticalReaderModal(mesId, sceneMeta) {
+    const urls = Array.isArray(sceneMeta?.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta?.url ? [sceneMeta.url] : []);
+    if (!urls.length) return;
+    const el = $('<div class="nnb-pop nnb-pop-visual"></div>');
+    el.append(`<h3>📜 Чтение манхвы лентой (${urls.length} стр.)</h3>`);
+    el.append('<div class="nnb-pop-sub">Все сгенерированные страницы этого поста подряд сверху вниз, как в настоящем вебтуне/манхве (нажми на любую страницу, чтобы открыть в полном размере):</div>');
+    const stripWrap = $('<div style="display:flex; flex-direction:column; align-items:center; gap:14px; max-height:74vh; overflow-y:auto; padding:6px;"></div>');
+    urls.forEach((u, idx) => {
+        const pageCard = $('<div style="width:100%; max-width:680px; text-align:center;"></div>');
+        const pMeta = sceneMeta?.pageMetaMap?.[u];
+        const chBadge = (pMeta?.comicOpts?.chunkTotal > 1) ? ` · Кусочек #${(Number(pMeta.comicOpts.chunkIndex) || 0) + 1} из ${pMeta.comicOpts.chunkTotal}` : '';
+        pageCard.append($('<div style="font-size:0.8em; font-weight:700; opacity:0.8; margin-bottom:4px;"></div>').text(`Страница ${idx + 1} из ${urls.length}${chBadge}`));
+        const im = $('<img alt="" style="width:100%; height:auto; border-radius:10px; box-shadow:0 4px 18px rgba(0,0,0,0.35); cursor:pointer;">').attr('src', u).on('click', () => window.open(u, '_blank'));
+        pageCard.append(im);
+        stripWrap.append(pageCard);
+    });
+    el.append(stripWrap);
+    await openPopup(el, true);
 }
 
 // Окно выбора открываем, когда картинка уже готова (или не получилась)
@@ -17258,10 +17770,13 @@ function placeMesButtons() {
                 });
                 navRow.append(prevBtn, promptToggleBtn, nextBtn);
                 if (sceneMeta.cleanUnletteredUrl || sceneMeta.comicOpts?.enabled) {
-                    const editBubblesBtn = $('<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Изменить или добавить русские реплики в облачках прямо поверх этого кадра (мгновенно, без новой генерации в NovelAI!)"><i class="fa-solid fa-comment-dots"></i> Реплики</div>').on('click', async e => {
+                    const curPageMeta = sceneMeta.pageMetaMap?.[curUrl] || null;
+                    const activeComicOptsForSlide = curPageMeta?.comicOpts || sceneMeta.comicOpts;
+                    const editBubblesBtn = $('<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Изменить или добавить русские реплики в облачках прямо поверх этой страницы (мгновенно, без новой генерации в NovelAI!)"><i class="fa-solid fa-comment-dots"></i> Реплики</div>').on('click', async e => {
                         e.stopPropagation();
-                        const curQuotesText = (sceneMeta.comicQuotes || []).map(q => `${q.speaker ? q.speaker + ' | ' : ''}${q.text}`).join('\n');
-                        const editedQ = await askText('Реплики для облачков комикса (по одной на строку в формате «Имя | текст реплики»; оставь пустым, чтобы убрать облачка):', curQuotesText);
+                        const activeQuotes = curPageMeta?.comicQuotes || sceneMeta.comicQuotes || [];
+                        const curQuotesText = activeQuotes.map(q => `${q.speaker ? q.speaker + ' | ' : ''}${q.text}`).join('\n');
+                        const editedQ = await askText('Реплики для облачков этой страницы манхвы (по одной на строку в формате «Имя | текст реплики»; оставь пустым, чтобы показать чистый арт без облачков):', curQuotesText);
                         if (editedQ === null) return;
                         const parsedQ = [];
                         for (const ql of String(editedQ).split(/\r?\n/)) {
@@ -17274,21 +17789,50 @@ function placeMesButtons() {
                         }
                         sceneMeta.comicQuotes = parsedQ;
                         if (!sceneMeta.cleanUrlMap || typeof sceneMeta.cleanUrlMap !== 'object') sceneMeta.cleanUrlMap = {};
-                        const baseCleanUrl = sceneMeta.cleanUrlMap[curUrl] || sceneMeta.cleanUnletteredUrl || curUrl;
+                        const baseCleanUrl = sceneMeta.cleanUrlMap[curUrl] || curPageMeta?.cleanUnletteredUrl || sceneMeta.cleanUnletteredUrl || curUrl;
                         sceneMeta.cleanUrlMap[curUrl] = baseCleanUrl;
-                        if (!sceneMeta.cleanUnletteredUrl) sceneMeta.cleanUnletteredUrl = baseCleanUrl;
                         if (!parsedQ.length) {
+                            const idxInHist = Array.isArray(sceneMeta.history) ? sceneMeta.history.indexOf(curUrl) : -1;
+                            if (idxInHist >= 0) sceneMeta.history[idxInHist] = baseCleanUrl;
                             await attachToLastMessage(baseCleanUrl, mId, sceneMeta, true);
-                            toastr.info('Показана чистая версия кадра без облачков текста', '💬 Реплики');
+                            toastr.info('Показана чистая версия страницы без облачков текста', '💬 Реплики');
                             return;
                         }
-                        const newLetteredData = await overlayComicBubblesOnDataUrl(baseCleanUrl, parsedQ, sceneMeta.comicOpts);
+                        const newLetteredData = await overlayComicBubblesOnDataUrl(baseCleanUrl, parsedQ, activeComicOptsForSlide);
                         const savedUrl = await storeImage(newLetteredData);
                         sceneMeta.cleanUrlMap[savedUrl] = baseCleanUrl;
+                        if (!sceneMeta.pageMetaMap || typeof sceneMeta.pageMetaMap !== 'object') sceneMeta.pageMetaMap = {};
+                        sceneMeta.pageMetaMap[savedUrl] = {
+                            ...(curPageMeta || {}),
+                            comicQuotes: parsedQ,
+                            comicOpts: activeComicOptsForSlide,
+                            cleanUnletteredUrl: baseCleanUrl,
+                        };
+                        const idxInHist = Array.isArray(sceneMeta.history) ? sceneMeta.history.indexOf(curUrl) : -1;
+                        if (idxInHist >= 0) sceneMeta.history[idxInHist] = savedUrl;
                         await attachToLastMessage(savedUrl, mId, sceneMeta, true);
-                        toastr.success('Облачка с репликами обновлены на этом кадре!', '💬 Реплики комикса');
+                        toastr.success('Облачка с репликами обновлены на этой странице!', '💬 Реплики манхвы');
                     });
                     navRow.append(editBubblesBtn);
+
+                    // Если пост разбит на кусочки и есть ещё не нарисованный кусочек — показываем кнопку «📖 + Стр. X/Y» прямо под картинкой!
+                    const msgPostTxt = c.chat?.[mId]?.mes || '';
+                    const totalChunksInPost = splitPostIntoComicChunks(msgPostTxt).length;
+                    const nextUndrawnChunkIdx = activeComicOptsForSlide?.stripMode ? findNextUndrawnChunkIndex(sceneMeta, totalChunksInPost) : -1;
+                    if (activeComicOptsForSlide?.stripMode && totalChunksInPost > 1 && nextUndrawnChunkIdx >= 0) {
+                        const nextChunkBtn = $(`<div class="menu_button nnb-btn-primary" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Нарисовать следующую страницу манхвы по кусочку #${nextUndrawnChunkIdx + 1} из ${totalChunksInPost} этого поста"><i class="fa-solid fa-book-medical"></i> + Стр. ${nextUndrawnChunkIdx + 1}/${totalChunksInPost}</div>`).on('click', async e => {
+                            e.stopPropagation();
+                            await drawNextComicChunkPage(mId, { ...sceneMeta, comicOpts: activeComicOptsForSlide });
+                        });
+                        navRow.append(nextChunkBtn);
+                    }
+                    if (hist.length > 1) {
+                        const readerBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Открыть все ${hist.length} страниц этой главы вертикальной лентой сверху вниз, как в манхве/вебтуне"><i class="fa-solid fa-scroll"></i> Лента (${hist.length} стр.)</div>`).on('click', e => {
+                            e.stopPropagation();
+                            openManhwaVerticalReaderModal(mId, sceneMeta);
+                        });
+                        navRow.append(readerBtn);
+                    }
                 }
                 if (hist.length > 1) {
                     const keepOnlyBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Удалить остальные ${hist.length - 1} черновых вариантов этой сцены и оставить только текущий кадр (освобождает память чата)"><i class="fa-solid fa-broom"></i> Оставить только этот</div>`).on('click', async e => {
@@ -17314,15 +17858,30 @@ function placeMesButtons() {
                 bar.append(navRow);
 
                 const promptBox = $('<div class="nnb-inline-scene-prompt" style="display:none; width:100%; margin-top:6px;"></div>');
-                const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой сцены (можно подправить теги и строки CHAR1/CHAR2 вручную и нажать ▶)"></textarea>').val(formatEditableScenePrompt(sceneMeta));
+                const promptArea = $('<textarea class="text_pole" rows="3" style="width:100%; font-size:0.82em;" placeholder="Промпт этой страницы/сцены (можно подправить теги, PANEL1..4 или QUOTE1..4 вручную и перерисовать)"></textarea>').val(formatEditableScenePrompt(sceneMeta));
                 promptArea.on('click', e => e.stopPropagation());
                 promptArea.on('input change', function () {
                     const val = String($(this).val() || '').trim();
                     if (val) {
                         applyEditedScenePromptToMeta(sceneMeta, val);
+                        if (curUrl) {
+                            if (!sceneMeta.pageMetaMap || typeof sceneMeta.pageMetaMap !== 'object') sceneMeta.pageMetaMap = {};
+                            sceneMeta.pageMetaMap[curUrl] = {
+                                ...(sceneMeta.pageMetaMap[curUrl] || {}),
+                                desc: sceneMeta.desc,
+                                prompt: sceneMeta.prompt,
+                                charCaptions: sceneMeta.charCaptions,
+                                panelPrompts: sceneMeta.panelPrompts,
+                                comicQuotes: sceneMeta.comicQuotes,
+                            };
+                        }
                     }
                 });
-                promptBox.append(promptArea);
+                const rerollThisSlideBtn = $('<div class="menu_button nnb-btn-primary" style="margin-top:4px; padding:4px 10px; font-size:0.8em; width:100%; text-align:center;"><i class="fa-solid fa-rotate"></i> Перерисовать эту страницу по промпту выше</div>').on('click', async e => {
+                    e.stopPropagation();
+                    await redrawSceneBySamePrompt(mId, sceneMeta);
+                });
+                promptBox.append(promptArea, rerollThisSlideBtn);
                 bar.append(promptBox);
 
                 promptToggleBtn.on('click', e => {
