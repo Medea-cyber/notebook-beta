@@ -2676,29 +2676,40 @@ ${writerNote}]
             messages.push({ role: 'system', content: writerNote });
         }
         messages.push({ role: 'user', content: fullPrompt });
-        const res = await withTimeout(imagesFetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-            body: JSON.stringify({
-                model,
-                messages,
-                max_tokens: 4096,
-                temperature: 0.55,
-            }),
-        }), 75000, `модель промптов картинок (${model})`);
-        const text = await res.text();
-        let json = null;
-        try { json = JSON.parse(text); } catch (e) { /* ignore */ }
-        if (!res.ok) {
-            throw new Error(`API промптов картинок (${res.status}): ${String(json?.error?.message || text).slice(0, 200)}`);
-        }
-        return extractTextFromApiResult(json) || text;
+        return await withSharedKeyRetry(async () => {
+            const res = await withTimeout(imagesFetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${key}`,
+                },
+                body: JSON.stringify({
+                    model,
+                    messages,
+                    max_tokens: 4096,
+                    temperature: 0.55,
+                }),
+            }), 75000, `модель промптов картинок (${model})`);
+            const text = await res.text();
+            let json = null;
+            try { json = JSON.parse(text); } catch (e) { /* ignore */ }
+            if (!res.ok) {
+                throw new Error(`API промптов картинок (${res.status}): ${String(json?.error?.message || text).slice(0, 200)}`);
+            }
+            const extracted = extractTextFromApiResult(json) || text;
+            if (!extracted || !String(extracted).trim()) {
+                throw new Error('Модель промптов вернула пустой ответ');
+            }
+            return extracted;
+        }, `промпт раскадровки (${model})`, 5, 4000);
     }
 
-    return await sendViaTavernProfile(src, fullPrompt, 4096, 'профиль модели для промптов картинок', writerNote, true);
+    return await withSharedKeyRetry(
+        () => sendViaTavernProfile(src, fullPrompt, 4096, 'профиль модели для промптов картинок', writerNote, true),
+        'профиль промптов раскадровки',
+        5,
+        4000
+    );
 }
 
 async function quietGenerateImagePrompt(prompt) {
@@ -4587,6 +4598,49 @@ async function unpackZipFirstFile(u8) {
     throw new Error('Неподдерживаемый метод сжатия ZIP: ' + compression);
 }
 
+function isPermanentAuthOrConfigError(err) {
+    const msg = String(err?.message || err || '');
+    return /\b(401\s+Unauthorized|402\b|недостаточно\s+Anlas|заполни\s+адрес\s+API|не\s+выбрано,\s+чем\s+рисовать|Invalid\s+API\s+key|Incorrect\s+API\s+key)\b/i.test(msg);
+}
+
+// Защита при общем ключе (когда с одного токена NovelAI или GLM сидят двое):
+// автоматически ждёт несколько секунд с небольшим случайным сдвигом (jitter) и повторяет запрос, пока ключ не освободится!
+async function withSharedKeyRetry(taskFn, label = 'генерация', maxAttempts = 6, baseDelayMs = 4500) {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            if (typeof sceneDrawing !== 'undefined' && sceneDrawing) {
+                sceneDrawingStartedAt = Date.now();
+            }
+            return await taskFn(attempt);
+        } catch (err) {
+            lastErr = err;
+            if (isPermanentAuthOrConfigError(err) || attempt >= maxAttempts) {
+                throw err;
+            }
+            const jitterMs = Math.floor(Math.random() * 1400);
+            const waitMs = Math.min(16000, baseDelayMs + (attempt - 1) * 2000 + jitterMs);
+            const waitSec = Math.round(waitMs / 100) / 10;
+            if (typeof sceneDrawing !== 'undefined' && sceneDrawing) {
+                sceneDrawingStartedAt = Date.now();
+            }
+            logImageDiag(`⏳ Ключ занят / сбой (${label}, попытка ${attempt}/${maxAttempts}) — авто-повтор через ${waitSec} сек.`, err?.message || String(err));
+            if (typeof toastr !== 'undefined') {
+                toastr.info(
+                    `⏳ Ключ сейчас занят параллельной генерацией (${escapeHtml(label)}, попытка ${attempt + 1}/${maxAttempts}) — ждём ${waitSec} сек. и автоматически повторяем запрос…`,
+                    '🔄 Очередь общего ключа',
+                    { escapeHtml: false, timeOut: waitMs + 400 }
+                );
+            }
+            await new Promise(r => setTimeout(r, waitMs));
+            if (typeof sceneDrawing !== 'undefined' && sceneDrawing) {
+                sceneDrawingStartedAt = Date.now();
+            }
+        }
+    }
+    throw lastErr;
+}
+
 async function parseNovelAiResponse(res) {
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
@@ -4921,26 +4975,31 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
         }
 
         const sendNaiDirect = async pObj => {
-            const body = {
-                input: fullPrompt,
-                model,
-                action: 'generate',
-                parameters: pObj,
-            };
-            const res = await withTimeout(
-                imagesFetch('https://image.novelai.net/ai/generate-image', {
-                    method: 'POST',
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        Accept: '*/*',
-                    },
-                    body: JSON.stringify(body),
-                }),
-                90000,
-                'NovelAI рисунок'
-            );
-            return await parseNovelAiResponse(res);
+            return await withSharedKeyRetry(async () => {
+                const newSeed = Math.floor(Math.random() * 4294967295);
+                pObj.seed = newSeed;
+                pObj.extra_noise_seed = newSeed;
+                const body = {
+                    input: fullPrompt,
+                    model,
+                    action: 'generate',
+                    parameters: pObj,
+                };
+                const res = await withTimeout(
+                    imagesFetch('https://image.novelai.net/ai/generate-image', {
+                        method: 'POST',
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            'Content-Type': 'application/json',
+                            Accept: '*/*',
+                        },
+                        body: JSON.stringify(body),
+                    }),
+                    90000,
+                    'NovelAI рисунок'
+                );
+                return await parseNovelAiResponse(res);
+            }, 'NovelAI кадр', 6, 4500);
         };
 
         try {
@@ -4974,29 +5033,31 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
         }
     }
 
-    // Если поле ключа пустое — пробуем встроенный эндпоинт SillyTavern /api/novelai/generate-image (ключ из Таверны)
-    const stRes = await withTimeout(
-        fetch('/api/novelai/generate-image', {
-            method: 'POST',
-            headers: ctx().getRequestHeaders(),
-            body: JSON.stringify({
-                prompt: fullPrompt,
-                model,
-                sampler,
-                scheduler,
-                steps,
-                scale,
-                width,
-                height,
-                negative_prompt: negPrompt,
-                seed,
-                n_samples: 1,
+    // Если поле ключа пустое — пробуем встроенный эндпоинт SillyTavern /api/novelai/generate-image (ключ из Таверны) с авто-повтором при занятом ключе
+    const dataUrl = await withSharedKeyRetry(async () => {
+        const stRes = await withTimeout(
+            fetch('/api/novelai/generate-image', {
+                method: 'POST',
+                headers: ctx().getRequestHeaders(),
+                body: JSON.stringify({
+                    prompt: fullPrompt,
+                    model,
+                    sampler,
+                    scheduler,
+                    steps,
+                    scale,
+                    width,
+                    height,
+                    negative_prompt: negPrompt,
+                    seed: Math.floor(Math.random() * 4294967295),
+                    n_samples: 1,
+                }),
             }),
-        }),
-        90000,
-        'NovelAI через Таверну'
-    );
-    const dataUrl = await parseNovelAiResponse(stRes);
+            90000,
+            'NovelAI через Таверну'
+        );
+        return await parseNovelAiResponse(stRes);
+    }, 'NovelAI через Таверну', 6, 4500);
     return storeImage(dataUrl);
 }
 
@@ -7725,8 +7786,12 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 const isWideRowFrame = (framesToDraw.length === 3 && fIdx === 0) || (framesToDraw.length === 4 && (fIdx === 0 || fIdx === 3));
                 const frameOrient = isWebtoonStrip ? 'square' : (isWideRowFrame ? 'landscape' : 'portrait');
                 logImageDiag(`Комикс-полоса: рисуем кадр ${fIdx + 1} из ${framesToDraw.length} (${frameOrient}, слотов CHAR: ${frameRefs?.charCaptions?.length || 0})`, framePrompt);
-                toastr.info(`🎨 Рисуем кадр комикса ${fIdx + 1} из ${framesToDraw.length}…`, '💬 Комикс по кадрам', { timeOut: 15000 });
-                const fUrl = await withTimeout(drawPicture(framePrompt, frameRefs, frameOrient), 120000, `кадр комикса ${fIdx + 1}`);
+                toastr.info(`🎨 Рисуем кадр манхвы ${fIdx + 1} из ${framesToDraw.length}…`, '💬 Манхва по кадрам', { timeOut: 15000 });
+                const fUrl = await withSharedKeyRetry(async () => {
+                    const outUrl = await withTimeout(drawPicture(framePrompt, frameRefs, frameOrient), 120000, `кадр манхвы ${fIdx + 1}`);
+                    if (!outUrl) throw new Error(`Пустой ответ на кадре ${fIdx + 1}`);
+                    return outUrl;
+                }, `кадр ${fIdx + 1}/${framesToDraw.length}`, 4, 5500);
                 if (fUrl) frameUrls.push(fUrl);
             }
             if (!frameUrls.length) throw new Error('Не удалось сгенерировать кадры для склейки комикса');
@@ -8503,7 +8568,16 @@ async function showScenePopup(mesId, forceAsk = false) {
                     chapterCharPassport: chapterPassport,
                 };
                 toastr.info(`📖 Рисуем страницу манхвы ${i + 1} из ${chunks.length} (кусочек #${i + 1})…`, '📚 Глава манхвы', { timeOut: 25000 });
-                const pageRes = await drawScene(null, mesId, camMode, null, forcedCast, whisper, chunkComicOpts);
+                let pageRes = null;
+                for (let pageAttempt = 1; pageAttempt <= 4; pageAttempt++) {
+                    pageRes = await drawScene(null, mesId, camMode, null, forcedCast, whisper, chunkComicOpts);
+                    if (pageRes?.url) break;
+                    if (pageAttempt < 4) {
+                        const waitSec = 5 + pageAttempt * 2;
+                        toastr.info(`⏳ Ключ был занят на странице ${i + 1} из ${chunks.length} — ждём ${waitSec} сек. и повторяем эту страницу, прежде чем идти дальше…`, '🔄 Очередь страниц манхвы', { timeOut: waitSec * 1000 });
+                        await new Promise(r => setTimeout(r, waitSec * 1000));
+                    }
+                }
                 if (pageRes?.url) {
                     pagesDone++;
                     if (pageRes.sceneMeta) {
