@@ -2637,7 +2637,7 @@ function adaptWriterNoteForTask(rawWriterNote, isComicStripTask) {
     if (isComicStripTask) {
         // Если в пользовательском промпте для GLM написано «Выдай ТОЛЬКО строки CAST и SCENE», заменяем это требование на формат кадров комикса, чтобы GLM не игнорировал PANEL1..4!
         note = note.replace(/выдай\s+только\s+строки\s+CAST\s+и\s+SCENE[^\n.]*/gi, 'В РЕЖИМЕ КОМИКСА выдай ТОЛЬКО строки CAST, PANEL1..PANEL3 (или PANEL4) и QUOTE1..QUOTE3 (или QUOTE4) БЕЗ общей строки SCENE!');
-        note += '\n\n[ВАЖНОЕ ПРАВИЛО ДЛЯ РАСКАДРОВКИ МАНХВЫ / КОМИКСА (PANEL1..PANEL3/4):\n1) Выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: (и PANEL4:, если запрошено 4 фрейма) + QUOTE1:, QUOTE2:, QUOTE3: (строку SCENE писать НЕ нужно!).\n2) В КАЖДОЙ строке QUOTE пиши ПОЛНОЕ, ЗАКОНЧЕННОЕ предложение из прямой речи до точки/восклицательного/вопросительного знака (до 145 символов) — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО обрывать фразу многоточием на середине мысли!\n3) 🔍 ИСКЛЮЧЕНИЕ ДЛЯ КРУПНЫХ ФРЕЙМОВ ДЕТАЛЕЙ (ЖИВОТНЫЕ, ПРЕДМЕТЫ, РУКИ, ИНТИМ 18+): правила выше про обязательные теги 1boy/1girl, калибровку полного роста (tall lean adult man, long male legs, wider male shoulders) и описание лиц/причёсок действуют ТОЛЬКО для кадров с людьми в полный/средний рост! Если в отрывке есть животное/питомец (например, змея, кот, собака), важный предмет, тактильный жест рук ИЛИ эротика/интим 18+ (гениталии, проникновение, ласки крупным планом) — ОБЯЗАТЕЛЬНО сделай один из фреймов (PANEL2 или PANEL3) КРУПНЫМ ФРЕЙМОМ ЭТОЙ ДЕТАЛИ БЕЗ лиц и БЕЗ тегов роста (для животного/предмета пиши: no humans, animal focus / object focus, close-up, macro shot, ...; для эротики 18+ или рук пиши: nsfw, explicit, close-up, intimate close-up, head out of frame, cropped, focus on [конкретная деталь тела/гениталий/рук]).\n4) В остальных кадрах НЕ пихай толпу (4–7 человек): рисуй 1–2 участников текущего момента, а для эмоционального портрета используй сольный план по плечи/грудь (1boy, solo, close-up, portrait, upper body или 1girl, solo, close-up, portrait, upper body).\n5) Не переводи метафоры буквально: вместо "lion mane" у человека пиши "thick wild hair", вместо "greenish-pale" пиши "pale skin, unwell, sweatdrop".]';
+        note += '\n\n[ВАЖНОЕ ПРАВИЛО ДЛЯ РАСКАДРОВКИ МАНХВЫ / КОМИКСА (PANEL1..PANEL3/4):\n1) Выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: (и PANEL4:, если запрошено 4 фрейма) + QUOTE1:, QUOTE2:, QUOTE3: (строку SCENE писать НЕ нужно!).\n2) В КАЖДОЙ строке QUOTE пиши ПОЛНОЕ, ЗАКОНЧЕННОЕ предложение целиком до финальной точки, восклицательного или вопросительного знака (БЕЗ сокращений и БЕЗ многоточия «...» на середине предложения!): для прямой речи пиши `SPEECH | Имя | текст`, для мыслей про себя — `THOUGHT | Имя | текст`, для авторского описания — `NARRATION | полное предложение описания БЕЗ имени` (не бери в NARRATION обрубки речевых глаголов вроде «сказала она» или «проворковала юристка», бери полноценные предложения действия!). Ставь каждую строку QUOTE строго под тот номер фрейма PANEL, к которому относится этот текст (под безлюдный кадр животного/детали ставь NARRATION про эту деталь, а под кадр с человеком — его SPEECH или THOUGHT)!\n3) 🔍 ИСКЛЮЧЕНИЕ ДЛЯ КРУПНЫХ ФРЕЙМОВ ДЕТАЛЕЙ (ЖИВОТНЫЕ, ПРЕДМЕТЫ, РУКИ, ИНТИМ 18+): правила выше про обязательные теги 1boy/1girl, калибровку полного роста (tall lean adult man, long male legs, wider male shoulders) и описание лиц/причёсок действуют ТОЛЬКО для кадров с людьми в полный/средний рост! Если в отрывке есть животное/питомец (например, змея, кот, собака), важный предмет, тактильный жест рук ИЛИ эротика/интим 18+ (гениталии, проникновение, ласки крупным планом) — ОБЯЗАТЕЛЬНО сделай один из фреймов (PANEL2 или PANEL3) КРУПНЫМ ФРЕЙМОМ ЭТОЙ ДЕТАЛИ БЕЗ лиц и БЕЗ тегов роста (для животного/предмета пиши: no humans, animal focus / object focus, close-up, macro shot, ...; для эротики 18+ или рук пиши: nsfw, explicit, close-up, intimate close-up, head out of frame, cropped, focus on [конкретная деталь тела/гениталий/рук]).\n4) В остальных кадрах НЕ пихай толпу (4–7 человек): рисуй 1–2 участников текущего момента, а для эмоционального портрета используй сольный план по плечи/грудь (1boy, solo, close-up, portrait, upper body или 1girl, solo, close-up, portrait, upper body).\n5) Не переводи метафоры буквально: вместо "lion mane" у человека пиши "thick wild hair", вместо "greenish-pale" пиши "pale skin, unwell, sweatdrop".]';
     }
     return note;
 }
@@ -5612,11 +5612,11 @@ function stripNarratorDashAttribution(rawText) {
     return out.trim();
 }
 
-function formatCompleteQuoteSentence(rawStr, maxChars = 165) {
+function formatCompleteQuoteSentence(rawStr, maxChars = 240) {
     let s = String(rawStr || '').replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
     if (!s) return '';
     if (s.length <= maxChars) return s;
-    const sentences = s.split(/(?<=[.!?…])\s+/).filter(Boolean);
+    const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
     if (sentences.length > 1) {
         let acc = '';
         for (const sent of sentences) {
@@ -5624,24 +5624,22 @@ function formatCompleteQuoteSentence(rawStr, maxChars = 165) {
             if (next.length <= maxChars) acc = next;
             else break;
         }
-        if (acc && acc.length >= 12) return acc.trim();
-        if (sentences[0].length <= maxChars + 20) return sentences[0].trim();
+        if (acc && acc.length >= 15) return acc.trim();
+        if (sentences[0].length <= maxChars + 25) return sentences[0].trim();
     }
     const sub = s.slice(0, maxChars);
     const clauseBreak = Math.max(sub.lastIndexOf(' — '), sub.lastIndexOf(' – '), sub.lastIndexOf('; '), sub.lastIndexOf(', '));
-    if (clauseBreak > 55) {
-        return sub.slice(0, clauseBreak).replace(/[,;:\s—–-]+$/, '') + '…';
+    if (clauseBreak > 135) {
+        return sub.slice(0, clauseBreak).replace(/[,;:\s—–-]+$/, '') + '.';
     }
     const sp = sub.lastIndexOf(' ');
-    return (sp > 40 ? sub.slice(0, sp) : sub).replace(/[,;:\s]+$/, '') + '…';
+    return (sp > 80 ? sub.slice(0, sp) : sub).replace(/[,;:\s]+$/, '') + '…';
 }
 
-// Авто-восстановление оборванной реплики/мысли/описания по тексту поста (даже если модель оборвала строку на 2 словах вроде «На зад» или на тире!)
+// Авто-восстановление оборванной реплики/мысли/описания по тексту поста (даже если модель поставила «...» на середине предложения или чуть перефразировала середину!)
 function restoreFullQuoteFromSource(rawQuote, sourceText) {
     let s = String(rawQuote || '').replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
     if (!s || !sourceText) return s;
-    const looksTruncated = s.endsWith('...') || s.endsWith('…') || s.length < 18 || !/[.!?…»"”)]$/.test(s);
-    if (!looksTruncated) return stripNarratorDashAttribution(s);
     const prefix = s.replace(/[.…,;:\s—–-]+$/, '').trim();
     if (prefix.length < 4) return s;
 
@@ -5649,26 +5647,36 @@ function restoreFullQuoteFromSource(rawQuote, sourceText) {
     const lowSrc = cleanSrc.toLowerCase().replace(/ё/g, 'е');
     const lowPref = prefix.toLowerCase().replace(/ё/g, 'е');
     let hitIdx = lowSrc.indexOf(lowPref);
-    if (hitIdx < 0 && lowPref.length >= 20) {
-        hitIdx = lowSrc.indexOf(lowPref.slice(0, 20).trim());
+    if (hitIdx < 0 && lowPref.length >= 16) {
+        hitIdx = lowSrc.indexOf(lowPref.slice(0, 16).trim());
+    }
+    if (hitIdx < 0) {
+        // Пробуем найти по первым 2–3 словам фразы
+        const firstWords = lowPref.split(/\s+/).slice(0, 3).join(' ');
+        if (firstWords.length >= 8) {
+            hitIdx = lowSrc.indexOf(firstWords);
+        }
     }
     if (hitIdx < 0) return stripNarratorDashAttribution(s);
 
-    let lineRem = cleanSrc.slice(hitIdx, hitIdx + 340).split('\n')[0].replace(/\s+/g, ' ').trim();
+    // Если модель обрезала фразу точками (...) или не дописала предложение до конца в оригинале — всегда берём полное предложение из исходного текста поста до настоящей точки/восклицательного/вопросительного знака!
+    let lineRem = cleanSrc.slice(hitIdx, hitIdx + 380).split('\n')[0].replace(/\s+/g, ' ').trim();
     const closeQ = lineRem.search(/[»”"]/);
     const openQ = lineRem.search(/[«“]/);
     if (closeQ >= 0 && (openQ < 0 || closeQ < openQ)) {
         lineRem = lineRem.slice(0, closeQ).trim();
     }
     lineRem = stripNarratorDashAttribution(lineRem);
-    if (lineRem.length > prefix.length) {
-        const tailMatch = lineRem.slice(prefix.length).match(/^[^.!?…]*[.!?…]/);
-        if (tailMatch && tailMatch[0]) {
-            lineRem = (lineRem.slice(0, prefix.length) + tailMatch[0]).trim();
+    // Ищем конец полного предложения (настоящую точку, ! или ?, а не искусственное многоточие модели)
+    const matchStart = Math.min(prefix.length, lineRem.length);
+    if (lineRem.length >= matchStart) {
+        const tailMatch = lineRem.slice(matchStart).match(/^[^.!?]*[.!?]/);
+        if (tailMatch && tailMatch[0] !== undefined) {
+            lineRem = (lineRem.slice(0, matchStart) + tailMatch[0]).trim();
         }
     }
     if (lineRem && !/[.!?…]$/.test(lineRem)) lineRem += '.';
-    return lineRem || s;
+    return lineRem.length >= s.replace(/[.…]+$/, '').length ? lineRem : stripNarratorDashAttribution(s);
 }
 
 // Определение типа текста в фрейме: 'speech' (прямая речь вслух), 'thought' (мысли курсивом на сером фоне), 'narration' (авторское описание БЕЗ имени персонажа)
@@ -5791,7 +5799,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
 
     const cleanSpeechBlock = x => {
         let s = stripNarratorDashAttribution(String(x || ''));
-        s = formatCompleteQuoteSentence(s, 165);
+        s = formatCompleteQuoteSentence(s, 240);
         return s.length >= 2 ? s : '';
     };
 
@@ -5800,7 +5808,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         const sents = cleaned.split(/(?<=[.!?…])\s+/).map(x => x.trim()).filter(x => x.length >= 4);
         if (sents.length >= 2 && cleaned.length > 95) {
             for (const sn of sents) {
-                const f = formatCompleteQuoteSentence(sn, 165);
+                const f = formatCompleteQuoteSentence(sn, 240);
                 if (f) candidates.push({ kind: kindHint, speaker: defaultSpeaker, text: f });
             }
         } else {
@@ -5836,7 +5844,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         .filter(s => s.length >= 20 && /[.!?…]$/.test(s));
 
     for (const ns of allNarrativeSents) {
-        const f = formatCompleteQuoteSentence(ns, 165);
+        const f = formatCompleteQuoteSentence(ns, 240);
         if (f) candidates.push({ kind: 'narration', speaker: '', text: f });
     }
 
@@ -5998,7 +6006,7 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
             ok = (hitsPost / words.length) >= 0.62 || (!lastPostText && (hitsFull / words.length) >= 0.62);
         }
         if (ok) {
-            const shortTxt = formatCompleteQuoteSentence(restoredCandidate, 165);
+            const shortTxt = formatCompleteQuoteSentence(restoredCandidate, 240);
             const key = norm(shortTxt);
             const keyWords = key.split(/\s+/).filter(w => w.length > 2);
             const isDup = seen.has(key) || existingWordsList.some(ew => isSubsequenceMatch(keyWords, ew));
@@ -6041,6 +6049,97 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         verified.sort((a, b) => (Number(a.panel) || 1) - (Number(b.panel) || 1));
     }
     return verified.slice(0, maxQ);
+}
+
+// Умное сопоставление текста (QUOTE1..4) и картинок фреймов (PANEL1..4):
+// 1) Если во 2-м фрейме нарисовано животное/предмет крупным планом без людей (змея, профитроли, подоконник), а прямая речь или мысль персонажа попала под животное — меняем местами с плашкой описания (narration), чтобы речь стояла под говорящим человеком, а описание детали — под самой деталью!
+// 2) Проверяем совпадение предметных ключевых слов (змея, крюк, профитроли, подоконник, шея/ключица, окно, забор) между русским текстом QUOTE и английским промптом PANEL!
+function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
+    if (!Array.isArray(quotes) || quotes.length < 2 || !Array.isArray(panelPrompts) || panelPrompts.length < 2) {
+        return quotes;
+    }
+    const nPanels = Math.min(panelPrompts.length, 4);
+    const items = quotes.slice(0, nPanels).map((q, idx) => ({ ...q, panel: idx + 1 }));
+
+    const HUMAN_ACTION_RU_RE = /(?:^|[^а-яёa-z0-9])(юристка|журналистка|девушка|женщина|мужчина|софия|софа|этель|джулия|аня|наоя|проворковал[аи]?|поприветствовал[аи]?|улыбнул[ась]*|вздохнул[аи]?|удерживая|на вытянутой руке|вооружилась|разлив)(?=$|[^а-яёa-z0-9])/i;
+    const MACRO_ANIMAL_HEAD_EN_RE = /\b(snake head|forked tongue|fangs|scales|macro shot|animal focus)\b/i;
+    const MACRO_ANIMAL_HEAD_RU_RE = /(треугольная башка|термолокатор|раздвоенный язычок|язычок|чешу[яий]|брюхо|сплющила голову|шипение)/i;
+
+    const SEMANTIC_PAIRS = [
+        { en: /\b(snake|python|viper|serpent|scales|forked tongue|reptile|terrarium|paludarium)\b/i, ru: /(зме[яиюей]|куфи[яиюей]|гадюк|чешу[яий]|термолокатор|раздвоенн|языч|палюдариум|террариум)/i, weight: 4 },
+        { en: /\b(hook|metal rod|steel rod|chrome|handling stick)\b/i, ru: /(крюк|стальн|хромирован|поддел|изгиб)/i, weight: 4 },
+        { en: /\b(profiteroles|cream puffs|pastry|cake|bun|food|tea|cups|bowls|table)\b/i, ru: /(профитрол|заварн|крем|пирожн|булк|пуэр|пиал|коробк)/i, weight: 4 },
+        { en: /\b(crumbs|windowsill|spit|crushed)\b/i, ru: /(крошк|подоконник|выплюнув|тест)/i, weight: 5 },
+        { en: /\b(neck|collarbone|clavicle|bite mark|hickey|bruise|turtleneck|throat)\b/i, ru: /(ше[яеюй]|ключиц|водолазк|подбород|пудр|укус|засос|след)/i, weight: 5 },
+        { en: /\b(keys|keychain|car keys|handbag|bag|unbuttoning)\b/i, ru: /(ключ|брелок|сумочк|пуговиц|юбк|сверток|свёрток)/i, weight: 5 },
+        { en: /\b(fence|gate|iron bars|outdoors|screaming man|rain)\b/i, ru: /(забор|снаружи|клиент|прискакал|грызет|грызёт|тени в окне)/i, weight: 4 },
+        { en: /\b(window|curtain|bell|ringing|pine)\b/i, ru: /(окон|окн|штор|колокольчик|трезвон|снаружи|дорожк)/i, weight: 3 },
+    ];
+
+    const scoreMatch = (qObj, pStr) => {
+        if (!qObj || !pStr) return 0;
+        const p = String(pStr);
+        const t = String(qObj.text || '');
+        const kind = qObj.kind || (qObj.speaker ? 'speech' : 'narration');
+        const isNoHumanPanel = /\b(no humans|animal focus|object focus|food focus|still life)\b/i.test(p) && !/\b(1girl|1boy|2girls|2boys|woman|man)\b/i.test(p);
+        const isHumanPortraitOrTalk = /\b(1girl|1boy|2girls|2boys|portrait|upper body|medium shot|cowboy shot|speaking|smiling|laughing|looking)\b/i.test(p) && !isNoHumanPanel;
+
+        let score = 0;
+        const hasHumanWordsInRu = HUMAN_ACTION_RU_RE.test(t);
+        if (isNoHumanPanel) {
+            if (kind === 'narration') {
+                score += hasHumanWordsInRu ? 1 : 7;
+            } else if (kind === 'speech') {
+                score -= 6;
+            } else if (kind === 'thought') {
+                score -= 4;
+            }
+            if (MACRO_ANIMAL_HEAD_EN_RE.test(p) && MACRO_ANIMAL_HEAD_RU_RE.test(t)) {
+                score += 6;
+            }
+        } else if (isHumanPortraitOrTalk) {
+            if (kind === 'speech' || kind === 'thought') score += 4;
+            if (kind === 'narration' && hasHumanWordsInRu) score += 3;
+        }
+
+        for (const pair of SEMANTIC_PAIRS) {
+            if (pair.en.test(p) && pair.ru.test(t)) {
+                score += pair.weight;
+            }
+        }
+        return score;
+    };
+
+    // Перебираем все перестановки items (для 3 фреймов их всего 6, для 4 фреймов — 24) и выбираем ту, которая даёт максимальное совпадение смысла с картинками фреймов (при равенстве сохраняем исходный порядок)
+    const getPermutations = arr => {
+        if (arr.length <= 1) return [arr];
+        const res = [];
+        for (let i = 0; i < arr.length; i++) {
+            const rest = getPermutations([...arr.slice(0, i), ...arr.slice(i + 1)]);
+            for (const r of rest) res.push([arr[i], ...r]);
+        }
+        return res;
+    };
+
+    const perms = getPermutations(items);
+    let bestPerm = items;
+    let bestScore = -9999;
+    perms.forEach((perm, permIdx) => {
+        let total = permIdx === 0 ? 0.5 : 0;
+        for (let i = 0; i < perm.length; i++) {
+            const displacement = Math.abs(i - ((Number(perm[i].panel) || (i + 1)) - 1));
+            total += scoreMatch(perm[i], panelPrompts[i]) - displacement * 1.6;
+        }
+        if (total > bestScore) {
+            bestScore = total;
+            bestPerm = perm;
+        }
+    });
+
+    return bestPerm.map((q, idx) => ({
+        ...q,
+        panel: idx + 1,
+    }));
 }
 
 function drawRoundedRectPath(ctx2d, x, y, w, h, r) {
@@ -6215,7 +6314,7 @@ function drawManhwaBubblesOnCanvas(ctx2d, panelRects, quotes) {
             lineH = Math.round(fontSize * 1.22);
             spkH = spkLabel ? Math.round(speakerSize * 1.24) : 0;
             bh = finalLines.length * lineH + padY * 2 + spkH;
-            if (finalLines.length <= 5 && bh <= Math.round(rect.h * 0.34)) break;
+            if (finalLines.length <= 6 && bh <= Math.round(rect.h * 0.36)) break;
             if (fontSize === 12) break;
             fontSize--;
         }
@@ -7044,16 +7143,54 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
     return false;
 }
 
+function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCaptions = []) {
+    let p = String(rawFrameDesc || '').trim();
+    if (!p || isDetailOrMacroPanelPrompt(p)) return p;
+    const isSoloGirl = /\b1girl\b/i.test(p) && !/\b([2-6]girls|[1-6]boys)\b/i.test(p);
+    const isSoloBoy = /\b1boy\b/i.test(p) && !/\b([2-6]boys|[1-6]girls)\b/i.test(p);
+    if (!isSoloGirl && !isSoloBoy) return p;
+
+    // Проверяем, не пропала ли в сольном 3-м кадре верхняя одежда (black coat / black jacket / fur coat / beige cardigan) из 1-го кадра этой же страницы
+    const sourcePool = [ ...(Array.isArray(charCaptions) ? charCaptions : []), String(panel1Desc || '') ].join(' | ');
+    const hairMatch = p.match(/\b(black|brown|dark|blonde|red|ginger|orange|copper|pink|white|silver|grey)\s+(?:wavy\s+|curly\s+|long\s+|short\s+)?hair\b/i);
+    const hairColor = hairMatch ? hairMatch[1].toLowerCase() : '';
+
+    const candidateSegments = sourcePool.split(/\|\||\|/).map(s => s.trim()).filter(Boolean);
+    for (const seg of candidateSegments) {
+        if (hairColor && !new RegExp(`\\b${hairColor}\\b`, 'i').test(seg)) continue;
+        const outerMatch = seg.match(/\b((?:black|dark|brown|beige|cream|white|grey|green|burgundy|fitted|woolen|fur|knitted)\s+(?:coat|fur coat|jacket|blazer|cardigan|suit jacket|trench coat|sweater))\b/i);
+        if (outerMatch && outerMatch[1]) {
+            const outerItem = outerMatch[1].trim();
+            const itemNoun = outerItem.split(/\s+/).pop();
+            if (!new RegExp(`\\b${itemNoun}\\b`, 'i').test(p)) {
+                p += `, wearing ${outerItem}`;
+                break;
+            }
+        }
+    }
+    return p;
+}
+
 function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     let p = sanitizeLiteralMetaphorTags(String(rawPrompt || '').trim());
     if (!p) return '';
 
-    // Если персонаж просто потягивается, зевает или устал с дороги — вырезаем ложные триггеры плача (tears/crying) и пижамных футболок (pajamas/white t-shirt)!
-    if (/\b(yawn|yawning|stretch|stretching|arms overhead|arms raised|tired|exhausted|sigh|sighing|sleepy|drowsy)\b/i.test(p) && !/\b(sad|grief|weeping|heartbroken|funeral|tragedy)\b/i.test(p)) {
-        p = p.replace(/\b(?:crying|tears|tearing up|teardrops|streaming tears|tears streaming[^,]*|sobbing|weeping|pajamas|nightgown|sleepwear|oversized white t-shirt|oversized t-shirt|oversized shirt|bed|bedroom|waking up)\b\s*,?/gi, '');
+    // 1) Если персонаж потягивается, зевает ИЛИ смеётся/ухмыляется — вырезаем ложные триггеры плача (tears/crying/watery eyes) и пижамных футболок!
+    if (/\b(yawn|yawning|stretch|stretching|arms overhead|arms raised|tired|exhausted|sigh|sighing|sleepy|drowsy|laugh|laughing|grin|grinning|cackling|pointing|amused|teasing)\b/i.test(p) && !/\b(sad|grief|weeping|heartbroken|funeral|tragedy)\b/i.test(p)) {
+        p = p.replace(/\b(?:crying|tears|tearing up|teardrops|watery eyes|tears of laughter|streaming tears|tears streaming[^,]*|sobbing|weeping|pajamas|nightgown|sleepwear|oversized white t-shirt|oversized t-shirt|oversized shirt|bed|bedroom|waking up)\b\s*,?/gi, '');
     }
 
-    // Если это кадр фокуса на руках / сумочке / пуговице (hand focus) — фиксируем строго 2 руки одного человека (two hands only, 1girl/1boy, solo), чтобы NovelAI не рисовал 4 руки со всех сторон!
+    // 2) Если в кадре есть змея (snake / viper / python / serpent) — заменяем слово "hook" на "long smooth metal snake-handling rod", чтобы NovelAI не рисовал рыболовный крючок (fishhook) или мясной крюк с кольцом, в который завязана змея!
+    if (/\b(snake|python|viper|serpent|reptile|paludarium|terrarium)\b/i.test(p)) {
+        p = p
+            .replace(/\b(?:chrome|metal|steel|iron|snake)?\s*hook\b/gi, 'long smooth metal snake-handling rod')
+            .replace(/\b(?:hanging|suspended|dangling)\s+(?:from|on)\b/gi, 'resting across');
+        if (!/\bsingle snake\b/i.test(p) && /\b(snake|viper|python|serpent)\b/i.test(p)) {
+            p = `single snake, one snake head only, ${p}`;
+        }
+    }
+
+    // 3) Если это кадр фокуса на руках / сумочке / пуговице (hand focus) — фиксируем строго 2 руки одного человека (two hands only), чтобы NovelAI не рисовал 4 руки со всех сторон!
     if (/\b(hand focus|hands focus|focus on hands|unbuttoning|inside bag|inside handbag|rummaging|holding keys|keys)\b/i.test(p)) {
         p = p.replace(/\b(?:multiple girls|multiple boys|[2-9]girls|[2-9]boys|four hands|multiple hands)\b\s*,?/gi, '');
         if (!/\btwo hands only\b/i.test(p)) {
@@ -7062,6 +7199,11 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     }
 
     if (isDetailOrMacroPanelPrompt(p)) {
+        // 4) Если это предметный кадр без людей (подоконник с крошками, окно, коробка с профитролями) — убираем reflection/face/eyes, чтобы на мокром стекле окна или на булочках не рисовались жуткие лица и глазки!
+        if (/\b(no humans|object focus|food focus|still life|crumbs|windowsill|profiteroles|cream puffs|pastry)\b/i.test(p) && !/\b(animal focus|snake|viper|python|cat|dog)\b/i.test(p)) {
+            p = p.replace(/\b(?:reflection|face|eyes|watching|staring|silhouette|shadow of[^,]*)\b\s*,?/gi, '');
+            if (!/\bno humans\b/i.test(p)) p = `no humans, still life, ${p}`;
+        }
         // Если это крупный фрейм детали (змея/животное, предмет, руки или 18+ интимный план без лиц):
         // 1) Убираем случайно попавшие из шаблона теги калибровки полного роста и общих планов, чтобы они не заставляли NovelAI рисовать людей в полный рост вместо детали!
         p = p
@@ -7195,10 +7337,17 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
     const cleanDesc = String(frameDesc || '');
     // Если этот фрейм — крупный план детали (животное/змея, предмет, руки или 18+ интимный крупный план без головы/лица),
     // НЕ передаём в NovelAI портретный аватар-референс (images) и слоты полных фигур (charCaptions), чтобы NovelAI не пытался пририсовать поверх змеи или детали стоящего человека с лицом!
+    const isSnakeFrame = /\b(snake|python|viper|serpent|reptile)\b/i.test(cleanDesc);
+    const snakeAntiMutantNeg = isSnakeFrame ? 'fishing hook, fishhook, meat hook, metal ring, chain, tied, knotted, two-headed, multiple heads, extra head, split body, two snakes, mutated animal, deformed animal' : '';
+    const isFoodFrame = /\b(profiteroles|cream puffs|pastry|cake|bun|bread|food|dessert|tea|cups|crumbs)\b/i.test(cleanDesc);
+    const foodAntiMascotNeg = isFoodFrame ? 'face on food, eyes on food, anthropomorphic food, mascot, cute face on object, living food' : '';
+    const isPureObjectNoHumans = /\b(no humans|object focus|food focus|still life|crumbs|windowsill)\b/i.test(cleanDesc) && !isSnakeFrame && !/\b(animal focus|cat|dog|bird|hand focus|hands|fingers|neck|collarbone|nsfw|explicit|intimate)\b/i.test(cleanDesc);
+    const objectNoFaceNeg = isPureObjectNoHumans ? '1girl, 1boy, human, person, face, eyes, nose, mouth, face in window, reflection of face, ghostly face, creepy face, pareidolia' : '';
+
     if (isDetailOrMacroPanelPrompt(cleanDesc)) {
         const isHandDetail = /\b(hand focus|hands focus|focus on hands|unbuttoning|holding|bag|keys|fingers)\b/i.test(cleanDesc);
         const handAntiMutantNeg = isHandDetail ? 'extra hands, multiple hands, 3 hands, 4 hands, extra arms, disembodied hands, mutated hands, bad hands, extra fingers' : '';
-        const mergedNeg = [baseRefs?.extraNeg || '', handAntiMutantNeg].filter(Boolean).join(', ');
+        const mergedNeg = [baseRefs?.extraNeg || '', handAntiMutantNeg, snakeAntiMutantNeg, foodAntiMascotNeg, objectNoFaceNeg].filter(Boolean).join(', ');
         return { ...(baseRefs || {}), images: [], charCaptions: [], extraNeg: mergedNeg, note: '' };
     }
     const hasGirls = /\b([1-6]girls?|female|woman|girl)\b/i.test(cleanDesc);
@@ -7227,6 +7376,7 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
 
     return {
         ...baseRefs,
+        extraNeg: [baseRefs.extraNeg || '', snakeAntiMutantNeg, foodAntiMascotNeg].filter(Boolean).join(', '),
         charCaptions: activeCharCaps,
     };
 }
@@ -7553,6 +7703,9 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 sceneDrawingStartedAt = Date.now(); // обновляем таймер на каждом кадре полосы, чтобы 3–4 кадра не сбрасывались по таймауту!
                 const parsedPanel = parsePanelTextAndCharSlots(framesToDraw[fIdx]);
                 let rawFrameDesc = cleanSingleComicPanelPrompt(parsedPanel.prompt || framesToDraw[fIdx], fIdx);
+                if (fIdx > 0) {
+                    rawFrameDesc = enforceSoloFrameOutfitFromPage(rawFrameDesc, framesToDraw[0], charCaptions);
+                }
                 if (/\b[2-6]boys\b/i.test(rawFrameDesc)) {
                     rawFrameDesc = rawFrameDesc.replace(/\b1boy\s*:/gi, 'male:').replace(/,\s*1boy\b/gi, ', male');
                 }
@@ -7577,6 +7730,9 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 if (fUrl) frameUrls.push(fUrl);
             }
             if (!frameUrls.length) throw new Error('Не удалось сгенерировать кадры для склейки комикса');
+            if (verifiedQuotes.length > 1 && framesToDraw.length > 1) {
+                verifiedQuotes = alignQuotesToPanelsSemantics(verifiedQuotes, framesToDraw);
+            }
             const wantBubbles = activeComicOpts.linesMode !== 'off' && verifiedQuotes.length > 0;
             if (wantBubbles) {
                 const stitchedCleanData = await stitchComicFramesOnCanvas(frameUrls, [], activeComicOpts.styleId, false);
