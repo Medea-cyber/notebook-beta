@@ -5581,23 +5581,24 @@ function getComicStyleById(id) {
 }
 
 // Очистка ролевых технических шапок вида [Date: ...], [Location: ... Characters: ...] и замена спец-пробелов (  Figure Space и др.) на обычные пробелы
-function stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr) {
-    if (!rawStr) return '';
-    return String(rawStr)
-        .replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
-        .replace(/^\s*(?:\[[^\]\n]*(?:Date|Time|Location|Characters|Weather|Mood|Status|Scene|Локация|Дата|Время|Персонажи)\s*:[^\]\n]*\]\s*)+/gim, '')
-        .replace(/\[(?:Date|Time|Location|Characters|Weather|Mood|Status)\s*:[^\]\n]*\]/gi, '')
-        .trim();
-}
-
 function capitalizeSentenceFirstChar(str) {
     const s = String(str || '').trim();
     if (!s) return '';
-    return s.replace(/^([«"„“(\s]*)([а-яёa-z])/, (_, pref, ch) => pref + ch.toUpperCase());
+    return s.replace(/^([«"„“'\(\s]*)([а-яёa-z])/i, (_, prefix, ch) => prefix + ch.toUpperCase());
 }
 
-// Разбивка длинного поста на последовательные смысловые кусочки (эпизоды):
-// сохраняет естественные абзацы автора (до 850 симв. на абзац = 1 страница манхвы, до 10 страниц на пост), чтобы ни один абзац в конце поста не терялся!
+function stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr) {
+    if (!rawStr) return '';
+    return String(rawStr)
+        // Заменяем фигурные/неразрывные/тонкие пробелы (U+2007, U+00A0, U+202F и др.) на обычный пробел и убираем двойные звёздочки жирного шрифта (**БУМ-БУМ** -> БУМ-БУМ), чтобы они не ломали курсив мыслей *...*
+        .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+        .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+        // Убираем технические шапки в квадратных скобках в начале поста/строки: [Date: ...], [Location: ...], [Time: ...], [Characters: ...]
+        .replace(/^\s*(?:\[[^\]\n]{2,260}\]\s*)+/gi, '')
+        .replace(/\n\s*\[(?:Date|Location|Time|Characters|Место|Время|Дата|Персонажи|Локация)\s*:[^\]\n]{1,260}\]\s*/gi, '\n')
+        .trim();
+}
+
 function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
     const clean = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(rawPostText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
     if (!clean) return [];
@@ -5619,7 +5620,8 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
             else if (ch === '"') inQuotes = !inQuotes;
             else if (ch === '*') inAsterisk = !inAsterisk;
 
-            if (!inQuotes && !inAsterisk && /[.!?…]/.test(ch)) {
+            const isClosingEndedQuoteOrThought = !inQuotes && !inAsterisk && /[»”"*]/.test(ch) && i > 0 && /[.!?…]/.test(para[i - 1]);
+            if (!inQuotes && !inAsterisk && (/[.!?…]/.test(ch) || isClosingEndedQuoteOrThought)) {
                 const nextPart = para.slice(i + 1);
                 const attrMatch = nextPart.match(/^(\s*[»”"*]?\s*,?\s*[—–-]\s*[а-яё][^.!?;\n]{2,180}[.!?…])/i);
                 if (attrMatch) {
@@ -5833,6 +5835,28 @@ function restoreFullQuoteFromSource(rawQuote, sourceText) {
 }
 
 // Определение типа текста в фрейме: 'speech' (прямая речь вслух), 'thought' (мысли курсивом на сером фоне), 'narration' (авторское описание БЕЗ имени персонажа)
+function isInlineTitleOrTarotQuote(fullText, matchIndex, matchFullStr, innerText) {
+    const inner = String(innerText || '').trim();
+    if (!inner) return true;
+    const words = inner.split(/\s+/).filter(Boolean);
+    const before = String(fullText || '').slice(Math.max(0, matchIndex - 35), matchIndex);
+    const after = String(fullText || '').slice(matchIndex + String(matchFullStr || '').length, matchIndex + String(matchFullStr || '').length + 60);
+    // Считаем тире после кавычек атрибуцией прямой речи ТОЛЬКО если перед закрывающей кавычкой есть !/? или после кавычки стоит запятая перед тире, ИЛИ сразу после тире идёт глагол речи!
+    const afterDashWord = (after.match(/^\s*,?\s*[—–-]\s*([а-яё\-]+)/i) || [])[1] || '';
+    const hasCommaOrExclBeforeDash = /^\s*,\s*[—–-]/.test(after) || (/[!?…]$/.test(inner) && /^\s*[—–-]/.test(after));
+    const hasSpeechVerbAfterDash = afterDashWord && NARRATOR_SPEECH_VERBS_RE.test(afterDashWord);
+    if (hasCommaOrExclBeforeDash || hasSpeechVerbAfterDash) return false;
+
+    const precededByInlineWord = /[а-яёa-z]\s+$/i.test(before);
+    if (precededByInlineWord && words.length <= 4 && inner.length <= 36 && !/[!?]$/.test(inner)) {
+        return true;
+    }
+    if (words.length <= 2 && inner.length <= 22 && !/[.!?…]$/.test(inner) && !/^\s*$/.test(before)) {
+        return true;
+    }
+    return false;
+}
+
 function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker = '', cast = [], st = null, fullStoryText = '') {
     const rawKind = String(rawQuoteObj?.kind || '').toLowerCase().trim();
     let rawSpk = String(rawQuoteObj?.speaker || defaultSpeaker || '').trim();
@@ -5856,6 +5880,7 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
     let m;
     const qRe = /[«“"]([^«»“”"\n]{2,2500}?)[»”"]/g;
     while ((m = qRe.exec(cleanSrc)) !== null) {
+        if (isInlineTitleOrTarotQuote(cleanSrc, m.index, m[0], m[1])) continue;
         const spanNorm = norm(m[1]);
         const ctxWindow = cleanSrc.slice(Math.max(0, m.index - 85), Math.min(cleanSrc.length, m.index + m[0].length + 85)).toLowerCase().replace(/ё/g, 'е');
         if (/(?:^|[^а-яёa-z0-9])(подумал|подумала|подумалось|мысленно|про себя|в мыслях|мелькнуло в голове|пронеслось в голове|подумать)(?=$|[^а-яёa-z0-9])/i.test(ctxWindow)) {
@@ -5873,7 +5898,7 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
             speechSpans.push(norm(m[1]));
         }
     }
-    const astRe = /\*([^*\n]{2,320})\*/g;
+    const astRe = /\*([^*\n]{2,1500})\*/g;
     while ((m = astRe.exec(cleanSrc)) !== null) {
         thoughtSpans.push(norm(m[1]));
     }
@@ -5890,7 +5915,8 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
 
     const inThoughtSpan = explicitThought || matchesSpanList(thoughtSpans);
     const inSpeechSpan = matchesSpanList(speechSpans);
-    const validSpk = validateAndSanitizeQuoteSpeaker(rawSpk, txt, cleanSrc, cast, st, finalKind, fullStoryText || cleanSrc);
+    const detectedKind = inThoughtSpan ? 'thought' : (inSpeechSpan ? 'speech' : 'narration');
+    const validSpk = validateAndSanitizeQuoteSpeaker(rawSpk, txt, cleanSrc, cast, st, detectedKind, fullStoryText || cleanSrc);
 
     // Если имя персонажа упоминается внутри самой фразы в 3-м лице (например: «София застегнула пальто...», «Седан Софии шуршал...», «На заднем сиденье Джулия расстегнула...») и эта фраза не из прямой речи — это 100% авторское описание БЕЗ подписи имени!
     const selfMentionedIn3rdPerson = validSpk && isNameMentionedInText(validSpk, txt);
@@ -5973,6 +5999,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
     const qRe = /[«“"]([^«»“”"\n]{2,2500}?)[»”"]/g;
     let m;
     while ((m = qRe.exec(clean)) !== null && candidates.length < 8) {
+        if (isInlineTitleOrTarotQuote(clean, m.index, m[0], m[1])) continue;
         const ctxAround = clean.slice(Math.max(0, m.index - 80), Math.min(clean.length, m.index + m[0].length + 80)).toLowerCase().replace(/ё/g, 'е');
         const isTh = /(?:^|[^а-яёa-z0-9])(подумал|подумала|подумалось|мысленно|про себя|в мыслях|мелькнуло в голове)(?=$|[^а-яёa-z0-9])/i.test(ctxAround);
         pushBlockOrSentences(m[1], isTh ? 'thought' : 'speech');
@@ -5992,11 +6019,31 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
     const allNarrativeSents = clean
         .replace(/\*[^*\n]{2,1500}\*/g, ' ')
         .replace(/[^.!?…\n]{0,80}:\s*(?=[«“"])/g, '. ')
-        .replace(/[«“"][^«»“”"\n]*[»”"](?:\s*,?\s*[—–-]\s*[^.!?…\n]+[.!?…])?/g, '. ')
+        .replace(/[«“"]([^«»“”"\n]*)[»”"](\s*,?\s*[—–-]\s*[^.!?…\n]+[.!?…])?/g, (fullM, innerQ, attrTail, offset, fullS) => {
+            if (isInlineTitleOrTarotQuote(fullS, offset, `«${innerQ}»`, innerQ)) {
+                return fullM;
+            }
+            return '. ';
+        })
         .replace(/(?:^|\n)\s*[—–-]\s*[^\n]+/g, ' ')
         .split(/(?<=[.!?…])\s+|\n+/)
         .map(s => s.replace(/^[,;:\s—–-]+/, '').replace(/[:;\s—–-]+$/, '').replace(/\s+/g, ' ').trim())
-        .filter(s => s.length >= 20 && /[.!?…]$/.test(s) && !speechVerbAttrStartRe.test(s));
+        .filter(s => s.length >= 16 && /[.!?…]$/.test(s) && !speechVerbAttrStartRe.test(s));
+    if (candidates.length + allNarrativeSents.length < maxQ) {
+        const expandedNarr = [];
+        for (const ns of allNarrativeSents) {
+            if (ns.length > 140 && (ns.includes('; ') || ns.includes(' — ') || ns.includes(' - '))) {
+                const subParts = ns.split(/(?:;\s+|\s+[—–-]\s+)/).map(x => x.trim()).filter(x => x.length >= 25);
+                if (subParts.length >= 2) {
+                    subParts.forEach(sp => expandedNarr.push(/[.!?…]$/.test(sp) ? sp : (sp + '.')));
+                    continue;
+                }
+            }
+            expandedNarr.push(ns);
+        }
+        allNarrativeSents.length = 0;
+        allNarrativeSents.push(...expandedNarr);
+    }
 
     for (const ns of allNarrativeSents) {
         const f = formatCompleteQuoteSentence(ns, 330);
@@ -6032,6 +6079,50 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         if (picked.length < maxQ && !picked.includes(rn)) picked.push(rn);
     }
     picked.sort((a, b) => a.pos - b.pos);
+    while (picked.length > 0 && picked.length < maxQ) {
+        let longestIdx = -1;
+        let longestLen = 85;
+        for (let i = 0; i < picked.length; i++) {
+            if (picked[i].text.length > longestLen) {
+                longestLen = picked[i].text.length;
+                longestIdx = i;
+            }
+        }
+        if (longestIdx < 0) break;
+        const item = picked[longestIdx];
+        const txt = item.text;
+        const mid = Math.floor(txt.length / 2);
+        const breakPatterns = ['; ', ' — ', ' – ', ' - ', ': ', ', и ', ', а ', ', но ', ', где ', ', то ли ', ', при ', ', хотя ', ', пока '];
+        let bestSplitPos = -1;
+        let bestSplitSepLen = 0;
+        let bestDist = 999999;
+        for (const bp of breakPatterns) {
+            let searchFrom = 35;
+            while (searchFrom < txt.length - 35) {
+                const p = txt.indexOf(bp, searchFrom);
+                if (p < 0 || p > txt.length - 35) break;
+                const dist = Math.abs(p - mid);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestSplitPos = p;
+                    bestSplitSepLen = bp.startsWith(',') ? 1 : bp.length;
+                }
+                searchFrom = p + bp.length;
+            }
+        }
+        if (bestSplitPos < 0) break;
+        let part1 = txt.slice(0, bestSplitPos).replace(/[,;:\s—–-]+$/, '').trim();
+        if (part1 && !/[.!?…]$/.test(part1)) part1 += '.';
+        let part2 = capitalizeSentenceFirstChar(txt.slice(bestSplitPos + bestSplitSepLen).replace(/^[,;:\s—–-]+/, '').trim());
+        if (part2 && !/[.!?…]$/.test(part2)) part2 += '.';
+        if (part1.length < 18 || part2.length < 18) break;
+        picked.splice(
+            longestIdx,
+            1,
+            { ...item, text: part1 },
+            { ...item, pos: item.pos + 1, text: part2 }
+        );
+    }
     return picked.slice(0, maxQ).map((c, idx) => ({
         panel: idx + 1,
         kind: c.kind || 'speech',
@@ -6082,7 +6173,12 @@ function isNameMentionedInText(nameStr, textStr) {
     const stems = getHeroNameStems(nameStr);
     if (!stems.length || !textStr) return false;
     const low = String(textStr).toLowerCase().replace(/ё/g, 'е');
-    return stems.some(st => low.includes(st));
+    return stems.some(st => {
+        const esc = st.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const suffix = st.length <= 3 ? '(?:[ауеюиы]|ом|ем|ой|ей|ям)?' : '[а-яa-z]{0,3}';
+        const re = new RegExp(`(?:^|[^а-яa-z0-9])${esc}${suffix}(?=$|[^а-яa-z0-9])`, 'i');
+        return re.test(low);
+    });
 }
 
 function findDominantPovThinkerInPost(fullPostText, candidates = []) {
@@ -6154,7 +6250,7 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
 
     const idx = norm(cleanPost).indexOf(qShort);
     if (idx < 0) {
-        return (kindHint === 'thought' && povThinker) ? povThinker : '';
+        return ((kindHint === 'thought' || kindHint === 'speech') && povThinker) ? povThinker : '';
     }
     const rawBefore = cleanPost.slice(Math.max(0, idx - 85), idx);
     const rawAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 110));
@@ -6197,7 +6293,9 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
         let earliestPos = 999999;
         for (const cName of matchedInPara) {
             for (const stStem of getHeroNameStems(cName)) {
-                const p = normPara.indexOf(stStem);
+                const esc = stStem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const mPos = normPara.match(new RegExp(`(?:^|[^а-яa-z0-9])(${esc})`, 'i'));
+                const p = mPos ? mPos.index : -1;
                 if (p >= 0 && p < earliestPos) {
                     earliestPos = p;
                     earliestCand = cName;
@@ -6206,7 +6304,8 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
         }
         if (earliestCand) return earliestCand;
     }
-    if (kindHint === 'thought' && povThinker) return povThinker;
+    if (povThinker && (kindHint === 'thought' || presentInChunkCandidates.length <= 1)) return povThinker;
+    if (presentInChunkCandidates.length === 1) return presentInChunkCandidates[0];
     return '';
 }
 
@@ -6435,8 +6534,9 @@ function reconcileQuoteSpeakersWithPanels(quotes, panelPrompts, cast = [], fullP
     return quotes.map((q, idx) => {
         if (!q || q.kind === 'narration') return q;
         let spk = String(q.speaker || '').trim();
-        if (q.kind === 'thought' && (!spk || /^мысли$/i.test(spk)) && povThinker) {
-            spk = povThinker;
+        if ((q.kind === 'thought' || q.kind === 'speech') && (!spk || /^мысли$/i.test(spk))) {
+            if (activeCast.length === 1) spk = activeCast[0];
+            else if (povThinker) spk = povThinker;
         }
         return { ...q, speaker: spk };
     });
@@ -6879,8 +6979,7 @@ function filterForcedCastForChunk(forcedCast, chunkText, fullTargetText) {
     if (!presentSoFar.length) return forcedCast.slice(0, 1);
 
     // Если в этом конкретном отрывке прямо действует кто-то из presentSoFar — берём их; если же в отрывке описываются только карты/предметы (как в абзацах 3–4 гадания), оставляем тех, кто был в комнате до этого (Этель), но НЕ добавляем гостя (Яна), который появится только в 6-м абзаце!
-    const presentInThisChunk = presentSoFar.filter(cName => isNameMentionedInText(cName, physicalNarrativeInChunk));
-    return presentInThisChunk.length ? presentInThisChunk : presentSoFar;
+    return presentSoFar;
 }
 
 function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, directorWhisper = '', comicOpts = null) {
