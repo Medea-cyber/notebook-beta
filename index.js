@@ -5618,15 +5618,19 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
     const splitParagraphIntoSentences = (para) => {
         const out = [];
         let buf = '';
-        let inQuotes = false;
+        let inDoubleQuotes = false;
+        let inGuillemets = false;
         let inAsterisk = false;
         for (let i = 0; i < para.length; i++) {
             const ch = para[i];
             buf += ch;
-            if (ch === '“') inQuotes = true;
-            else if (ch === '”') inQuotes = false;
-            else if (ch === '"') inQuotes = !inQuotes;
+            if (ch === '“') inDoubleQuotes = true;
+            else if (ch === '”') inDoubleQuotes = false;
+            else if (ch === '"') inDoubleQuotes = !inDoubleQuotes;
+            else if (ch === '«' && !inDoubleQuotes) inGuillemets = true;
+            else if (ch === '»') inGuillemets = false;
             else if (ch === '*') inAsterisk = !inAsterisk;
+            const inQuotes = inDoubleQuotes || inGuillemets;
 
             const isClosingEndedQuoteOrThought = !inQuotes && !inAsterisk && /[»”"*]/.test(ch) && i > 0 && /[.!?…]/.test(para[i - 1]);
             if (!inQuotes && !inAsterisk && (/[.!?…]/.test(ch) || isClosingEndedQuoteOrThought)) {
@@ -6285,6 +6289,10 @@ function getHeroNameStems(nameStr) {
     const stems = new Set([clean]);
     for (const t of tokens) {
         stems.add(t);
+        // Для 3-буквенных женских/гласных имён (Аня -> Ани/Ане/Аню/Аниного, Ева -> Евы/Еве, Зоя -> Зои) добавляем 2-буквенную основу перед гласной
+        if (t.length === 3 && /[аяеиоуыэю]$/.test(t)) {
+            stems.add(t.slice(0, 2) + '__vowel3');
+        }
         if (t.length >= 4) stems.add(t.slice(0, t.length - 1));
         if (t.length >= 5) stems.add(t.slice(0, t.length - 2));
     }
@@ -6296,6 +6304,11 @@ function isNameMentionedInText(nameStr, textStr) {
     if (!stems.length || !textStr) return false;
     const low = String(textStr).toLowerCase().replace(/ё/g, 'е');
     return stems.some(st => {
+        if (st.endsWith('__vowel3')) {
+            const base2 = st.slice(0, -8).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const reV = new RegExp(`(?:^|[^а-яa-z0-9])${base2}(?:[аяиеуюы]|ей|ой|ин(?:[аоыуе]|ого|ому|ым|ой)?)(?=$|[^а-яa-z0-9])`, 'i');
+            return reV.test(low);
+        }
         const esc = st.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const suffix = st.length <= 3 ? '(?:[ауеюиы]|ом|ем|ой|ей|ям)?' : '[а-яa-z]{0,3}';
         const re = new RegExp(`(?:^|[^а-яa-z0-9])${esc}${suffix}(?=$|[^а-яa-z0-9])`, 'i');
@@ -6374,15 +6387,26 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
     if (idx < 0) {
         return ((kindHint === 'thought' || kindHint === 'speech') && povThinker) ? povThinker : '';
     }
-    const rawBefore = cleanPost.slice(Math.max(0, idx - 85), idx);
-    const rawAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 110));
+    // Маскируем внутренности прямых реплик "..." (где имена — это обращения к собеседнику, например «Одевайся и ищи паспорт, Ян!») и притяжательные дополнения («ногтей Этель», «квартиры Яна»), сохраняя точные индексы символов!
+    const narrativeOnlyPost = cleanPost
+        .replace(/(?:"[^"\n]*"|«[^«»\n]*»|“[^“”\n]*”|\*[^*\n]*\*)/g, m => ' '.repeat(m.length))
+        .replace(/(?:квартир[аыеуой]|дом[аеу]?|комнат[аыеу]|кабинет[аеу]?|ногт[ейями]+|сапог[аеу]?|пальц[ыаеевм]+)\s+[А-ЯЁA-Z][а-яёa-z]+/gi, m => ' '.repeat(m.length))
+        .replace(/(?:^|[^а-яёa-z0-9])(?:перед|за|над|под|рядом\s+с|вместе\s+с|мимо|вокруг|против|между)\s+[А-ЯЁA-Z][а-яёa-z]+/gi, m => ' '.repeat(m.length))
+        .replace(/[А-ЯЁA-Z][а-яёa-z]+ин(?:ого|ому|ым|ой|а|ы|у|е)(?=$|[^а-яёa-z0-9])/g, m => ' '.repeat(m.length));
+
+    // Находим реальный конец первой кавычки/мысли в cleanPost после idx (на случай если quoteText состоит из двух склеенных реплик, между которыми в тексте стояло «Пробормотал Кайлар в складки шарфа»!)
+    const closeTagMatch = cleanPost.slice(idx).match(/[»”"*]/);
+    const firstQuoteEndIdx = closeTagMatch ? (idx + closeTagMatch.index + 1) : (idx + quoteText.length);
+
+    const rawBefore = narrativeOnlyPost.slice(Math.max(0, idx - 85), idx);
+    const rawAfter = narrativeOnlyPost.slice(firstQuoteEndIdx, Math.min(narrativeOnlyPost.length, firstQuoteEndIdx + 110));
     const immediateAfterFull = (rawAfter.split(/[.!?…\n]/)[0] || '');
     // Отрезаем придаточные предложения с союзами переключения субъекта (“, однако стоило Софии...”, “, но когда...”, “, пока Этель...”), чтобы имя второго героя в хвосте не перебивало говорящего!
     const immediateAfter = immediateAfterFull.split(/,\s*(?:однако|но|хотя|пока|тогда как|прежде чем)(?=$|[^а-яёa-z0-9])/i)[0] || '';
     const beforeParts = rawBefore.split(/[.!?…\n]/);
     const immediateBefore = beforeParts[beforeParts.length - 1] || '';
     const immediateContext = `${immediateBefore} ${immediateAfter}`;
-    const windowBefore = cleanPost.slice(Math.max(0, idx - 260), idx);
+    const windowBefore = narrativeOnlyPost.slice(Math.max(0, idx - 260), idx);
     const windowAfter = immediateAfter;
     const nearContext = `${windowBefore} ${windowAfter}`;
 
@@ -6408,25 +6432,28 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
     const matchedInWindow = pool.filter(cName => isNameMentionedInText(cName, nearContext));
     if (matchedInWindow.length === 1) return matchedInWindow[0];
 
-    const paraBefore = cleanPost.slice(Math.max(0, idx - 950), idx).split(/\n\s*\n/).pop() || '';
+    const paraBefore = narrativeOnlyPost.slice(Math.max(0, idx - 950), idx).split(/\n\s*\n/).pop() || '';
     const matchedInPara = pool.filter(cName => isNameMentionedInText(cName, paraBefore));
     if (matchedInPara.length === 1) return matchedInPara[0];
     if (matchedInPara.length > 1) {
         const normPara = norm(paraBefore);
-        let earliestCand = '';
-        let earliestPos = 999999;
+        let latestCand = '';
+        let latestPos = -1;
         for (const cName of matchedInPara) {
             for (const stStem of getHeroNameStems(cName)) {
+                if (stStem.endsWith('__vowel3')) continue;
                 const esc = stStem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const mPos = normPara.match(new RegExp(`(?:^|[^а-яa-z0-9])(${esc})`, 'i'));
-                const p = mPos ? mPos.index : -1;
-                if (p >= 0 && p < earliestPos) {
-                    earliestPos = p;
-                    earliestCand = cName;
+                const reG = new RegExp(`(?:^|[^а-яa-z0-9])(${esc})`, 'gi');
+                let mPos;
+                while ((mPos = reG.exec(normPara)) !== null) {
+                    if (mPos.index >= latestPos) {
+                        latestPos = mPos.index;
+                        latestCand = cName;
+                    }
                 }
             }
         }
-        if (earliestCand) return earliestCand;
+        if (latestCand) return latestCand;
     }
     if (povThinker && (kindHint === 'thought' || presentInChunkCandidates.length <= 1)) return povThinker;
     if (presentInChunkCandidates.length === 1) return presentInChunkCandidates[0];
@@ -6524,7 +6551,21 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
     for (const fb of fallback) {
         const key = norm(fb.text);
         const keyWords = key.split(/\s+/).filter(w => w.length >= 2);
-        const alreadyIn = seen.has(key) || existingWordsList.some(ew => isSubsequenceMatch(keyWords, ew));
+        const matchIdx = existingWordsList.findIndex(ew => isSubsequenceMatch(keyWords, ew));
+        const alreadyIn = seen.has(key) || matchIdx >= 0;
+        if (matchIdx >= 0 && verified[matchIdx] && fb.text.length > verified[matchIdx].text.length + 15 && fb.text.length <= 355) {
+            // Если fallback содержит более полную склеенную версию той же реплики или описания (например обе реплики Кайлара в абзаце или оба предложения описания, тогда как GLM выписал только одно из них) — расширяем плашку до полной версии!
+            const classified = classifyCaptionKindAndSpeaker(fb, lastPostText || storyText, defaultSpeaker, cast, st, storyText);
+            if (classified.kind === verified[matchIdx].kind) {
+                verified[matchIdx].text = fb.text;
+                if (!verified[matchIdx].speaker && classified.speaker) {
+                    verified[matchIdx].speaker = classified.speaker;
+                }
+                seen.add(key);
+                existingWordsList[matchIdx] = keyWords;
+            }
+            continue;
+        }
         if (!alreadyIn) {
             const classified = classifyCaptionKindAndSpeaker(fb, lastPostText || storyText, defaultSpeaker, cast, st, storyText);
             missingDialogues.push({
@@ -6540,10 +6581,16 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         if (verified.length >= maxQ) {
             let mergedNarr = false;
             // Сначала пробуем склеить с уже существующим блоком того же типа (две реплики одного героя или два описания в этом абзаце)
+            const normSrcForMerge = norm(cleanSourceForPos);
             for (let i = verified.length - 1; i >= 0; i--) {
                 if (verified[i].kind === md.kind && (md.kind === 'speech' || md.kind === 'narration') && (verified[i].text.length + 1 + md.text.length <= 355)) {
-                    const t1 = /[.!?…]$/.test(verified[i].text) ? verified[i].text : (verified[i].text + '.');
-                    verified[i].text = `${t1} ${md.text}`.trim();
+                    const posV = normSrcForMerge.indexOf(norm(verified[i].text).slice(0, 20));
+                    const posM = normSrcForMerge.indexOf(norm(md.text).slice(0, 20));
+                    const vFirst = (posV < 0 || posM < 0 || posV <= posM);
+                    const firstStr = vFirst ? verified[i].text : md.text;
+                    const secondStr = vFirst ? md.text : verified[i].text;
+                    const t1 = /[.!?…]$/.test(firstStr) ? firstStr : (firstStr + '.');
+                    verified[i].text = `${t1} ${secondStr}`.trim();
                     const key = norm(md.text);
                     seen.add(key);
                     existingWordsList.push(key.split(/\s+/).filter(w => w.length >= 2));
@@ -7171,7 +7218,8 @@ function getActiveSceneSegmentFromFullPost(chunkText, fullRawPostText) {
 }
 
 function filterForcedCastForChunk(forcedCast, chunkText, fullTargetText) {
-    if (!Array.isArray(forcedCast) || !forcedCast.length) return [];
+    const baseList = Array.isArray(forcedCast) ? [...forcedCast] : [];
+    if (!baseList.length) return [];
     const cleanChunk = stripRoleplayHeaderBracketsAndWeirdSpaces(String(chunkText || '')).trim();
     if (!cleanChunk || !fullTargetText) return forcedCast;
 
@@ -7273,9 +7321,14 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         rawMainChDesc ? `[Описание из карточки ${names.char}: ${rawMainChDesc}]` : '',
     ].filter(Boolean).join(' ');
     const mcAppLine = mcAppParts ? `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}` : '';
+    const allNpcsSorted = [...(st.npcs || [])].sort((a, b) => {
+        const aIn = isNameMentionedInText(a?.name || '', fullTargetText) ? 0 : 1;
+        const bIn = isNameMentionedInText(b?.name || '', fullTargetText) ? 0 : 1;
+        return aIn - bIn;
+    });
     const npcCardsList = [
         mcAppLine,
-        ...(st.npcs || []).slice(0, 15).map(n => `— ${n.name}: ${n.appearanceEn ? `[Теги внешности: ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
+        ...allNpcsSorted.slice(0, 50).map(n => `— ${n.name}: ${n.appearanceEn ? `[Каноничный тег Danbooru и внешность (ОБЯЗАТЕЛЬНО пиши в промпте "${n.appearanceEn}" вместо "${n.name} (original)"!): ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
     ].filter(Boolean).join('\n');
     const npcBlock = npcCardsList ? `Справка по внешности и ролям известных NPC (обязательно используй их описание, если они есть в сцене!):\n${npcCardsList}` : '';
     const effectiveForcedCast = hasSpecificChunk
@@ -7378,7 +7431,7 @@ QUOTE2: Имя говорящего из CAST | полная законченн�
             ? `[ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ АВТОРА ПО ПРОМПТУ]:\n${adaptWriterNoteForTask(settings().imgPromptWriterNote.trim(), !!(comicOpts && comicOpts.enabled && comicOpts.stripMode))}`
             : (settings().imageSource === 'novelai' ? adaptWriterNoteForTask(DEFAULT_NAI_WRITER_PROMPT, !!(comicOpts && comicOpts.enabled && comicOpts.stripMode)) : ''),
         'Ответь строго по шаблону без пояснений:',
-        `CAST: кто именно виден в сцене через запятую (${isPov ? [...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...(st.npcs || []).slice(0, 12).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
+        `CAST: кто именно виден в сцене через запятую (${isPov ? [...names.chars, ...allNpcsSorted.slice(0, 35).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...allNpcsSorted.slice(0, 35).map(n => n.name)].join(', ')}; или none, если в кадре никого нет)`,
         ...(comicOpts && comicOpts.enabled && comicOpts.stripMode
             ? [
                 'PANEL1: полный английский промпт 1-го кадра (момент QUOTE1, medium/cowboy shot, 1–2 персонажа + внешность + одежда + обстановка; если двоих — добавь в конце: || CHAR1: теги 1-го || CHAR2: теги 2-го)',
@@ -7543,7 +7596,7 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId =
         castBox.append('<div style="font-size:0.84em; font-weight:600; margin-bottom:4px;">👥 Кто в кадре? <span style="font-weight:400; opacity:0.8;">(оставь «Авто по тексту» или отметь вручную, чтобы никого не потерять)</span></div>');
         const castChips = $('<div class="nnb-chips-row" style="justify-content:flex-start; gap:6px;"></div>');
         const autoChip = $('<div class="nnb-travel-chip active" style="font-size:0.8em; padding:3px 8px;" tabindex="0">✨ Авто по тексту поста</div>');
-        const candidateNames = [names.user, ...(names.chars || [names.char]), ...((st?.npcs || []).slice(0, 12).map(n => n.name))].filter((v, i, a) => v && a.indexOf(v) === i);
+        const candidateNames = [names.user, ...(names.chars || [names.char]), ...((st?.npcs || []).slice(0, 35).map(n => n.name))].filter((v, i, a) => v && a.indexOf(v) === i);
 
         const syncCastChips = () => {
             autoChip.toggleClass('active', selectedCast.size === 0);
@@ -8031,6 +8084,50 @@ function stripActionAndPropTagsFromCharCaption(cap) {
         .join(', ');
 }
 
+
+function transliterateRuNameVariants(ruName) {
+    const clean = String(ruName || '').replace(/\([^)]*\)/g, '').trim().toLowerCase().replace(/ё/g, 'е');
+    if (!clean) return [];
+    const map = {
+        а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ж:'zh', з:'z', и:'i', й:'y',
+        к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u',
+        ф:'f', х:'kh', ц:'ts', ч:'ch', ш:'sh', щ:'shch', ъ:'', ы:'y', ь:'', э:'e', ю:'yu', я:'ya'
+    };
+    const firstWord = clean.split(/\s+/)[0];
+    let tr = '';
+    for (const ch of firstWord) tr += (map[ch] !== undefined ? map[ch] : ch);
+    const variants = new Set([tr]);
+    if (tr === 'doyl') variants.add('doyle');
+    if (tr === 'dzhuliya') { variants.add('julia'); variants.add('julie'); }
+    if (tr === 'kaylar') { variants.add('kailar'); variants.add('kylar'); }
+    if (tr === 'etel') variants.add('ethel');
+    if (tr === 'sofiya') { variants.add('sofia'); variants.add('sophia'); }
+    if (tr === 'endzhel') variants.add('angel');
+    if (tr === 'layos') variants.add('laios');
+    if (tr === 'rey') { variants.add('ray'); variants.add('rei'); }
+    return Array.from(variants).filter(v => v.length >= 2);
+}
+
+function replaceOriginalPlaceholderWithNpcAppearance(rawPromptStr, st) {
+    let out = String(rawPromptStr || '');
+    if (!out || !st) return out;
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    for (const npc of cards) {
+        const appEn = String(npc?.appearanceEn || '').trim();
+        if (!appEn || !npc?.name) continue;
+        const enVars = transliterateRuNameVariants(npc.name);
+        for (const ev of enVars) {
+            const esc = ev.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const origRe = new RegExp(`\\b${esc}\\s*\\(\\s*original\\s*\\)`, 'gi');
+            if (origRe.test(out)) {
+                out = out.replace(origRe, appEn);
+            }
+        }
+    }
+    return out;
+}
+
 function parsePanelTextAndCharSlots(rawPanelStr) {
     const raw = String(rawPanelStr || '').trim();
     if (!raw) return { prompt: '', charCaptions: [] };
@@ -8175,6 +8272,7 @@ let bgKeepAliveAudioCtx = null;
 let bgKeepAliveOsc = null;
 let bgKeepAliveWakeLock = null;
 let bgKeepAliveLockResolver = null;
+let multiPageKeepAliveActive = false;
 
 function startBackgroundGenerationKeepAlive() {
     try {
@@ -8380,12 +8478,30 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             if (!desc) throw new Error('модель не описала сцену (в ответе нет строки SCENE) — открой лог диагностики в настройках блокнота');
         }
 
+        desc = replaceOriginalPlaceholderWithNpcAppearance(desc, st);
+        charCaptions = charCaptions.map(c => replaceOriginalPlaceholderWithNpcAppearance(c, st));
+        for (let pi = 0; pi < panelPrompts.length; pi++) {
+            panelPrompts[pi] = replaceOriginalPlaceholderWithNpcAppearance(panelPrompts[pi], st);
+        }
+
         // 2) образцы: аватар персоны (только если НЕ вид от первого лица!) и аватары тех, кто реально в кадре
         say('🎨 Рисую сцену…');
         const names = storyNames();
         const norm = x => String(x || '').toLowerCase().replace(/ё/g, 'е');
+        // Если GLM не вывела строку CAST:, определяем участников сцены по тексту отрывка/поста, чтобы чужой аватар (например Кайлар) не прикреплялся к сцене без него!
+        if (!cast.length) {
+            const targetMsgForCast = ctx().chat?.[Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1)]?.mes || '';
+            const activeTxtForCast = (comicOpts?.enabled && comicOpts?.chunkText) ? String(comicOpts.chunkText) : String(targetMsgForCast);
+            const allKnownNames = [names.user, ...(names.chars || [names.char]), ...(st.npcs || []).map(n => n.name)].filter(Boolean);
+            for (const kn of allKnownNames) {
+                if (isNameMentionedInText(kn, activeTxtForCast)) {
+                    const nKn = norm(kn);
+                    if (nKn && !cast.includes(nKn)) cast.push(nKn);
+                }
+            }
+        }
         const noOneInFrame = cast.length === 1 && cast[0] === '__none__';
-        const inFrame = n => !noOneInFrame && (!cast.length || cast.some(c => c.includes(norm(n)) || norm(n).includes(c)));
+        const inFrame = n => !noOneInFrame && cast.length > 0 && cast.some(c => c.includes(norm(n)) || norm(n).includes(c));
         const images = [];
         const who = [];
         const isNai = settings().imageSource === 'novelai';
@@ -8669,6 +8785,9 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
     } finally {
         sceneDrawing = false;
         sceneDrawingStartedAt = 0;
+        if (!multiPageKeepAliveActive) {
+            stopBackgroundGenerationKeepAlive();
+        }
     }
 }
 
@@ -9368,6 +9487,7 @@ async function showScenePopup(mesId, forceAsk = false) {
         if (!Number.isInteger(mesId)) {
             while (tIdxInit >= 0 && (!cInit.chat[tIdxInit] || cInit.chat[tIdxInit].is_system)) tIdxInit--;
         }
+        multiPageKeepAliveActive = true;
         startBackgroundGenerationKeepAlive();
         const note = toastr.info(`Рисуем главу манхвы (страница 1 из ${chunks.length})… Все страницы появятся под постом разом по готовности, чтобы текст не скакал!`, '📚 Глава манхвы', { timeOut: 300000, extendedTimeOut: 60000, tapToDismiss: true });
         const completedPages = [];
@@ -9425,21 +9545,43 @@ async function showScenePopup(mesId, forceAsk = false) {
                     cInit.chat[tIdxInit].extra.nnbScene.history = [];
                     cInit.chat[tIdxInit].extra.nnbScene.pageMetaMap = {};
                 }
-                for (let k = 0; k < completedPages.length; k++) {
-                    const pr = completedPages[k];
-                    await attachToLastMessage(pr.url, mesId, pr.sceneMeta, true);
+                const batchHistory = [];
+                const batchCleanMap = {};
+                const batchPageMetaMap = {};
+                for (const pr of completedPages) {
+                    if (!pr?.url) continue;
+                    if (!batchHistory.includes(pr.url)) batchHistory.push(pr.url);
+                    if (pr.sceneMeta?.cleanUrlMap) Object.assign(batchCleanMap, pr.sceneMeta.cleanUrlMap);
+                    if (pr.sceneMeta?.pageMetaMap) Object.assign(batchPageMetaMap, pr.sceneMeta.pageMetaMap);
                 }
+                const lastPr = completedPages[completedPages.length - 1];
+                const combinedMeta = {
+                    ...(lastPr.sceneMeta || {}),
+                    url: lastPr.url,
+                    history: batchHistory,
+                    replaceHistory: true,
+                    cleanUrlMap: batchCleanMap,
+                    pageMetaMap: batchPageMetaMap,
+                    inlineViewMode: 'vertical',
+                };
+                await attachToLastMessage(lastPr.url, mesId, combinedMeta, true);
+                delete combinedMeta.replaceHistory;
                 toastr.success(`Готова глава манхвы из ${completedPages.length} страниц! Все страницы выложены сверху вниз под постом.`, '📚 Глава манхвы', { timeOut: 7000 });
             }
         } catch (e) {
             console.error('[npc_notebook] multiChunkChapter error:', e);
         } finally {
             sceneDrawing = false;
+            multiPageKeepAliveActive = false;
             stopBackgroundGenerationKeepAlive();
             try { toastr.clear(note); } catch (e) { /* ignore */ }
         }
         return;
     }
+    const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
+    const chunkBadge = (comicOpts?.stripMode && Number(comicOpts?.chunkTotal) > 1)
+        ? ` [стр. ${(Number(comicOpts.chunkIndex) || 0) + 1}/${Number(comicOpts.chunkTotal)}]`
+        : '';
     const toastMsg = reuseMeta
         ? 'Перерисовываю сцену по готовому промпту… Нажми на уведомление, чтобы скрыть.'
         : comicOpts?.enabled
