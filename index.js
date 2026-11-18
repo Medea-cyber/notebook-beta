@@ -3092,7 +3092,7 @@ function parseAndApply(raw) {
                     const parts = m[2].split('|').map(x => x.trim());
                     parts.forEach(p => {
                         const aem = p.match(/^(?:внешность_?en|теги_?внешности|appearance_?en|tags)\s*[=:]\s*(.+)$/i);
-                        if (aem) { n.appearanceEn = aem[1].trim().replace(/\]$/, ''); return; }
+                        if (aem) { if (!String(n.appearanceEn || '').trim()) n.appearanceEn = aem[1].trim().replace(/\]$/, ''); return; } // не затираем уже заданные теги внешности (канон Danbooru) — менять их только вручную или кнопкой «Найти канон»
                         const dm = p.match(/^(?:мечта|цель|стремление)\s*[=:]\s*(.+)$/i);
                         if (dm && (!n.dream || n._allowOverwriteProfile)) { n.dream = dm[1].trim().replace(/\]$/, ''); return; }
                         const fm = p.match(/^(?:страх|боится)\s*[=:]\s*(.+)$/i);
@@ -4274,38 +4274,68 @@ function extractImage(raw) {
     return m ? m[0] : '';
 }
 
-// Сжимаем тяжёлые несжатые PNG (2.5–6 МБ от NovelAI или склейки комиксов) в лёгкий JPEG 92% (~180–260 КБ) без видимой потери качества
+// Декодирование картинок через createImageBitmap(blob), которое работает МГНОВЕННО даже в свёрнутой/фоновой вкладке браузера (в отличие от new Image().onload, который Chrome откладывает до возврата во вкладку!)
+async function loadDrawableImageInBackground(srcOrDataUrl) {
+    if (!srcOrDataUrl) return null;
+    if (typeof createImageBitmap === 'function') {
+        try {
+            let blob = null;
+            if (String(srcOrDataUrl).startsWith('data:')) {
+                blob = dataUrlToBlob(srcOrDataUrl);
+            } else {
+                const res = await fetch(srcOrDataUrl);
+                if (res.ok) blob = await res.blob();
+            }
+            if (blob) {
+                const bmp = await createImageBitmap(blob);
+                if (bmp) {
+                    try {
+                        if (!bmp.naturalWidth) bmp.naturalWidth = bmp.width;
+                        if (!bmp.naturalHeight) bmp.naturalHeight = bmp.height;
+                    } catch (e) { /* readonly in some engines, drawCover uses .naturalWidth || .width */ }
+                    return bmp;
+                }
+            }
+        } catch (e) { /* fallback to Image below */ }
+    }
+    if (typeof Image !== 'function') return null;
+    return new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = srcOrDataUrl;
+    });
+}
+
+// Сжимаем тяжёлые несжатые PNG (2.5–6 МБ от NovelAI или склейки комиксов) в лёгкий JPEG 92% (~180–260 КБ) без видимой потери качества (работает в фоне через createImageBitmap!)
 let imgUploadSeq = 0;
 async function compressDataUrlIfHeavy(dataUrl, maxDim = 1536, quality = 0.92) {
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return dataUrl;
-    if (dataUrl.length < 320000 || typeof Image !== 'function' || typeof document === 'undefined') return dataUrl;
-    return new Promise(resolve => {
-        const img = new Image();
-        img.onload = () => {
-            try {
-                let w = img.naturalWidth || img.width || 832;
-                let h = img.naturalHeight || img.height || 1216;
-                if (w > maxDim || h > maxDim) {
-                    const scale = maxDim / Math.max(w, h);
-                    w = Math.max(1, Math.round(w * scale));
-                    h = Math.max(1, Math.round(h * scale));
-                }
-                const cv = document.createElement('canvas');
-                cv.width = w;
-                cv.height = h;
-                const g = cv.getContext('2d');
-                g.fillStyle = '#ffffff';
-                g.fillRect(0, 0, w, h);
-                g.drawImage(img, 0, 0, w, h);
-                const jpgUrl = cv.toDataURL('image/jpeg', quality);
-                resolve((jpgUrl && jpgUrl.startsWith('data:image/jpeg') && jpgUrl.length < dataUrl.length) ? jpgUrl : dataUrl);
-            } catch (e) {
-                resolve(dataUrl);
-            }
-        };
-        img.onerror = () => resolve(dataUrl);
-        img.src = dataUrl;
-    });
+    if (dataUrl.length < 320000 || typeof document === 'undefined') return dataUrl;
+    try {
+        const img = await loadDrawableImageInBackground(dataUrl);
+        if (!img) return dataUrl;
+        let w = img.naturalWidth || img.width || 832;
+        let h = img.naturalHeight || img.height || 1216;
+        if (w > maxDim || h > maxDim) {
+            const scale = maxDim / Math.max(w, h);
+            w = Math.max(1, Math.round(w * scale));
+            h = Math.max(1, Math.round(h * scale));
+        }
+        const cv = document.createElement('canvas');
+        cv.width = w;
+        cv.height = h;
+        const g = cv.getContext('2d');
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, w, h);
+        g.drawImage(img, 0, 0, w, h);
+        if (typeof img.close === 'function') { try { img.close(); } catch (e) {} }
+        const jpgUrl = cv.toDataURL('image/jpeg', quality);
+        return (jpgUrl && jpgUrl.startsWith('data:image/jpeg') && jpgUrl.length < dataUrl.length) ? jpgUrl : dataUrl;
+    } catch (e) {
+        return dataUrl;
+    }
 }
 
 // Сохраняем картинку на сервер Таверны, чтобы не раздувать файл чата и оперативную память
@@ -4617,7 +4647,8 @@ async function withSharedKeyRetry(taskFn, label = 'генерация', maxAttem
             return await taskFn(attempt);
         } catch (err) {
             lastErr = err;
-            if (isPermanentAuthOrConfigError(err) || attempt >= maxAttempts) {
+            const isHiddenTab = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+            if (isPermanentAuthOrConfigError(err) || (!isHiddenTab && attempt >= maxAttempts) || attempt >= maxAttempts + 6) {
                 throw err;
             }
             const jitterMs = Math.floor(Math.random() * 1400);
@@ -4634,7 +4665,7 @@ async function withSharedKeyRetry(taskFn, label = 'генерация', maxAttem
                     { escapeHtml: false, timeOut: waitMs + 400 }
                 );
             }
-            await new Promise(r => setTimeout(r, waitMs));
+            await bgSafeSleep(waitMs);
             if (typeof sceneDrawing !== 'undefined' && sceneDrawing) {
                 sceneDrawingStartedAt = Date.now();
             }
@@ -4687,39 +4718,36 @@ async function parseNovelAiResponse(res) {
 
 // Приводит картинку-референс к формату холста NovelAI Director Reference (1024x1536 с чёрными полями, чистый base64 PNG)
 async function formatRefForNovelAiDirector(dataUrl) {
-    if (!dataUrl || typeof Image !== 'function') return '';
-    return new Promise(resolve => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => {
-            try {
-                const W = 1024, H = 1536;
-                const cv = document.createElement('canvas');
-                cv.width = W;
-                cv.height = H;
-                const g = cv.getContext('2d');
-                g.fillStyle = '#000000';
-                g.fillRect(0, 0, W, H);
-                const scale = Math.min(W / (img.naturalWidth || 1), H / (img.naturalHeight || 1));
-                const dw = Math.round((img.naturalWidth || W) * scale);
-                const dh = Math.round((img.naturalHeight || H) * scale);
-                const dx = Math.floor((W - dw) / 2);
-                const dy = Math.floor((H - dh) / 2);
-                g.drawImage(img, dx, dy, dw, dh);
-                const outDataUrl = cv.toDataURL('image/png');
-                const m = outDataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
-                resolve(m ? m[1] : '');
-            } catch (e) {
-                const m = String(dataUrl).match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
-                resolve(m ? m[1] : '');
-            }
-        };
-        img.onerror = () => {
+    if (!dataUrl || typeof document === 'undefined') return '';
+    try {
+        const img = await loadDrawableImageInBackground(dataUrl);
+        if (!img) {
             const m = String(dataUrl).match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
-            resolve(m ? m[1] : '');
-        };
-        img.src = dataUrl;
-    });
+            return m ? m[1] : '';
+        }
+        const W = 1024, H = 1536;
+        const iw = img.naturalWidth || img.width || W;
+        const ih = img.naturalHeight || img.height || H;
+        const cv = document.createElement('canvas');
+        cv.width = W;
+        cv.height = H;
+        const g = cv.getContext('2d');
+        g.fillStyle = '#000000';
+        g.fillRect(0, 0, W, H);
+        const scale = Math.min(W / (iw || 1), H / (ih || 1));
+        const dw = Math.round(iw * scale);
+        const dh = Math.round(ih * scale);
+        const dx = Math.floor((W - dw) / 2);
+        const dy = Math.floor((H - dh) / 2);
+        g.drawImage(img, dx, dy, dw, dh);
+        if (typeof img.close === 'function') { try { img.close(); } catch (e) {} }
+        const outDataUrl = cv.toDataURL('image/png');
+        const m = outDataUrl.match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+        return m ? m[1] : '';
+    } catch (e) {
+        const m = String(dataUrl).match(/^data:image\/[a-z0-9.+-]+;base64,(.+)$/i);
+        return m ? m[1] : '';
+    }
 }
 
 
@@ -6970,14 +6998,15 @@ async function overlayComicBubblesOnDataUrl(imageUrl, quotes, comicOpts = null) 
     if (!imageUrl || !Array.isArray(quotes) || !quotes.length || typeof document === 'undefined') return imageUrl;
     const dataUrl = await fileToDataUrl(imageUrl);
     const srcToLoad = dataUrl || imageUrl;
+    const decodedImg = await loadDrawableImageInBackground(srcToLoad);
+    if (!decodedImg) return imageUrl;
 
     return new Promise(resolve => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => {
+        const img = decodedImg;
+        const runOverlay = () => {
             try {
-                const W = img.naturalWidth || 832;
-                const H = img.naturalHeight || 1216;
+                const W = img.naturalWidth || img.width || 832;
+                const H = img.naturalHeight || img.height || 1216;
                 const cv = document.createElement('canvas');
                 cv.width = W;
                 cv.height = H;
@@ -7051,10 +7080,11 @@ async function overlayComicBubblesOnDataUrl(imageUrl, quotes, comicOpts = null) 
             } catch (e) {
                 console.warn('[npc_notebook] overlayComicBubblesOnDataUrl error:', e);
                 resolve(imageUrl);
+            } finally {
+                if (typeof img.close === 'function') { try { img.close(); } catch (e) {} }
             }
         };
-        img.onerror = () => resolve(imageUrl);
-        img.src = srcToLoad;
+        runOverlay();
     });
 }
 
@@ -7064,13 +7094,7 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
     const loadedImgs = [];
     for (const u of frameUrls) {
         const dUrl = await fileToDataUrl(u) || u;
-        const im = await new Promise(res => {
-            const img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = () => res(img);
-            img.onerror = () => res(null);
-            img.src = dUrl;
-        });
+        const im = await loadDrawableImageInBackground(dUrl);
         if (im) loadedImgs.push(im);
     }
     if (!loadedImgs.length) return frameUrls[0] || '';
@@ -7086,8 +7110,8 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
 
     // Отрисовка картинки с заполнением фрейма (sy = 0.05 бережно сохраняет макушки волос у верхней рамки и удерживает лица в верхней половине кадра вдали от нижнего облачка текста!)
     const drawCover = (img, x, y, w, h) => {
-        const iw = img.naturalWidth || 832;
-        const ih = img.naturalHeight || 1216;
+        const iw = img.naturalWidth || img.width || 832;
+        const ih = img.naturalHeight || img.height || 1216;
         const scale = Math.max(w / iw, h / ih);
         const sw = w / scale;
         const sh = h / scale;
@@ -7540,6 +7564,9 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId =
         const finish = val => {
             if (settled) return;
             settled = true;
+            if (val) {
+                try { startBackgroundGenerationKeepAlive(); } catch (e) { /* ignore */ }
+            }
             closePopupOf(el);
             resolve(val);
         };
@@ -8270,11 +8297,113 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
 
 let bgKeepAliveAudioCtx = null;
 let bgKeepAliveOsc = null;
+let bgKeepAliveAudioEl = null;
+let bgKeepAliveWavUrl = '';
 let bgKeepAliveWakeLock = null;
 let bgKeepAliveLockResolver = null;
+let bgKeepAliveRtc1 = null;
+let bgKeepAliveRtc2 = null;
+let bgKeepAliveRtcDc = null;
+let bgKeepAliveWorker = null;
+let bgWorkerTimerSeq = 0;
+const bgWorkerTimerCallbacks = new Map();
 let multiPageKeepAliveActive = false;
 
+function ensureBackgroundTimerWorker() {
+    if (bgKeepAliveWorker) return bgKeepAliveWorker;
+    try {
+        const workerCode = `
+            const timers = new Map();
+            self.onmessage = function(e) {
+                const d = e.data || {};
+                if (d.cmd === 'sleep') {
+                    const tid = setTimeout(() => {
+                        timers.delete(d.id);
+                        self.postMessage({ id: d.id });
+                    }, d.ms || 0);
+                    timers.set(d.id, tid);
+                } else if (d.cmd === 'cancel') {
+                    const tid = timers.get(d.id);
+                    if (tid) { clearTimeout(tid); timers.delete(d.id); }
+                }
+            };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const wUrl = URL.createObjectURL(blob);
+        const w = new Worker(wUrl);
+        w.onmessage = (e) => {
+            const id = e.data?.id;
+            const cb = bgWorkerTimerCallbacks.get(id);
+            if (cb) {
+                bgWorkerTimerCallbacks.delete(id);
+                cb();
+            }
+        };
+        bgKeepAliveWorker = w;
+    } catch (e) { /* fallback to setTimeout */ }
+    return bgKeepAliveWorker;
+}
+
+// Таймер ожидания, который НЕ замораживается и НЕ замедляется до 60 сек. в фоновой вкладке!
+function bgSafeSleep(ms) {
+    const w = ensureBackgroundTimerWorker();
+    if (!w) return new Promise(r => setTimeout(r, ms));
+    return new Promise(resolve => {
+        const id = ++bgWorkerTimerSeq;
+        const fallbackTid = setTimeout(() => {
+            if (bgWorkerTimerCallbacks.has(id)) {
+                bgWorkerTimerCallbacks.delete(id);
+                resolve();
+            }
+        }, ms + 1500);
+        bgWorkerTimerCallbacks.set(id, () => {
+            clearTimeout(fallbackTid);
+            resolve();
+        });
+        try {
+            w.postMessage({ cmd: 'sleep', id, ms });
+        } catch (e) {
+            bgWorkerTimerCallbacks.delete(id);
+            clearTimeout(fallbackTid);
+            setTimeout(resolve, ms);
+        }
+    });
+}
+
+function buildInaudibleKeepAliveWavUrl() {
+    if (bgKeepAliveWavUrl) return bgKeepAliveWavUrl;
+    try {
+        const sampleRate = 8000;
+        const numSamples = sampleRate; // 1 секунда в петле
+        const buf = new ArrayBuffer(44 + numSamples * 2);
+        const view = new DataView(buf);
+        const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + numSamples * 2, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // PCM
+        view.setUint16(22, 1, true); // Mono
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, 'data');
+        view.setUint32(40, numSamples * 2, true);
+        // 16 Гц инфразвук с амплитудой 48/32767 (~0.0014) — выше порога SilentAudioDetector в Chromium, но 100% ниже порога слышимости человека!
+        for (let i = 0; i < numSamples; i++) {
+            const val = Math.round(Math.sin((2 * Math.PI * 16 * i) / sampleRate) * 48);
+            view.setInt16(44 + i * 2, val, true);
+        }
+        bgKeepAliveWavUrl = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    } catch (e) { /* ignore */ }
+    return bgKeepAliveWavUrl;
+}
+
 function startBackgroundGenerationKeepAlive() {
+    ensureBackgroundTimerWorker();
+    // 1. Web Lock API
     try {
         if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' && !bgKeepAliveLockResolver) {
             navigator.locks.request('nnb_background_manhwa_generation', { mode: 'exclusive' }, () => new Promise(res => {
@@ -8282,24 +8411,61 @@ function startBackgroundGenerationKeepAlive() {
             })).catch(() => {});
         }
     } catch (e) { /* ignore */ }
+    // 2. Screen WakeLock
     try {
         if (typeof navigator !== 'undefined' && navigator.wakeLock && typeof navigator.wakeLock.request === 'function' && !bgKeepAliveWakeLock) {
             navigator.wakeLock.request('screen').then(wl => { bgKeepAliveWakeLock = wl; }).catch(() => {});
         }
     } catch (e) { /* ignore */ }
+    // 3. HTML5 <audio loop> с не-нулевым инфразвуковым WAV (удерживает Android PARTIAL_WAKE_LOCK и не отключается SilentAudioDetector!)
+    try {
+        const wavUrl = buildInaudibleKeepAliveWavUrl();
+        if (wavUrl && typeof Audio === 'function') {
+            if (!bgKeepAliveAudioEl) {
+                const aEl = new Audio(wavUrl);
+                aEl.loop = true;
+                aEl.volume = 0.02;
+                aEl.setAttribute('playsinline', '');
+                bgKeepAliveAudioEl = aEl;
+            }
+            if (bgKeepAliveAudioEl.paused) {
+                bgKeepAliveAudioEl.play().catch(() => {});
+            }
+        }
+    } catch (e) { /* ignore */ }
+    // 4. Web Audio API (16 Hz инфразвук с gain 0.0015 — не считается тишиной в Chromium!)
     try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx && !bgKeepAliveAudioCtx) {
             bgKeepAliveAudioCtx = new AudioCtx();
             const osc = bgKeepAliveAudioCtx.createOscillator();
             const gain = bgKeepAliveAudioCtx.createGain();
-            gain.gain.value = 0.00001;
+            osc.frequency.value = 16;
+            gain.gain.value = 0.0015;
             osc.connect(gain);
             gain.connect(bgKeepAliveAudioCtx.destination);
             osc.start();
             bgKeepAliveOsc = osc;
         } else if (bgKeepAliveAudioCtx && bgKeepAliveAudioCtx.state === 'suspended') {
             bgKeepAliveAudioCtx.resume().catch(() => {});
+        }
+    } catch (e) { /* ignore */ }
+    // 5. Локальная петля WebRTC (RTCPeerConnection): в Chromium PageScheduler наличие активного RTCPeerConnection жёстко запрещает заморозку фоновой вкладки (HasActiveWebRTCConnection = true), даже если звук перехвачен другим приложением!
+    try {
+        if (typeof RTCPeerConnection === 'function' && !bgKeepAliveRtc1) {
+            const pc1 = new RTCPeerConnection();
+            const pc2 = new RTCPeerConnection();
+            const dc = pc1.createDataChannel('nnb_keepalive');
+            pc1.onicecandidate = e => { if (e.candidate) pc2.addIceCandidate(e.candidate).catch(() => {}); };
+            pc2.onicecandidate = e => { if (e.candidate) pc1.addIceCandidate(e.candidate).catch(() => {}); };
+            pc1.createOffer()
+                .then(offer => pc1.setLocalDescription(offer).then(() => pc2.setRemoteDescription(offer)))
+                .then(() => pc2.createAnswer())
+                .then(answer => pc2.setLocalDescription(answer).then(() => pc1.setRemoteDescription(answer)))
+                .catch(() => {});
+            bgKeepAliveRtc1 = pc1;
+            bgKeepAliveRtc2 = pc2;
+            bgKeepAliveRtcDc = dc;
         }
     } catch (e) { /* ignore */ }
 }
@@ -8319,6 +8485,12 @@ function stopBackgroundGenerationKeepAlive() {
         }
     } catch (e) { /* ignore */ }
     try {
+        if (bgKeepAliveAudioEl) {
+            bgKeepAliveAudioEl.pause();
+            bgKeepAliveAudioEl = null;
+        }
+    } catch (e) { /* ignore */ }
+    try {
         if (bgKeepAliveOsc) {
             bgKeepAliveOsc.stop();
             bgKeepAliveOsc.disconnect();
@@ -8328,6 +8500,11 @@ function stopBackgroundGenerationKeepAlive() {
             bgKeepAliveAudioCtx.close().catch(() => {});
             bgKeepAliveAudioCtx = null;
         }
+    } catch (e) { /* ignore */ }
+    try {
+        if (bgKeepAliveRtcDc) { bgKeepAliveRtcDc.close(); bgKeepAliveRtcDc = null; }
+        if (bgKeepAliveRtc1) { bgKeepAliveRtc1.close(); bgKeepAliveRtc1 = null; }
+        if (bgKeepAliveRtc2) { bgKeepAliveRtc2.close(); bgKeepAliveRtc2 = null; }
     } catch (e) { /* ignore */ }
 }
 
@@ -8509,12 +8686,16 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             if (isNai) {
                 // Правило для NovelAI: если в кадре есть char (или оба — char и user), берём картинку-референс ТОЛЬКО для char (а user идёт по текстовому описанию внешности).
                 // Если же char в кадре нет, а есть только user — берём картинку-референс для user!
+                // Аватар главного персонажа карточки (напр. Кайлара) прикрепляем, только если он реально назван в рисуемом отрывке —
+                // иначе его лицо уезжает на NPC в кадре (Дойл рисовался Кайларом)
+                const refChunkTxt = String((comicOpts?.enabled && comicOpts?.chunkText) ? comicOpts.chunkText : (ctx().chat?.[Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1)]?.mes || ''));
+                const reallyInChunk = n => isNameMentionedInText(n, refChunkTxt);
                 for (const ch of characterAvatars()) {
-                    if (!inFrame(ch.name)) continue;
+                    if (!inFrame(ch.name) || !reallyInChunk(ch.name)) continue;
                     const img = await fileToDataUrl(ch.file);
                     if (img) { images.push(img); who.push(ch.name); break; }
                 }
-                if (!images.length && st.mainCharCard?.avatar && inFrame(st.mainCharCard.name)) {
+                if (!images.length && st.mainCharCard?.avatar && inFrame(st.mainCharCard.name) && reallyInChunk(st.mainCharCard.name)) {
                     const img = await fileToDataUrl(st.mainCharCard.avatar);
                     if (img) { images.push(img); who.push(st.mainCharCard.name); }
                 }
@@ -8529,6 +8710,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                         if (img) { images.push(img); who.push(npc.name); break; }
                     }
                 }
+                if (images.length) logImageDiag('NovelAI: картинка-референс внешности взята с аватара', who.join(', '));
             } else {
                 for (const ch of characterAvatars()) {
                     if (images.length >= 4 || !inFrame(ch.name)) continue;
@@ -9522,7 +9704,7 @@ async function showScenePopup(mesId, forceAsk = false) {
                     if (pageAttempt < 4) {
                         const waitSec = 5 + pageAttempt * 2;
                         toastr.warning(`⏳ Ключ был занят на странице ${i + 1} из ${chunks.length} — ждём ${waitSec} сек. и повторяем эту страницу…`, '🔄 Очередь страниц манхвы', { timeOut: waitSec * 1000 });
-                        await new Promise(r => setTimeout(r, waitSec * 1000));
+                        await bgSafeSleep(waitSec * 1000);
                     }
                 }
                 if (pageRes?.url) {
@@ -9697,17 +9879,32 @@ async function triggerBrowserDownloadUrl(urlOrData, filename) {
     setTimeout(() => a.remove(), 250);
 }
 
-async function downloadAllManhwaPagesSequentially(mesId, sceneMeta) {
-    const urls = getSortedManhwaHistoryUrls(sceneMeta);
-    if (!urls.length) return;
-    toastr.info(`Подготавливаю и скачиваю все страницы (${urls.length} шт.) строго по порядку с паузой 1.1 сек. (чтобы в галерее телефона они легли строго 1 → ${urls.length})…`, '📦 Скачивание по порядку', { timeOut: urls.length * 1200 + 2000 });
+function getCleanUrlForManhwaPage(sceneMeta, pUrl) {
+    if (!sceneMeta || !pUrl) return '';
+    const fromMap = sceneMeta.cleanUrlMap?.[pUrl];
+    if (fromMap && fromMap !== pUrl) return fromMap;
+    const fromPage = sceneMeta.pageMetaMap?.[pUrl]?.cleanUnletteredUrl;
+    if (fromPage && fromPage !== pUrl) return fromPage;
+    if (sceneMeta.cleanUnletteredUrl && sceneMeta.cleanUnletteredUrl !== pUrl && (!Array.isArray(sceneMeta.history) || sceneMeta.history.length <= 1)) {
+        return sceneMeta.cleanUnletteredUrl;
+    }
+    return '';
+}
+
+async function downloadAllManhwaPagesSequentially(mesId, sceneMeta, useCleanUnlettered = false) {
+    const rawUrls = getSortedManhwaHistoryUrls(sceneMeta);
+    if (!rawUrls.length) return;
+    const wantClean = useCleanUnlettered || !!sceneMeta?.showCleanUnlettered;
+    const urls = rawUrls.map(u => (wantClean ? (getCleanUrlForManhwaPage(sceneMeta, u) || u) : u));
+    toastr.info(`Подготавливаю и скачиваю все страницы${wantClean ? ' (без текста)' : ''} (${urls.length} шт.) строго по порядку с паузой 1.1 сек. (чтобы в галерее телефона они легли строго 1 → ${urls.length})…`, '📦 Скачивание по порядку', { timeOut: urls.length * 1200 + 2000 });
     // 1. Сначала заранее загружаем все файлы в память, чтобы разный размер картинок не менял порядок их сохранения на диск!
     const preloaded = [];
     for (let i = 0; i < urls.length; i++) {
         const u = urls[i];
         const dUrl = u.startsWith('data:') ? u : (await fileToDataUrl(u) || u);
         const pageNumStr = String(i + 1).padStart(2, '0');
-        preloaded.push({ dUrl, filename: `${pageNumStr}_manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page${pageNumStr}.png` });
+        const cleanSuffix = wantClean ? '_clean' : '';
+        preloaded.push({ dUrl, filename: `${pageNumStr}_manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page${pageNumStr}${cleanSuffix}.png` });
     }
     // 2. Сохраняем строго по очереди с интервалом 1100 мс (1.1 сек.), чтобы система и галерея телефона фиксировали точный порядок!
     for (let i = 0; i < preloaded.length; i++) {
@@ -9716,17 +9913,19 @@ async function downloadAllManhwaPagesSequentially(mesId, sceneMeta) {
             await new Promise(r => setTimeout(r, 1100));
         }
     }
-    toastr.success(`Все ${preloaded.length} страниц скачаны строго по порядку (01 → ${String(preloaded.length).padStart(2, '0')})!`, '📦 Скачивание завершено');
+    toastr.success(`Все ${preloaded.length} страниц${wantClean ? ' (без текста)' : ''} скачаны строго по порядку (01 → ${String(preloaded.length).padStart(2, '0')})!`, '📦 Скачивание завершено');
 }
 
-async function downloadAllPagesAsSingleVerticalStrip(mesId, sceneMeta) {
-    const urls = getSortedManhwaHistoryUrls(sceneMeta);
-    if (!urls.length) return;
+async function downloadAllPagesAsSingleVerticalStrip(mesId, sceneMeta, useCleanUnlettered = false) {
+    const rawUrls = getSortedManhwaHistoryUrls(sceneMeta);
+    if (!rawUrls.length) return;
+    const wantClean = useCleanUnlettered || !!sceneMeta?.showCleanUnlettered;
+    const urls = rawUrls.map(u => (wantClean ? (getCleanUrlForManhwaPage(sceneMeta, u) || u) : u));
     if (urls.length === 1) {
-        await triggerBrowserDownloadUrl(urls[0], `manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page1.png`);
+        await triggerBrowserDownloadUrl(urls[0], `manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page1${wantClean ? '_clean' : ''}.png`);
         return;
     }
-    toastr.info(`Склеиваю все ${urls.length} страниц сверху вниз в единый длинный свиток манхвы…`, '📥 Склейка главы', { timeOut: 5000 });
+    toastr.info(`Склеиваю все ${urls.length} страниц${wantClean ? ' (без текста)' : ''} сверху вниз в единый длинный свиток манхвы…`, '📥 Склейка главы', { timeOut: 5000 });
     const loaded = [];
     for (const u of urls) {
         const dUrl = await fileToDataUrl(u) || u;
@@ -9874,19 +10073,41 @@ async function rerollSpecificManhwaPageInPlace(mesId, sceneMeta, targetUrl, rege
 async function openManhwaVerticalReaderModal(mesId, sceneMeta) {
     const urls = getSortedManhwaHistoryUrls(sceneMeta);
     if (!urls.length) return;
+    let modalCleanMode = !!sceneMeta?.showCleanUnlettered;
+    const hasAnyClean = urls.some(u => !!getCleanUrlForManhwaPage(sceneMeta, u));
     const el = $('<div class="nnb-pop nnb-pop-visual"></div>');
     el.append(`<h3>📜 Чтение и скачивание манхвы лентой (${urls.length} стр.)</h3>`);
     const dlBar = $('<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;"></div>');
-    dlBar.append($('<div class="menu_button nnb-btn-primary" style="margin:0; padding:6px 12px; font-weight:700;"><i class="fa-solid fa-file-arrow-down"></i> 📥 Скачать всю главу одним длинным свитком (JPG)</div>').on('click', () => downloadAllPagesAsSingleVerticalStrip(mesId, sceneMeta)));
-    dlBar.append($(`<div class="menu_button" style="margin:0; padding:6px 12px; font-weight:600;"><i class="fa-solid fa-download"></i> 📦 Скачать все страницы по отдельности (${urls.length} шт.)</div>`).on('click', () => downloadAllManhwaPagesSequentially(mesId, sceneMeta)));
-    el.append(dlBar);
+    dlBar.append($('<div class="menu_button nnb-btn-primary" style="margin:0; padding:6px 12px; font-weight:700;"><i class="fa-solid fa-file-arrow-down"></i> 📥 Скачать всю главу одним длинным свитком (JPG)</div>').on('click', () => downloadAllPagesAsSingleVerticalStrip(mesId, sceneMeta, modalCleanMode)));
+    dlBar.append($(`<div class="menu_button" style="margin:0; padding:6px 12px; font-weight:600;"><i class="fa-solid fa-download"></i> 📦 Скачать все страницы по отдельности (${urls.length} шт.)</div>`).on('click', () => downloadAllManhwaPagesSequentially(mesId, sceneMeta, modalCleanMode)));
     const stripWrap = $('<div style="display:flex; flex-direction:column; align-items:center; gap:14px; max-height:70vh; overflow-y:auto; padding:6px;"></div>');
+    const modalImgs = [];
+    if (hasAnyClean) {
+        const toggleCleanModalBtn = $(`<div class="menu_button" style="margin:0; padding:6px 12px; font-weight:600;"></div>`);
+        const updateModalCleanUi = () => {
+            toggleCleanModalBtn.html(modalCleanMode ? '<i class="fa-solid fa-comments"></i> 💬 Показать с текстом' : '<i class="fa-solid fa-eye-slash"></i> 👁 Показать без текста');
+            modalImgs.forEach(item => {
+                const targetSrc = (modalCleanMode && item.cleanUrl) ? item.cleanUrl : item.letteredUrl;
+                item.im.attr('src', targetSrc);
+            });
+        };
+        toggleCleanModalBtn.on('click', () => {
+            modalCleanMode = !modalCleanMode;
+            updateModalCleanUi();
+        });
+        dlBar.append(toggleCleanModalBtn);
+        setTimeout(updateModalCleanUi, 0);
+    }
+    el.append(dlBar);
     urls.forEach((u, idx) => {
         const pageCard = $('<div style="width:100%; max-width:680px; text-align:center;"></div>');
         const pMeta = sceneMeta?.pageMetaMap?.[u];
+        const cleanU = getCleanUrlForManhwaPage(sceneMeta, u);
+        const initSrc = (modalCleanMode && cleanU) ? cleanU : u;
         const chBadge = (pMeta?.comicOpts?.chunkTotal > 1) ? ` · Кусочек #${(Number(pMeta.comicOpts.chunkIndex) || 0) + 1} из ${pMeta.comicOpts.chunkTotal}` : '';
         pageCard.append($('<div style="font-size:0.8em; font-weight:700; opacity:0.8; margin-bottom:4px;"></div>').text(`Страница ${idx + 1} из ${urls.length}${chBadge}`));
-        const im = $('<img alt="" style="width:100%; height:auto; border-radius:10px; box-shadow:0 4px 18px rgba(0,0,0,0.35); cursor:pointer;">').attr('src', u).on('click', () => window.open(u, '_blank'));
+        const im = $('<img alt="" style="width:100%; height:auto; border-radius:10px; box-shadow:0 4px 18px rgba(0,0,0,0.35); cursor:pointer;">').attr('src', initSrc).on('click', function () { window.open($(this).attr('src') || u, '_blank'); });
+        modalImgs.push({ im, letteredUrl: u, cleanUrl: cleanU });
         pageCard.append(im);
         stripWrap.append(pageCard);
     });
@@ -19403,6 +19624,24 @@ function placeMesButtons() {
                 if (sceneMeta.cleanUnletteredUrl || sceneMeta.comicOpts?.enabled) {
                     const curPageMeta = sceneMeta.pageMetaMap?.[curUrl] || null;
                     const activeComicOptsForSlide = curPageMeta?.comicOpts || sceneMeta.comicOpts;
+                    const singleCleanUrl = getCleanUrlForManhwaPage(sceneMeta, curUrl);
+                    if (singleCleanUrl) {
+                        let singleShowingClean = !!sceneMeta.showCleanUnlettered;
+                        if (singleShowingClean && imgEl.length) imgEl.attr('src', singleCleanUrl);
+                        const toggleSingleCleanBtn = $(`<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Переключить показ между страницей с облачками текста и чистым артом без текста"></div>`);
+                        const syncSingleCleanBtn = () => {
+                            toggleSingleCleanBtn.html(singleShowingClean ? '<i class="fa-solid fa-comments"></i> С текстом' : '<i class="fa-solid fa-eye-slash"></i> Без текста');
+                        };
+                        syncSingleCleanBtn();
+                        toggleSingleCleanBtn.on('click', e => {
+                            e.stopPropagation();
+                            singleShowingClean = !singleShowingClean;
+                            sceneMeta.showCleanUnlettered = singleShowingClean;
+                            if (imgEl.length) imgEl.attr('src', singleShowingClean ? singleCleanUrl : curUrl);
+                            syncSingleCleanBtn();
+                        });
+                        navRow.append(toggleSingleCleanBtn);
+                    }
                     const editBubblesBtn = $('<div class="menu_button" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Изменить речь, серые мысли (💭) или описания (без имени) прямо поверх этой страницы"><i class="fa-solid fa-comment-dots"></i> Текст</div>').on('click', async e => {
                         e.stopPropagation();
                         await editQuotesForSpecificPageUrl(mId, sceneMeta, curUrl);
@@ -19486,15 +19725,33 @@ function placeMesButtons() {
                 // Если в посте несколько страниц манхвы/комикса — выводим ВСЕ страницы сразу сверху вниз прямо в теле поста (как в настоящей манхве!) + кнопки «Скачать одним свитком» и «Скачать все»!
                 if (isVerticalStackMode) {
                     imgEl.css('display', 'none');
+                    const hasAnyCleanInStack = hist.some(u => !!getCleanUrlForManhwaPage(sceneMeta, u));
+                    const pageCleanControllers = [];
                     const topChapterBar = $('<div class="nnb-inline-scene-nav" style="margin-bottom:8px; justify-content:space-between; width:100%;"></div>');
                     const dlScrollBtn = $(`<div class="menu_button nnb-btn-primary" style="padding:5px 10px; font-size:0.8em; margin:0; font-weight:700;" title="Склеить все ${hist.length} страниц сверху вниз в один длинный файл манхвы и скачать"><i class="fa-solid fa-file-arrow-down"></i> 📥 Скачать одним свитком (${hist.length} стр.)</div>`).on('click', e => {
                         e.stopPropagation();
-                        downloadAllPagesAsSingleVerticalStrip(mId, sceneMeta);
+                        downloadAllPagesAsSingleVerticalStrip(mId, sceneMeta, !!sceneMeta.showCleanUnlettered);
                     });
                     const dlAllBtn = $(`<div class="menu_button" style="padding:5px 10px; font-size:0.8em; margin:0; font-weight:600;" title="Скачать все ${hist.length} страниц отдельными картинками по порядку"><i class="fa-solid fa-download"></i> 📦 Скачать все (${hist.length} шт.)</div>`).on('click', e => {
                         e.stopPropagation();
-                        downloadAllManhwaPagesSequentially(mId, sceneMeta);
+                        downloadAllManhwaPagesSequentially(mId, sceneMeta, !!sceneMeta.showCleanUnlettered);
                     });
+                    topChapterBar.append(dlScrollBtn, dlAllBtn);
+                    if (hasAnyCleanInStack) {
+                        const toggleAllCleanBtn = $('<div class="menu_button" style="padding:5px 9px; font-size:0.78em; margin:0; font-weight:600;" title="Переключить все страницы главы между версией с облачками текста и чистыми картинками без текста"></div>');
+                        const syncAllCleanBtn = () => {
+                            const isCl = !!sceneMeta.showCleanUnlettered;
+                            toggleAllCleanBtn.html(isCl ? '<i class="fa-solid fa-comments"></i> 💬 Все с текстом' : '<i class="fa-solid fa-eye-slash"></i> 👁 Все без текста');
+                        };
+                        syncAllCleanBtn();
+                        toggleAllCleanBtn.on('click', e => {
+                            e.stopPropagation();
+                            sceneMeta.showCleanUnlettered = !sceneMeta.showCleanUnlettered;
+                            pageCleanControllers.forEach(ctrl => ctrl.setClean(!!sceneMeta.showCleanUnlettered));
+                            syncAllCleanBtn();
+                        });
+                        topChapterBar.append(toggleAllCleanBtn);
+                    }
                     const foldModeBtn = $('<div class="menu_button" style="padding:5px 9px; font-size:0.78em; margin:0;" title="Переключить на показ по одной странице со стрелками ◀ ▶"><i class="fa-solid fa-compress"></i> По 1 стр. (◀ ▶)</div>').on('click', async e => {
                         e.stopPropagation();
                         sceneMeta.inlineViewMode = 'single';
@@ -19502,32 +19759,52 @@ function placeMesButtons() {
                         await c.saveChat();
                         placeMesButtons();
                     });
-                    topChapterBar.append(dlScrollBtn, dlAllBtn, foldModeBtn);
+                    topChapterBar.append(foldModeBtn);
 
                     const stackWrap = $('<div class="nnb-inline-manhwa-stack" style="display:flex; flex-direction:column; gap:14px; width:100%; margin:6px 0 10px 0;"></div>');
                     hist.forEach((pUrl, pIdx) => {
                         const pMeta = sceneMeta.pageMetaMap?.[pUrl] || null;
+                        const pCleanUrl = getCleanUrlForManhwaPage(sceneMeta, pUrl);
+                        let pageShowingClean = !!(sceneMeta.showCleanUnlettered && pCleanUrl);
                         const pageBlock = $('<div class="nnb-manhwa-page-item" style="display:flex; flex-direction:column; gap:5px; width:100%; background:rgba(15,12,22,0.35); border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12)); border-radius:12px; padding:6px; box-sizing:border-box;"></div>');
                         const pageImg = $('<img loading="lazy" decoding="async" alt="" style="width:100%; height:auto; border-radius:8px; display:block; cursor:pointer;">')
-                            .attr('src', pUrl)
+                            .attr('src', pageShowingClean ? pCleanUrl : pUrl)
                             .attr('title', `Страница ${pIdx + 1} из ${hist.length} — нажми, чтобы открыть в полном размере`)
                             .on('click', e => {
                                 e.stopPropagation();
-                                window.open(pUrl, '_blank');
+                                window.open(pageShowingClean && pCleanUrl ? pCleanUrl : pUrl, '_blank');
                             });
 
                         const pageTools = $('<div style="display:flex; align-items:center; justify-content:space-between; gap:6px; flex-wrap:wrap; padding:2px 4px;"></div>');
                         const pageLabel = $(`<span style="font-size:0.78em; font-weight:700; opacity:0.85;">📄 Стр. ${pIdx + 1} из ${hist.length}</span>`);
                         const btnGroup = $('<div style="display:flex; gap:5px; flex-wrap:wrap;"></div>');
 
+                        if (pCleanUrl) {
+                            const pCleanToggleBtn = $('<div class="menu_button" style="padding:3px 8px; font-size:0.76em; margin:0;" title="Переключить эту страницу: чистый арт без облачков текста / с текстом"></div>');
+                            const setPageCleanState = (val) => {
+                                pageShowingClean = !!(val && pCleanUrl);
+                                pageImg.attr('src', pageShowingClean ? pCleanUrl : pUrl);
+                                pCleanToggleBtn.html(pageShowingClean ? '<i class="fa-solid fa-comments"></i> С текстом' : '<i class="fa-solid fa-eye-slash"></i> Без текста');
+                            };
+                            setPageCleanState(pageShowingClean);
+                            pCleanToggleBtn.on('click', e => {
+                                e.stopPropagation();
+                                setPageCleanState(!pageShowingClean);
+                            });
+                            pageCleanControllers.push({ setClean: setPageCleanState });
+                            btnGroup.append(pCleanToggleBtn);
+                        }
+
                         const pQuotesBtn = $('<div class="menu_button" style="padding:3px 8px; font-size:0.76em; margin:0;" title="Изменить речь, серые мысли (💭) или описание на этой странице без перерисовки"><i class="fa-solid fa-comment-dots"></i> Текст</div>').on('click', async e => {
                             e.stopPropagation();
                             await editQuotesForSpecificPageUrl(mId, sceneMeta, pUrl);
                         });
                         const pPromptBtn = $('<div class="menu_button" style="padding:3px 8px; font-size:0.76em; margin:0;" title="Открыть промпт этой страницы или перерисовать её"><i class="fa-solid fa-pen-to-square"></i> Промпт / 🔄</div>');
-                        const pDlBtn = $('<div class="menu_button" style="padding:3px 8px; font-size:0.76em; margin:0;" title="Скачать эту страницу"><i class="fa-solid fa-download"></i></div>').on('click', e => {
+                        const pDlBtn = $('<div class="menu_button" style="padding:3px 8px; font-size:0.76em; margin:0;" title="Скачать эту страницу (в текущем виде: с текстом или без текста)"><i class="fa-solid fa-download"></i></div>').on('click', e => {
                             e.stopPropagation();
-                            triggerBrowserDownloadUrl(pUrl, `manhwa_post${mId}_page${pIdx + 1}.png`);
+                            const dlTarget = (pageShowingClean && pCleanUrl) ? pCleanUrl : pUrl;
+                            const clSuf = (pageShowingClean && pCleanUrl) ? '_clean' : '';
+                            triggerBrowserDownloadUrl(dlTarget, `manhwa_post${mId}_page${pIdx + 1}${clSuf}.png`);
                         });
                         const pDelBtn = $('<div class="menu_button" style="padding:3px 8px; font-size:0.76em; margin:0; color:#ff8a84;" title="Удалить эту страницу из ленты"><i class="fa-solid fa-trash"></i></div>').on('click', async e => {
                             e.stopPropagation();
