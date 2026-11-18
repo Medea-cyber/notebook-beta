@@ -5580,20 +5580,52 @@ function getComicStyleById(id) {
     return all.find(x => x.id === id) || all[0];
 }
 
-// Разбивка длинного поста на последовательные смысловые кусочки (эпизоды), чтобы каждая страница манхвы (из 3–4 фреймов) детально экранизировала свой кусочек поста без потери концовки!
-function splitPostIntoComicChunks(rawPostText, targetChunkChars = 440) {
-    const clean = stripTags(stripActionTags(String(rawPostText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n').trim();
+// Очистка ролевых технических шапок вида [Date: ...], [Location: ... Characters: ...] и замена спец-пробелов (  Figure Space и др.) на обычные пробелы
+function stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr) {
+    if (!rawStr) return '';
+    return String(rawStr)
+        .replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/g, ' ')
+        .replace(/^\s*(?:\[[^\]\n]*(?:Date|Time|Location|Characters|Weather|Mood|Status|Scene|Локация|Дата|Время|Персонажи)\s*:[^\]\n]*\]\s*)+/gim, '')
+        .replace(/\[(?:Date|Time|Location|Characters|Weather|Mood|Status)\s*:[^\]\n]*\]/gi, '')
+        .trim();
+}
+
+function capitalizeSentenceFirstChar(str) {
+    const s = String(str || '').trim();
+    if (!s) return '';
+    return s.replace(/^([«"„“(\s]*)([а-яёa-z])/, (_, pref, ch) => pref + ch.toUpperCase());
+}
+
+// Разбивка длинного поста на последовательные смысловые кусочки (эпизоды):
+// сохраняет естественные абзацы автора (до 850 симв. на абзац = 1 страница манхвы, до 10 страниц на пост), чтобы ни один абзац в конце поста не терялся!
+function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
+    const clean = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(rawPostText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
     if (!clean) return [];
-    const maxPages = 6;
-    const effectiveTarget = Math.max(targetChunkChars, Math.ceil(clean.length / maxPages));
+    const maxPages = 10;
     const rawLines = clean.split(/\n+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+
+    // Если пост уже состоит из 2..10 аккуратных авторских абзацев (где каждый абзац <= 920 симв.), отдаём ровно по 1 странице на каждый абзац без искусственного разрезания реплик пополам!
+    if (rawLines.length >= 2 && rawLines.length <= maxPages && rawLines.every(l => l.length >= 140 && l.length <= 920)) {
+        return rawLines.map((txt, idx) => {
+            const flat = txt.replace(/\s+/g, ' ').trim();
+            const preview = flat.length <= 72 ? flat : `${flat.slice(0, 52).trim()}…`;
+            return {
+                index: idx,
+                total: rawLines.length,
+                text: txt,
+                preview,
+            };
+        });
+    }
+
+    const effectiveTarget = Math.max(targetChunkChars, Math.ceil(clean.length / maxPages));
     const paras = [];
     for (const line of rawLines) {
-        if (line.length > effectiveTarget * 1.15) {
+        if (line.length > Math.max(880, effectiveTarget * 1.45)) {
             const sents = line.split(/(?<=[.!?…»”"])\s+/).filter(Boolean);
             let buf = '';
             for (const sn of sents) {
-                if (buf && (buf.length + sn.length) > Math.round(effectiveTarget * 0.72)) {
+                if (buf && (buf.length + sn.length) > Math.round(effectiveTarget * 0.95)) {
                     paras.push(buf.trim());
                     buf = sn;
                 } else {
@@ -5611,7 +5643,7 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 440) {
     let curLen = 0;
     for (let i = 0; i < paras.length; i++) {
         const p = paras[i];
-        if (cur.length > 0 && (curLen + p.length > effectiveTarget) && chunks.length < maxPages - 1) {
+        if (cur.length > 0 && (curLen + p.length > Math.max(720, effectiveTarget * 1.15)) && chunks.length < maxPages - 1) {
             chunks.push(cur.join('\n\n'));
             cur = [p];
             curLen = p.length;
@@ -5621,7 +5653,7 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 440) {
         }
     }
     if (cur.length) {
-        const minTail = Math.min(130, Math.floor(effectiveTarget * 0.26));
+        const minTail = Math.min(130, Math.floor(effectiveTarget * 0.25));
         if (chunks.length > 0 && curLen < minTail) {
             chunks[chunks.length - 1] += '\n\n' + cur.join('\n\n');
         } else {
@@ -5674,7 +5706,8 @@ function stripNarratorDashAttribution(rawText) {
 }
 
 function formatCompleteQuoteSentence(rawStr, maxChars = 240) {
-    let s = String(rawStr || '').replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
+    let s = stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr).replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
+    s = capitalizeSentenceFirstChar(s);
     if (!s) return '';
     if (s.length <= maxChars) return s;
     const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
@@ -5697,14 +5730,15 @@ function formatCompleteQuoteSentence(rawStr, maxChars = 240) {
     return (sp > 80 ? sub.slice(0, sp) : sub).replace(/[,;:\s]+$/, '') + '…';
 }
 
-// Авто-восстановление оборванной реплики/мысли/описания по тексту поста (даже если модель поставила «...» на середине предложения или чуть перефразировала середину!)
+// Авто-восстановление оборванной реплики/мысли/описания по тексту поста:
+// не оставляет обрубков с маленькой буквы («красный мазок... и лукаво прищурилась») — если совпадение нашлось в середине предложения, расширяет до начала предложения или самостоятельной части после «;»!
 function restoreFullQuoteFromSource(rawQuote, sourceText) {
-    let s = String(rawQuote || '').replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
-    if (!s || !sourceText) return s;
+    let s = stripRoleplayHeaderBracketsAndWeirdSpaces(rawQuote).replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
+    if (!s || !sourceText) return capitalizeSentenceFirstChar(s);
     const prefix = s.replace(/[.…,;:\s—–-]+$/, '').trim();
-    if (prefix.length < 4) return s;
+    if (prefix.length < 4) return capitalizeSentenceFirstChar(s);
 
-    const cleanSrc = stripTags(stripActionTags(String(sourceText))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n');
+    const cleanSrc = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(sourceText))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
     const lowSrc = cleanSrc.toLowerCase().replace(/ё/g, 'е');
     const lowPref = prefix.toLowerCase().replace(/ё/g, 'е');
     let hitIdx = lowSrc.indexOf(lowPref);
@@ -5712,32 +5746,50 @@ function restoreFullQuoteFromSource(rawQuote, sourceText) {
         hitIdx = lowSrc.indexOf(lowPref.slice(0, 16).trim());
     }
     if (hitIdx < 0) {
-        // Пробуем найти по первым 2–3 словам фразы
         const firstWords = lowPref.split(/\s+/).slice(0, 3).join(' ');
         if (firstWords.length >= 8) {
             hitIdx = lowSrc.indexOf(firstWords);
         }
     }
-    if (hitIdx < 0) return stripNarratorDashAttribution(s);
+    if (hitIdx < 0) return capitalizeSentenceFirstChar(stripNarratorDashAttribution(s));
 
-    // Если модель обрезала фразу точками (...) или не дописала предложение до конца в оригинале — всегда берём полное предложение из исходного текста поста до настоящей точки/восклицательного/вопросительного знака!
-    let lineRem = cleanSrc.slice(hitIdx, hitIdx + 380).split('\n')[0].replace(/\s+/g, ' ').trim();
-    const closeQ = lineRem.search(/[»”"]/);
+    // Проверяем, не попали ли мы в середину предложения (со строчной буквы), из-за чего терялось подлежащее (например «София поймала в зеркало... красный мазок...»)!
+    let startIdx = hitIdx;
+    const matchedChar = cleanSrc.charAt(hitIdx);
+    const isMidSentence = matchedChar && matchedChar === matchedChar.toLowerCase() && matchedChar !== matchedChar.toUpperCase();
+    if (isMidSentence && hitIdx > 0) {
+        const lookback = cleanSrc.slice(Math.max(0, hitIdx - 110), hitIdx);
+        // Ищем начало предложения или точку с запятой (; / . / ! / ? / « / " / *)
+        const boundaryMatch = lookback.match(/.*(?:[.!?;\n]|[«“"*])/s);
+        if (boundaryMatch) {
+            const candidateStart = Math.max(0, hitIdx - 110) + boundaryMatch[0].length;
+            if (hitIdx - candidateStart <= 85) {
+                startIdx = candidateStart;
+            }
+        } else if (hitIdx <= 85) {
+            startIdx = 0;
+        }
+    }
+
+    const extraLeadLen = Math.max(0, hitIdx - startIdx);
+    let lineRem = cleanSrc.slice(startIdx, hitIdx + 380).split('\n')[0].replace(/\s+/g, ' ').trim();
+    lineRem = lineRem.replace(/^[,;:\s—–-]+/, '').trim();
+    const closeQ = lineRem.search(/[»”"*]/);
     const openQ = lineRem.search(/[«“]/);
     if (closeQ >= 0 && (openQ < 0 || closeQ < openQ)) {
         lineRem = lineRem.slice(0, closeQ).trim();
     }
     lineRem = stripNarratorDashAttribution(lineRem);
-    // Ищем конец полного предложения (настоящую точку, ! или ?, а не искусственное многоточие модели)
-    const matchStart = Math.min(prefix.length, lineRem.length);
+    const matchStart = Math.min(prefix.length + extraLeadLen, lineRem.length);
     if (lineRem.length >= matchStart) {
-        const tailMatch = lineRem.slice(matchStart).match(/^[^.!?]*[.!?]/);
+        const tailMatch = lineRem.slice(matchStart).match(/^[^.!?;]*[.!?;]/);
         if (tailMatch && tailMatch[0] !== undefined) {
-            lineRem = (lineRem.slice(0, matchStart) + tailMatch[0]).trim();
+            lineRem = (lineRem.slice(0, matchStart) + tailMatch[0]).replace(/;$/, '.').trim();
         }
     }
     if (lineRem && !/[.!?…]$/.test(lineRem)) lineRem += '.';
-    return lineRem.length >= s.replace(/[.…]+$/, '').length ? lineRem : stripNarratorDashAttribution(s);
+    const finalStr = lineRem.length >= s.replace(/[.…]+$/, '').length ? lineRem : stripNarratorDashAttribution(s);
+    return capitalizeSentenceFirstChar(finalStr);
 }
 
 // Определение типа текста в фрейме: 'speech' (прямая речь вслух), 'thought' (мысли курсивом на сером фоне), 'narration' (авторское описание БЕЗ имени персонажа)
@@ -5755,7 +5807,7 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
     rawSpk = rawSpk.replace(/^💭\s*/, '').replace(/\s*\((?:мысл[ьи]|thought|про себя)\)\s*$/i, '').trim();
 
     const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
-    const cleanSrc = stripTags(stripActionTags(String(sourceText || ''))).replace(/<[^>]+>/g, '');
+    const cleanSrc = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(sourceText || ''))).replace(/<[^>]+>/g, ''));
     const nTxt = norm(txt);
     const words = nTxt.split(/\s+/).filter(w => w.length > 2);
 
@@ -5772,7 +5824,7 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
             speechSpans.push(spanNorm);
         }
     }
-    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,420})/g;
+    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,2500})/g;
     while ((m = dRe.exec(cleanSrc)) !== null) {
         const ctxLow = m[1].toLowerCase().replace(/ё/g, 'е');
         if (/[,!?…]\s*[—–-]\s*(?:[а-яё]+\s+)?(?:подумал|подумала|подумалось|мелькнуло в голове|пронеслось в голове)(?=$|[^а-яёa-z0-9])/i.test(ctxLow)) {
@@ -5854,7 +5906,7 @@ function parseRawQuoteLinePayload(qBody, fallbackPanel = 1) {
 
 // Извлечение прямых реплик, мыслей И авторских описаний из кусочка поста, чтобы КАЖДЫЙ из 3–4 фреймов страницы гарантированно получил свой текст без пустых кадров!
 function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCount = 3) {
-    const clean = stripTags(stripActionTags(String(rawText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n');
+    const clean = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(rawText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
     const maxQ = Math.max(3, Math.min(4, Number(desiredCount) || 3));
     const candidates = [];
 
@@ -5885,7 +5937,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         const isTh = /(?:^|[^а-яёa-z0-9])(подумал|подумала|подумалось|мысленно|про себя|в мыслях|мелькнуло в голове)(?=$|[^а-яёa-z0-9])/i.test(ctxAround);
         pushBlockOrSentences(m[1], isTh ? 'thought' : 'speech');
     }
-    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,360})/g;
+    const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,2500})/g;
     while ((m = dRe.exec(clean)) !== null && candidates.length < 8) {
         pushBlockOrSentences(m[1], 'speech');
     }
@@ -6006,6 +6058,26 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null) 
     if (matchedImmediate.length === 1) return matchedImmediate[0];
     const matchedInWindow = validCandidates.filter(cName => isNameMentionedInText(cName, nearContext));
     if (matchedInWindow.length === 1) return matchedInWindow[0];
+    // Если это 2-е или 3-е предложение внутри длинного монолога персонажа в одном абзаце — проверяем начало этого абзаца (кто начал говорить в этом абзаце)!
+    const paraBefore = cleanPost.slice(Math.max(0, idx - 950), idx).split(/\n\s*\n/).pop() || '';
+    const matchedInPara = validCandidates.filter(cName => isNameMentionedInText(cName, paraBefore));
+    if (matchedInPara.length === 1) return matchedInPara[0];
+    if (matchedInPara.length > 1) {
+        // Берём того персонажа, чьё имя стоит самым первым в начале абзаца (обычно подлежащее: «Джулия скривила накрашенные губы...»)
+        const normPara = norm(paraBefore);
+        let earliestCand = '';
+        let earliestPos = 999999;
+        for (const cName of matchedInPara) {
+            for (const stStem of getHeroNameStems(cName)) {
+                const p = normPara.indexOf(stStem);
+                if (p >= 0 && p < earliestPos) {
+                    earliestPos = p;
+                    earliestCand = cName;
+                }
+            }
+        }
+        if (earliestCand) return earliestCand;
+    }
     return '';
 }
 
@@ -7187,14 +7259,18 @@ function sanitizeLiteralMetaphorTags(promptStr) {
 function isDetailOrMacroPanelPrompt(rawPrompt) {
     const p = String(rawPrompt || '').toLowerCase();
     if (!p) return false;
-    if (/\b(no humans|animal focus|object focus|food focus|weapon focus|still life|flower focus|head out of frame|face out of frame|cropped head|headless|hand focus|hands focus|focus on hands|foot focus|feet focus|lower body focus|pelvic focus|groin focus|intimate close-up|penetration close-up|sex close-up|macro shot)\b/i.test(p)) {
+    if (/\b(no humans|animal focus|object focus|food focus|vehicle focus|scenery|weapon focus|still life|flower focus|head out of frame|face out of frame|cropped head|headless|hand focus|hands focus|focus on hands|foot focus|feet focus|lower body focus|pelvic focus|groin focus|intimate close-up|penetration close-up|sex close-up|macro shot|windshield|wipers|windshield wipers)\b/i.test(p)) {
         return true;
     }
-    // Если это close-up / macro на животном (змея, кот, пёс и т.д.) или на интимной анатомии 18+ без портрета лица
+    // Если в промпте кадра вообще нет ни одного человека (нет 1girl/1boy/woman/man/person/portrait) — это 100% безлюдный кадр детали/окружения!
+    const hasAnyHumanTag = /\b([1-6]girls?|[1-6]boys?|woman|women|man|men|female|male|person|people|portrait|upper body|cowboy shot|full body)\b/i.test(p);
+    if (!hasAnyHumanTag) {
+        return true;
+    }
     const hasCloseUp = /\b(close-up|extreme close-up|macro|focus on)\b/i.test(p);
     const hasPortraitFace = /\b(portrait|face focus|expressive face|looking at viewer)\b/i.test(p);
     if (hasCloseUp && !hasPortraitFace) {
-        if (/\b(snake|python|cobra|viper|serpent|lizard|reptile|terrarium|spider|scorpion|frog|toad|turtle|hamster|rat|mouse|rabbit|ferret|parrot|raven|crow|owl|fish|aquarium)\b/i.test(p)) {
+        if (/\b(snake|python|cobra|viper|serpent|lizard|reptile|terrarium|spider|scorpion|frog|toad|turtle|hamster|rat|mouse|rabbit|ferret|parrot|raven|crow|owl|fish|aquarium|handbag|purse|compact mirror|keys|keychain|jam|thumb|finger|tail under skirt)\b/i.test(p)) {
             return true;
         }
         if (/\b(genitals|penis|erection|testicles|pussy|vagina|clitoris|labia|anus|crotch|groin|pubic|insertion|penetration|vaginal|anal|cum|ejaculation|creampie|fellatio|cunnilingus|handjob|fingering|paizuri|nipples|areolae|breasts focus|ass focus|butt focus|thighs focus)\b/i.test(p)) {
@@ -7251,19 +7327,26 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
         }
     }
 
-    // 3) Если это кадр фокуса на руках / сумочке / пуговице (hand focus) — фиксируем строго 2 руки одного человека (two hands only), чтобы NovelAI не рисовал 4 руки со всех сторон!
-    if (/\b(hand focus|hands focus|focus on hands|unbuttoning|inside bag|inside handbag|rummaging|holding keys|keys)\b/i.test(p)) {
+    // 3) Если в кадре есть варенье/повидло/джем (jam / strawberry / preserve) — уточняем "sweet strawberry jam", чтобы NovelAI не рисовал кровь на пальцах!
+    if (/\b(jam|jelly|preserve|marmalade|strawberry|berry)\b/i.test(p) && !/\b(blood|injury|wound|horror)\b/i.test(p)) {
+        p = p.replace(/\bred\s+(?:liquid|smear|stain|dab|drop)\b/gi, 'sweet glossy strawberry jam');
+    }
+
+    // 4) Если это кадр фокуса на руках / сумочке / пуговице / джеме на пальце — фиксируем руки ТОЛЬКО одного человека (one person's hands only, max 2 hands), чтобы NovelAI не рисовал 4 чужие руки!
+    if (/\b(hand focus|hands focus|focus on hands|unbuttoning|inside bag|inside handbag|rummaging|holding keys|keys|thumb|finger|jam)\b/i.test(p)) {
         p = p.replace(/\b(?:multiple girls|multiple boys|[2-9]girls|[2-9]boys|four hands|multiple hands)\b\s*,?/gi, '');
         if (!/\btwo hands only\b/i.test(p)) {
-            p = `two hands only, ${p}`;
+            p = `1girl, solo, two hands only, ${p}`;
         }
     }
 
     if (isDetailOrMacroPanelPrompt(p)) {
-        // 4) Если это предметный кадр без людей (подоконник с крошками, окно, коробка с профитролями) — убираем reflection/face/eyes, чтобы на мокром стекле окна или на булочках не рисовались жуткие лица и глазки!
-        if (/\b(no humans|object focus|food focus|still life|crumbs|windowsill|profiteroles|cream puffs|pastry)\b/i.test(p) && !/\b(animal focus|snake|viper|python|cat|dog)\b/i.test(p)) {
+        const hasHandsOrBody = /\b(hand focus|hands|fingers|thumb|neck|collarbone|clavicle|lips|mouth|thighs|hips|legs|feet|tail|nsfw|explicit|intimate|genitals|penis|pussy|breasts)\b/i.test(p);
+        const hasAnimal = /\b(animal focus|snake|viper|python|cat|dog|bird|horse)\b/i.test(p);
+        // 5) Если это чисто предметный кадр без людей и без животных (лобовое стекло с дворниками, окно, подоконник, коробка с профитролями, ворота) — жёстко ставим no humans и убираем reflection/face/eyes!
+        if (!hasHandsOrBody && !hasAnimal) {
             p = p.replace(/\b(?:reflection|face|eyes|watching|staring|silhouette|shadow of[^,]*)\b\s*,?/gi, '');
-            if (!/\bno humans\b/i.test(p)) p = `no humans, still life, ${p}`;
+            if (!/\bno humans\b/i.test(p)) p = `no humans, still life, object focus, ${p}`;
         }
         // Если это крупный фрейм детали (змея/животное, предмет, руки или 18+ интимный план без лиц):
         // 1) Убираем случайно попавшие из шаблона теги калибровки полного роста и общих планов, чтобы они не заставляли NovelAI рисовать людей в полный рост вместо детали!
@@ -7398,17 +7481,22 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
     const cleanDesc = String(frameDesc || '');
     // Если этот фрейм — крупный план детали (животное/змея, предмет, руки или 18+ интимный крупный план без головы/лица),
     // НЕ передаём в NovelAI портретный аватар-референс (images) и слоты полных фигур (charCaptions), чтобы NovelAI не пытался пририсовать поверх змеи или детали стоящего человека с лицом!
+    const comicCleanArtNeg = 'speech bubble, text, korean text, hangul, japanese text, sound effects, sfx, watermark, signature, username, artist name';
+    const isNsfwOrBareAllowed = /\b(nsfw|explicit|nude|naked|undressing|topless|lingerie|swimsuit|bikini|bath|shower|sex|intimate|bed|bedroom|collarbone|bite mark|hickey|strapless)\b/i.test(cleanDesc);
+    const nonNsfwClothingNeg = !isNsfwOrBareAllowed ? 'bare shoulders, strapless, strapless dress, off-shoulder, topless, nude, undressed' : '';
+    const isJamOrSweetFrame = /\b(jam|jelly|preserve|marmalade|strawberry|berry|syrup)\b/i.test(cleanDesc) && !/\b(blood|wound|injury|horror)\b/i.test(cleanDesc);
+    const jamNotBloodNeg = isJamOrSweetFrame ? 'blood, bleeding, gore, wound, injury, bloody hands, cut' : '';
     const isSnakeFrame = /\b(snake|python|viper|serpent|reptile)\b/i.test(cleanDesc);
     const snakeAntiMutantNeg = isSnakeFrame ? 'fishing hook, fishhook, meat hook, metal ring, chain, tied, knotted, two-headed, multiple heads, extra head, split body, two snakes, mutated animal, deformed animal' : '';
     const isFoodFrame = /\b(profiteroles|cream puffs|pastry|cake|bun|bread|food|dessert|tea|cups|crumbs)\b/i.test(cleanDesc);
     const foodAntiMascotNeg = isFoodFrame ? 'face on food, eyes on food, anthropomorphic food, mascot, cute face on object, living food' : '';
-    const isPureObjectNoHumans = /\b(no humans|object focus|food focus|still life|crumbs|windowsill)\b/i.test(cleanDesc) && !isSnakeFrame && !/\b(animal focus|cat|dog|bird|hand focus|hands|fingers|neck|collarbone|nsfw|explicit|intimate)\b/i.test(cleanDesc);
-    const objectNoFaceNeg = isPureObjectNoHumans ? '1girl, 1boy, human, person, face, eyes, nose, mouth, face in window, reflection of face, ghostly face, creepy face, pareidolia' : '';
+    const isPureObjectNoHumans = /\b(no humans|object focus|food focus|still life|crumbs|windowsill|windshield|wipers)\b/i.test(cleanDesc) && !isSnakeFrame && !/\b(animal focus|cat|dog|bird|hand focus|hands|fingers|thumb|neck|collarbone|nsfw|explicit|intimate)\b/i.test(cleanDesc);
+    const objectNoFaceNeg = isPureObjectNoHumans ? '1girl, 1boy, human, person, face, eyes, nose, mouth, mascot, cute creature, chibi, blob, slime, face in window, reflection of face, ghostly face, creepy face, pareidolia' : '';
 
     if (isDetailOrMacroPanelPrompt(cleanDesc)) {
-        const isHandDetail = /\b(hand focus|hands focus|focus on hands|unbuttoning|holding|bag|keys|fingers)\b/i.test(cleanDesc);
+        const isHandDetail = /\b(hand focus|hands focus|focus on hands|unbuttoning|holding|bag|handbag|keys|fingers|thumb|jam)\b/i.test(cleanDesc);
         const handAntiMutantNeg = isHandDetail ? 'extra hands, multiple hands, 3 hands, 4 hands, extra arms, disembodied hands, mutated hands, bad hands, extra fingers' : '';
-        const mergedNeg = [baseRefs?.extraNeg || '', handAntiMutantNeg, snakeAntiMutantNeg, foodAntiMascotNeg, objectNoFaceNeg].filter(Boolean).join(', ');
+        const mergedNeg = [baseRefs?.extraNeg || '', comicCleanArtNeg, handAntiMutantNeg, jamNotBloodNeg, snakeAntiMutantNeg, foodAntiMascotNeg, objectNoFaceNeg].filter(Boolean).join(', ');
         return { ...(baseRefs || {}), images: [], charCaptions: [], extraNeg: mergedNeg, note: '' };
     }
     const hasGirls = /\b([1-6]girls?|female|woman|girl)\b/i.test(cleanDesc);
@@ -7437,7 +7525,7 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
 
     return {
         ...baseRefs,
-        extraNeg: [baseRefs.extraNeg || '', snakeAntiMutantNeg, foodAntiMascotNeg].filter(Boolean).join(', '),
+        extraNeg: [baseRefs.extraNeg || '', comicCleanArtNeg, nonNsfwClothingNeg, jamNotBloodNeg, snakeAntiMutantNeg, foodAntiMascotNeg].filter(Boolean).join(', '),
         charCaptions: activeCharCaps,
     };
 }
@@ -7887,7 +7975,7 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
             if (url && sceneMeta.cleanUnletteredUrl) mergedCleanMap[url] = sceneMeta.cleanUnletteredUrl;
             const mergedPageMetaMap = { ...(oldScene.pageMetaMap || {}), ...(sceneMeta.pageMetaMap || {}) };
             const activePageMeta = mergedPageMetaMap[url] || null;
-            m.extra.nnbScene = {
+            const tempSceneObj = {
                 ...oldScene,
                 ...sceneMeta,
                 ...(activePageMeta ? {
@@ -7905,6 +7993,8 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
                 pageMetaMap: mergedPageMetaMap,
                 mesId: i,
             };
+            tempSceneObj.history = getSortedManhwaHistoryUrls(tempSceneObj);
+            m.extra.nnbScene = tempSceneObj;
         } else if (m.extra.nnbScene) {
             m.extra.nnbScene.url = url;
             m.extra.nnbScene.history = prevHistory;
@@ -8554,6 +8644,13 @@ async function showScenePopup(mesId, forceAsk = false) {
 
     if (Array.isArray(choice.multiChunkChapter) && choice.multiChunkChapter.length > 1 && comicOpts?.enabled) {
         const chunks = choice.multiChunkChapter;
+        // Перед запуском новой многостраничной главы очищаем старые черновые слайды этого поста, чтобы старый кадр не вставал перед 1-й страницей новой главы!
+        const cInit = ctx();
+        const tIdxInit = Number.isInteger(mesId) ? mesId : (cInit.chat.length - 1);
+        if (cInit.chat?.[tIdxInit]?.extra?.nnbScene) {
+            cInit.chat[tIdxInit].extra.nnbScene.history = [];
+            cInit.chat[tIdxInit].extra.nnbScene.pageMetaMap = {};
+        }
         const note = toastr.info(`Рисуем главу манхвы из ${chunks.length} страниц сверху вниз… Каждая готовая страница сразу выкладывается в ленту под постом!`, '📚 Глава манхвы', { timeOut: 240000, extendedTimeOut: 40000, tapToDismiss: true });
         let pagesDone = 0;
         let chapterPassport = '';
@@ -8691,6 +8788,26 @@ async function drawNextComicChunkPage(mesId, baseSceneMeta) {
     }
 }
 
+function getSortedManhwaHistoryUrls(sceneMeta) {
+    const rawUrls = Array.isArray(sceneMeta?.history) && sceneMeta.history.length ? [...sceneMeta.history] : (sceneMeta?.url ? [sceneMeta.url] : []);
+    if (rawUrls.length <= 1) return rawUrls;
+    const pmMap = sceneMeta?.pageMetaMap || {};
+    const hasChunkPages = rawUrls.some(u => pmMap[u]?.comicOpts?.stripMode && Number(pmMap[u]?.comicOpts?.chunkTotal) > 1);
+    if (!hasChunkPages) return rawUrls;
+    // Если в истории есть страницы многостраничной главы, отфильтровываем старые черновики без chunkTotal > 1 и сортируем строго по chunkIndex (0, 1, 2, 3...)!
+    const chunkEntries = rawUrls
+        .map((u, origIdx) => {
+            const cOpts = pmMap[u]?.comicOpts;
+            const isChunkPage = !!(cOpts?.stripMode && Number(cOpts?.chunkTotal) > 1);
+            const chIdx = isChunkPage ? (Number(cOpts.chunkIndex) || 0) : -1;
+            return { u, origIdx, isChunkPage, chIdx };
+        })
+        .filter(x => x.isChunkPage);
+    if (!chunkEntries.length) return rawUrls;
+    chunkEntries.sort((a, b) => (a.chIdx !== b.chIdx ? a.chIdx - b.chIdx : a.origIdx - b.origIdx));
+    return chunkEntries.map(x => x.u);
+}
+
 async function triggerBrowserDownloadUrl(urlOrData, filename) {
     if (!urlOrData) return;
     const dUrl = urlOrData.startsWith('data:') ? urlOrData : (await fileToDataUrl(urlOrData) || urlOrData);
@@ -8699,24 +8816,33 @@ async function triggerBrowserDownloadUrl(urlOrData, filename) {
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => a.remove(), 200);
+    setTimeout(() => a.remove(), 250);
 }
 
 async function downloadAllManhwaPagesSequentially(mesId, sceneMeta) {
-    const urls = Array.isArray(sceneMeta?.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta?.url ? [sceneMeta.url] : []);
+    const urls = getSortedManhwaHistoryUrls(sceneMeta);
     if (!urls.length) return;
-    toastr.info(`Скачиваю все страницы манхвы (${urls.length} шт.) по порядку…`, '📦 Скачивание страниц', { timeOut: 4000 });
+    toastr.info(`Подготавливаю и скачиваю все страницы (${urls.length} шт.) строго по порядку с паузой 1.1 сек. (чтобы в галерее телефона они легли строго 1 → ${urls.length})…`, '📦 Скачивание по порядку', { timeOut: urls.length * 1200 + 2000 });
+    // 1. Сначала заранее загружаем все файлы в память, чтобы разный размер картинок не менял порядок их сохранения на диск!
+    const preloaded = [];
     for (let i = 0; i < urls.length; i++) {
-        await triggerBrowserDownloadUrl(urls[i], `manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page${i + 1}.png`);
-        if (i + 1 < urls.length) {
-            await new Promise(r => setTimeout(r, 260));
+        const u = urls[i];
+        const dUrl = u.startsWith('data:') ? u : (await fileToDataUrl(u) || u);
+        const pageNumStr = String(i + 1).padStart(2, '0');
+        preloaded.push({ dUrl, filename: `${pageNumStr}_manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page${pageNumStr}.png` });
+    }
+    // 2. Сохраняем строго по очереди с интервалом 1100 мс (1.1 сек.), чтобы система и галерея телефона фиксировали точный порядок!
+    for (let i = 0; i < preloaded.length; i++) {
+        await triggerBrowserDownloadUrl(preloaded[i].dUrl, preloaded[i].filename);
+        if (i + 1 < preloaded.length) {
+            await new Promise(r => setTimeout(r, 1100));
         }
     }
-    toastr.success(`Скачано страниц: ${urls.length}!`, '📦 Скачивание завершено');
+    toastr.success(`Все ${preloaded.length} страниц скачаны строго по порядку (01 → ${String(preloaded.length).padStart(2, '0')})!`, '📦 Скачивание завершено');
 }
 
 async function downloadAllPagesAsSingleVerticalStrip(mesId, sceneMeta) {
-    const urls = Array.isArray(sceneMeta?.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta?.url ? [sceneMeta.url] : []);
+    const urls = getSortedManhwaHistoryUrls(sceneMeta);
     if (!urls.length) return;
     if (urls.length === 1) {
         await triggerBrowserDownloadUrl(urls[0], `manhwa_post${Number.isInteger(mesId) ? mesId : 0}_page1.png`);
