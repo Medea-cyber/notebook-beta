@@ -5598,82 +5598,122 @@ function capitalizeSentenceFirstChar(str) {
 
 // Разбивка длинного поста на последовательные смысловые кусочки (эпизоды):
 // сохраняет естественные абзацы автора (до 850 симв. на абзац = 1 страница манхвы, до 10 страниц на пост), чтобы ни один абзац в конце поста не терялся!
-function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
+function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
     const clean = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(rawPostText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
     if (!clean) return [];
     const maxPages = 10;
     const rawLines = clean.split(/\n+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    if (!rawLines.length) return [];
 
-    // Если пост уже состоит из 2..10 аккуратных авторских абзацев (где каждый абзац <= 920 симв.), отдаём ровно по 1 странице на каждый абзац без искусственного разрезания реплик пополам!
-    if (rawLines.length >= 2 && rawLines.length <= maxPages && rawLines.every(l => l.length >= 140 && l.length <= 920)) {
-        return rawLines.map((txt, idx) => {
-            const flat = txt.replace(/\s+/g, ' ').trim();
-            const preview = flat.length <= 72 ? flat : `${flat.slice(0, 52).trim()}…`;
-            return {
-                index: idx,
-                total: rawLines.length,
-                text: txt,
-                preview,
-            };
-        });
-    }
+    // Умное разбиение абзаца на предложения (не разрезая прямую речь в кавычках и мысли в *...* пополам, и удерживая авторскую ремарку "- пробормотала она." вместе с репликой)
+    const splitParagraphIntoSentences = (para) => {
+        const out = [];
+        let buf = '';
+        let inQuotes = false;
+        let inAsterisk = false;
+        for (let i = 0; i < para.length; i++) {
+            const ch = para[i];
+            buf += ch;
+            if (ch === '«' || ch === '“') inQuotes = true;
+            else if (ch === '»' || ch === '”') inQuotes = false;
+            else if (ch === '"') inQuotes = !inQuotes;
+            else if (ch === '*') inAsterisk = !inAsterisk;
 
-    const effectiveTarget = Math.max(targetChunkChars, Math.ceil(clean.length / maxPages));
-    const paras = [];
-    for (const line of rawLines) {
-        if (line.length > Math.max(880, effectiveTarget * 1.45)) {
-            const sents = line.split(/(?<=[.!?…»”"])\s+/).filter(Boolean);
-            let buf = '';
-            for (const sn of sents) {
-                if (buf && (buf.length + sn.length) > Math.round(effectiveTarget * 0.95)) {
-                    paras.push(buf.trim());
-                    buf = sn;
-                } else {
-                    buf = buf ? `${buf} ${sn}` : sn;
+            if (!inQuotes && !inAsterisk && /[.!?…]/.test(ch)) {
+                const nextPart = para.slice(i + 1);
+                const attrMatch = nextPart.match(/^(\s*[»”"*]?\s*,?\s*[—–-]\s*[а-яё][^.!?;\n]{2,180}[.!?…])/i);
+                if (attrMatch) {
+                    buf += attrMatch[1];
+                    i += attrMatch[1].length;
+                }
+                if (i + 1 >= para.length || /^\s+[А-ЯЁA-Z«“"*—–-]/.test(para.slice(i + 1))) {
+                    if (buf.trim()) out.push(buf.trim());
+                    buf = '';
                 }
             }
-            if (buf.trim()) paras.push(buf.trim());
-        } else {
-            paras.push(line);
         }
+        if (buf.trim()) out.push(buf.trim());
+        return out.filter(Boolean);
+    };
+
+    let pages = rawLines.map(l => ({ text: l, sents: splitParagraphIntoSentences(l) }));
+
+    // Склеиваем только совсем короткие технические строки (< 65 симв.), никогда не склеивая полноценные авторские абзацы!
+    const mergedShort = [];
+    for (const pg of pages) {
+        if (mergedShort.length > 0 && pg.text.length < 65) {
+            const prev = mergedShort[mergedShort.length - 1];
+            prev.text = `${prev.text}\n\n${pg.text}`;
+            prev.sents = splitParagraphIntoSentences(prev.text);
+        } else {
+            mergedShort.push(pg);
+        }
+    }
+    pages = mergedShort;
+
+    // Пока страниц меньше maxPages (10), проверяем самые длинные абзацы (> 540 симв. и >= 4 смысловых предложений/реплик) и делим их на 2 последовательные страницы, чтобы в 3 фрейма влезали ВСЕ фразы без пропусков!
+    while (pages.length < maxPages) {
+        let bestIdx = -1;
+        let bestLen = 540;
+        for (let i = 0; i < pages.length; i++) {
+            const pg = pages[i];
+            if (pg.text.length > bestLen && pg.sents.length >= 4) {
+                bestLen = pg.text.length;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx < 0) break;
+        const target = pages[bestIdx];
+        const totalChars = target.text.length;
+        let splitAt = Math.max(2, Math.floor(target.sents.length / 2));
+        let acc = 0;
+        let bestDiff = 999999;
+        for (let k = 2; k <= target.sents.length - 2; k++) {
+            acc = target.sents.slice(0, k).join(' ').length;
+            const diff = Math.abs(acc - totalChars / 2);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                splitAt = k;
+            }
+        }
+        const firstHalfTxt = target.sents.slice(0, splitAt).join(' ').trim();
+        const secondHalfTxt = target.sents.slice(splitAt).join(' ').trim();
+        if (!firstHalfTxt || !secondHalfTxt) break;
+        pages.splice(
+            bestIdx,
+            1,
+            { text: firstHalfTxt, sents: target.sents.slice(0, splitAt) },
+            { text: secondHalfTxt, sents: target.sents.slice(splitAt) }
+        );
     }
 
-    const chunks = [];
-    let cur = [];
-    let curLen = 0;
-    for (let i = 0; i < paras.length; i++) {
-        const p = paras[i];
-        if (cur.length > 0 && (curLen + p.length > Math.max(720, effectiveTarget * 1.15)) && chunks.length < maxPages - 1) {
-            chunks.push(cur.join('\n\n'));
-            cur = [p];
-            curLen = p.length;
-        } else {
-            cur.push(p);
-            curLen += p.length;
+    while (pages.length > maxPages) {
+        let minPairIdx = 0;
+        let minPairLen = 999999;
+        for (let i = 0; i < pages.length - 1; i++) {
+            const pairLen = pages[i].text.length + pages[i + 1].text.length;
+            if (pairLen < minPairLen) {
+                minPairLen = pairLen;
+                minPairIdx = i;
+            }
         }
+        const combinedTxt = `${pages[minPairIdx].text}\n\n${pages[minPairIdx + 1].text}`;
+        pages.splice(minPairIdx, 2, { text: combinedTxt, sents: splitParagraphIntoSentences(combinedTxt) });
     }
-    if (cur.length) {
-        const minTail = Math.min(130, Math.floor(effectiveTarget * 0.25));
-        if (chunks.length > 0 && curLen < minTail) {
-            chunks[chunks.length - 1] += '\n\n' + cur.join('\n\n');
-        } else {
-            chunks.push(cur.join('\n\n'));
-        }
-    }
-    return chunks.map((txt, idx) => {
-        const flat = txt.replace(/\s+/g, ' ').trim();
+
+    return pages.map((pg, idx) => {
+        const flat = pg.text.replace(/\s+/g, ' ').trim();
         const preview = flat.length <= 72 ? flat : `${flat.slice(0, 52).trim()}…`;
         return {
             index: idx,
-            total: chunks.length,
-            text: txt,
+            total: pages.length,
+            text: pg.text,
             preview,
         };
     });
 }
 
-// Отрезаем только настоящую авторскую ремарку после тире («, — хмыкнул он»), но СОХРАНЯЕМ тире внутри самой реплики или описания («Клянусь, ещё пять минут — и я сбегу!»)
-const NARRATOR_SPEECH_VERBS_RE = /^(?:сказал|сказала|ответил|ответила|спросил|спросила|хмыкнул|хмыкнула|буркнул|буркнула|прошептал|прошептала|рявкнул|рявкнула|усмехнулся|усмехнулась|добавил|добавила|парировал|парировала|заметил|заметила|пояснил|пояснила|отозвался|отозвалась|фыркнул|фыркнула|вздохнул|вздохнула|протянул|протянула|воскликнул|воскликнула|крикнул|крикнула|процедил|процедила|пробормотал|пробормотала|кивнул|кивнула|подумал|подумала|подумалось|мелькнуло|пронеслось|бросил|бросила|выдохнул|выдохнула|произнес|произнесла|проворчал|проворчала|хихикнул|хихикнула|рассмеялся|рассмеялась)(?=$|[^а-яёa-z0-9])/i;
+const NARRATOR_SPEECH_VERBS_RE = /^(?:сказал|сказала|ответил|ответила|спросил|спросила|хмыкнул|хмыкнула|буркнул|буркнула|прошептал|прошептала|рявкнул|рявкнула|усмехнулся|усмехнулась|добавил|добавила|парировал|парировала|заметил|заметила|пояснил|пояснила|отозвался|отозвалась|фыркнул|фыркнула|ф-фыркнул|ф-фыркнула|вздохнул|вздохнула|протянул|протянула|воскликнул|воскликнула|крикнул|крикнула|процедил|процедила|пробормотал|пробормотала|пророкотал|пророкотала|проворковал|проворковала|прочитал|прочитала|заявил|заявила|отбрил|отбрила|уронил|уронила|заверещал|заверещала|кивнул|кивнула|подумал|подумала|подумалось|мелькнуло|пронеслось|бросил|бросила|выдохнул|выдохнула|произнес|произнесла|проворчал|проворчала|хихикнул|хихикнула|рассмеялся|рассмеялась)(?=$|[^а-яёa-z0-9])/i;
 
 function stripNarratorDashAttribution(rawText) {
     const s = String(rawText || '').replace(/\s+/g, ' ').trim();
@@ -5705,33 +5745,33 @@ function stripNarratorDashAttribution(rawText) {
     return out.trim();
 }
 
-function formatCompleteQuoteSentence(rawStr, maxChars = 240) {
+function formatCompleteQuoteSentence(rawStr, maxChars = 330) {
     let s = stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr).replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
     s = capitalizeSentenceFirstChar(s);
     if (!s) return '';
-    if (s.length <= maxChars) return s;
+    const effMax = Math.max(320, Number(maxChars) || 330);
+    // Если до конца предложения остаётся 1–45 символов (например последнее слово «...во все четыре глаза.»), НИКОГДА не отрезаем концовку троеточием!
+    if (s.length <= effMax + 45) return s;
     const sentences = s.split(/(?<=[.!?])\s+/).filter(Boolean);
     if (sentences.length > 1) {
         let acc = '';
         for (const sent of sentences) {
             const next = acc ? `${acc} ${sent}` : sent;
-            if (next.length <= maxChars) acc = next;
+            if (next.length <= effMax + 35) acc = next;
             else break;
         }
         if (acc && acc.length >= 15) return acc.trim();
-        if (sentences[0].length <= maxChars + 25) return sentences[0].trim();
+        if (sentences[0].length <= effMax + 60) return sentences[0].trim();
     }
-    const sub = s.slice(0, maxChars);
-    const clauseBreak = Math.max(sub.lastIndexOf(' — '), sub.lastIndexOf(' – '), sub.lastIndexOf('; '), sub.lastIndexOf(', '));
-    if (clauseBreak > 135) {
+    const sub = s.slice(0, effMax);
+    const clauseBreak = Math.max(sub.lastIndexOf(' — '), sub.lastIndexOf(' – '), sub.lastIndexOf(' - '), sub.lastIndexOf('; '), sub.lastIndexOf(': '), sub.lastIndexOf(', '));
+    if (clauseBreak > 140) {
         return sub.slice(0, clauseBreak).replace(/[,;:\s—–-]+$/, '') + '.';
     }
     const sp = sub.lastIndexOf(' ');
-    return (sp > 80 ? sub.slice(0, sp) : sub).replace(/[,;:\s]+$/, '') + '…';
+    return (sp > 100 ? sub.slice(0, sp) : sub).replace(/[,;:\s]+$/, '') + '…';
 }
 
-// Авто-восстановление оборванной реплики/мысли/описания по тексту поста:
-// не оставляет обрубков с маленькой буквы («красный мазок... и лукаво прищурилась») — если совпадение нашлось в середине предложения, расширяет до начала предложения или самостоятельной части после «;»!
 function restoreFullQuoteFromSource(rawQuote, sourceText) {
     let s = stripRoleplayHeaderBracketsAndWeirdSpaces(rawQuote).replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
     if (!s || !sourceText) return capitalizeSentenceFirstChar(s);
@@ -5793,7 +5833,7 @@ function restoreFullQuoteFromSource(rawQuote, sourceText) {
 }
 
 // Определение типа текста в фрейме: 'speech' (прямая речь вслух), 'thought' (мысли курсивом на сером фоне), 'narration' (авторское описание БЕЗ имени персонажа)
-function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker = '', cast = [], st = null) {
+function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker = '', cast = [], st = null, fullStoryText = '') {
     const rawKind = String(rawQuoteObj?.kind || '').toLowerCase().trim();
     let rawSpk = String(rawQuoteObj?.speaker || defaultSpeaker || '').trim();
     const txt = String(rawQuoteObj?.text || '').trim();
@@ -5814,7 +5854,7 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
     const speechSpans = [];
     const thoughtSpans = [];
     let m;
-    const qRe = /[«“"]([^«»“”"\n]{2,420}?)[»”"]/g;
+    const qRe = /[«“"]([^«»“”"\n]{2,2500}?)[»”"]/g;
     while ((m = qRe.exec(cleanSrc)) !== null) {
         const spanNorm = norm(m[1]);
         const ctxWindow = cleanSrc.slice(Math.max(0, m.index - 85), Math.min(cleanSrc.length, m.index + m[0].length + 85)).toLowerCase().replace(/ё/g, 'е');
@@ -5850,7 +5890,7 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
 
     const inThoughtSpan = explicitThought || matchesSpanList(thoughtSpans);
     const inSpeechSpan = matchesSpanList(speechSpans);
-    const validSpk = validateAndSanitizeQuoteSpeaker(rawSpk, txt, cleanSrc, cast, st);
+    const validSpk = validateAndSanitizeQuoteSpeaker(rawSpk, txt, cleanSrc, cast, st, finalKind, fullStoryText || cleanSrc);
 
     // Если имя персонажа упоминается внутри самой фразы в 3-м лице (например: «София застегнула пальто...», «Седан Софии шуршал...», «На заднем сиденье Джулия расстегнула...») и эта фраза не из прямой речи — это 100% авторское описание БЕЗ подписи имени!
     const selfMentionedIn3rdPerson = validSpk && isNameMentionedInText(validSpk, txt);
@@ -5912,7 +5952,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
 
     const cleanSpeechBlock = x => {
         let s = stripNarratorDashAttribution(String(x || ''));
-        s = formatCompleteQuoteSentence(s, 240);
+        s = formatCompleteQuoteSentence(s, 330);
         return s.length >= 2 ? s : '';
     };
 
@@ -5921,7 +5961,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         const sents = cleaned.split(/(?<=[.!?…])\s+/).map(x => x.trim()).filter(x => x.length >= 4);
         if (sents.length >= 2 && cleaned.length > 95) {
             for (const sn of sents) {
-                const f = formatCompleteQuoteSentence(sn, 240);
+                const f = formatCompleteQuoteSentence(sn, 330);
                 if (f) candidates.push({ kind: kindHint, speaker: defaultSpeaker, text: f });
             }
         } else {
@@ -5930,7 +5970,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         }
     };
 
-    const qRe = /[«“"]([^«»“”"\n]{2,360}?)[»”"]/g;
+    const qRe = /[«“"]([^«»“”"\n]{2,2500}?)[»”"]/g;
     let m;
     while ((m = qRe.exec(clean)) !== null && candidates.length < 8) {
         const ctxAround = clean.slice(Math.max(0, m.index - 80), Math.min(clean.length, m.index + m[0].length + 80)).toLowerCase().replace(/ё/g, 'е');
@@ -5941,38 +5981,63 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
     while ((m = dRe.exec(clean)) !== null && candidates.length < 8) {
         pushBlockOrSentences(m[1], 'speech');
     }
-    const astRe = /\*([^*\n]{3,280})\*/g;
+    const astRe = /\*([^*\n]{3,1200})\*/g;
     while ((m = astRe.exec(clean)) !== null && candidates.length < 8) {
         pushBlockOrSentences(m[1], 'thought');
     }
 
     // Если в отрывке меньше реплик/мыслей, чем фреймов на странице (или это чисто описательный отрывок, как поездка в машине!),
     // добираем предложения авторского описания (narration, без имени говорящего), чтобы ни один фрейм не остался пустым без текста!
+    const speechVerbAttrStartRe = /^(?:пророкотал[аи]?|пробормотал[аи]?|проворковал[аи]?|прочитал[аи]?|заявил[аи]?|отбрил[аи]?|уронил[аи]?|заметил[аи]?|заверещал[аи]?|возмущ[её]нно|безапелляционно|рассудительно|сварливо|невинно|задумчиво|коротко|тихо|громко|сердито|усмехнул[ась]*|хмыкнул[аи]?|фыркнул[аи]?|ф-фыркнул[аи]?|шепнул[аи]?|крикнул[аи]?|выкрикнул[аи]?|добавил[аи]?|ответил[аи]?|спросил[аи]?|произн[её]с(?:ла)?|сказал[аи]?|бросил[аи]?|отозвал[ась]*)(?=$|[^а-яёa-z0-9])/i;
     const allNarrativeSents = clean
+        .replace(/\*[^*\n]{2,1500}\*/g, ' ')
         .replace(/[^.!?…\n]{0,80}:\s*(?=[«“"])/g, '. ')
         .replace(/[«“"][^«»“”"\n]*[»”"](?:\s*,?\s*[—–-]\s*[^.!?…\n]+[.!?…])?/g, '. ')
         .replace(/(?:^|\n)\s*[—–-]\s*[^\n]+/g, ' ')
         .split(/(?<=[.!?…])\s+|\n+/)
         .map(s => s.replace(/^[,;:\s—–-]+/, '').replace(/[:;\s—–-]+$/, '').replace(/\s+/g, ' ').trim())
-        .filter(s => s.length >= 20 && /[.!?…]$/.test(s));
+        .filter(s => s.length >= 20 && /[.!?…]$/.test(s) && !speechVerbAttrStartRe.test(s));
 
     for (const ns of allNarrativeSents) {
-        const f = formatCompleteQuoteSentence(ns, 240);
+        const f = formatCompleteQuoteSentence(ns, 330);
         if (f) candidates.push({ kind: 'narration', speaker: '', text: f });
     }
 
     const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
+    const normClean = norm(clean);
     const seen = new Set();
-    const out = [];
+    const uniqueCands = [];
     for (const c of candidates) {
         const n = norm(c.text);
         if (n && !seen.has(n)) {
             seen.add(n);
-            out.push({ panel: out.length + 1, kind: c.kind || 'speech', speaker: c.kind === 'narration' ? '' : defaultSpeaker, text: c.text });
+            const posInText = normClean.indexOf(n.slice(0, 24));
+            uniqueCands.push({
+                ...c,
+                pos: posInText >= 0 ? posInText : 999999,
+            });
         }
-        if (out.length >= maxQ) break;
     }
-    return out;
+    const firstNarr = uniqueCands.find(c => c.kind === 'narration' && c.pos <= 40);
+    const dialogueAndThoughts = uniqueCands.filter(c => c.kind === 'speech' || c.kind === 'thought');
+    const restNarr = uniqueCands.filter(c => c.kind === 'narration' && c !== firstNarr);
+    const picked = [];
+    if (firstNarr && (dialogueAndThoughts.length < maxQ || firstNarr.pos === 0)) {
+        picked.push(firstNarr);
+    }
+    for (const dt of dialogueAndThoughts) {
+        if (picked.length < maxQ && !picked.includes(dt)) picked.push(dt);
+    }
+    for (const rn of restNarr) {
+        if (picked.length < maxQ && !picked.includes(rn)) picked.push(rn);
+    }
+    picked.sort((a, b) => a.pos - b.pos);
+    return picked.slice(0, maxQ).map((c, idx) => ({
+        panel: idx + 1,
+        kind: c.kind || 'speech',
+        speaker: c.kind === 'narration' ? '' : defaultSpeaker,
+        text: c.text,
+    }));
 }
 
 function isMonochromeComicStyle(cStyle) {
@@ -6020,50 +6085,113 @@ function isNameMentionedInText(nameStr, textStr) {
     return stems.some(st => low.includes(st));
 }
 
-function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null) {
+function findDominantPovThinkerInPost(fullPostText, candidates = []) {
+    if (!fullPostText || !Array.isArray(candidates) || !candidates.length) return '';
+    const clean = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(fullPostText))).replace(/<[^>]+>/g, ''));
+    const paras = clean.split(/\n+/).map(p => p.trim()).filter(Boolean);
+    const scores = new Map();
+    for (const c of candidates) scores.set(c, 0);
+
+    for (const p of paras) {
+        const hasThought = /\*[^*\n]{3,1200}\*/.test(p);
+        const mentionedHere = candidates.filter(cName => isNameMentionedInText(cName, p));
+        if (mentionedHere.length === 1) {
+            scores.set(mentionedHere[0], (scores.get(mentionedHere[0]) || 0) + (hasThought ? 4 : 2));
+        } else if (mentionedHere.length > 1 && hasThought) {
+            const astIdx = p.indexOf('*');
+            const beforeAst = astIdx > 0 ? p.slice(0, astIdx) : p;
+            for (const cName of mentionedHere) {
+                if (isNameMentionedInText(cName, beforeAst)) {
+                    scores.set(cName, (scores.get(cName) || 0) + 1);
+                }
+            }
+        }
+    }
+    let bestName = '';
+    let bestScore = 0;
+    for (const [name, sc] of scores.entries()) {
+        if (sc > bestScore) {
+            bestScore = sc;
+            bestName = name;
+        }
+    }
+    return bestScore >= 2 ? bestName : '';
+}
+
+function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, kindHint = '', fullStoryText = '') {
     if (!postText || !quoteText) return '';
-    const names = storyNames();
-    const cleanPost = stripTags(stripActionTags(String(postText))).replace(/<[^>]+>/g, '');
-    const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е');
+    const names = storyNames() || {};
+    const cleanPost = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(postText))).replace(/<[^>]+>/g, '')).replace(/[^\S\n]+/g, ' ');
+    const cleanFull = fullStoryText
+        ? stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(fullStoryText))).replace(/<[^>]+>/g, '')).replace(/[^\S\n]+/g, ' ')
+        : cleanPost;
+    const norm = t => stripRoleplayHeaderBracketsAndWeirdSpaces(String(t || '')).toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
     const qShort = norm(quoteText).slice(0, 28).trim();
     if (!qShort) return '';
-    const idx = norm(cleanPost).indexOf(qShort);
-    if (idx < 0) return '';
-    const rawBefore = cleanPost.slice(Math.max(0, idx - 85), idx);
-    const rawAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 85));
-    const immediateAfter = (rawAfter.split(/[.!?…\n]/)[0] || '');
-    const beforeParts = rawBefore.split(/[.!?…\n]/);
-    const immediateBefore = beforeParts[beforeParts.length - 1] || '';
-    const immediateContext = `${immediateBefore} ${immediateAfter}`;
-    const windowBefore = cleanPost.slice(Math.max(0, idx - 140), idx);
-    const windowAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 140));
-    const nearContext = `${windowBefore} ${windowAfter}`;
 
+    const activeCast = Array.isArray(cast)
+        ? cast.map(c => (typeof c === 'string' ? c : (c?.name || ''))).filter(c => c && c !== '__none__')
+        : [];
     const candidates = [];
     if (names.user) candidates.push(names.user);
     if (names.char) candidates.push(names.char);
     for (const npc of (st?.npcs || [])) {
-        if (npc?.name) candidates.push(npc.name);
+        if (npc?.name && !candidates.includes(npc.name)) candidates.push(npc.name);
     }
-    const activeCast = Array.isArray(cast) ? cast.filter(c => c && c !== '__none__') : [];
+    for (const cName of activeCast) {
+        if (cName && !candidates.includes(cName)) candidates.push(cName);
+    }
+
     const validCandidates = candidates.filter(cName => {
-        if (!isNameMentionedInText(cName, cleanPost)) return false;
+        if (!isNameMentionedInText(cName, cleanPost) && !isNameMentionedInText(cName, cleanFull)) return false;
         if (activeCast.length > 0) {
             return activeCast.some(c => isNameMentionedInText(cName, c) || isNameMentionedInText(c, cName));
         }
         return true;
     });
 
-    const matchedImmediate = validCandidates.filter(cName => isNameMentionedInText(cName, immediateContext));
+    const povThinker = findDominantPovThinkerInPost(cleanFull, validCandidates.length ? validCandidates : candidates);
+
+    const idx = norm(cleanPost).indexOf(qShort);
+    if (idx < 0) {
+        return (kindHint === 'thought' && povThinker) ? povThinker : '';
+    }
+    const rawBefore = cleanPost.slice(Math.max(0, idx - 85), idx);
+    const rawAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 110));
+    const immediateAfter = (rawAfter.split(/[.!?…\n]/)[0] || '');
+    const beforeParts = rawBefore.split(/[.!?…\n]/);
+    const immediateBefore = beforeParts[beforeParts.length - 1] || '';
+    const immediateContext = `${immediateBefore} ${immediateAfter}`;
+    const windowBefore = cleanPost.slice(Math.max(0, idx - 150), idx);
+    const windowAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 150));
+    const nearContext = `${windowBefore} ${windowAfter}`;
+
+    // Если это ВНУТРЕННЯЯ МЫСЛЬ (*...*), проверяем, не описан ли перед ней другой персонаж СО СТОРОНЫ глазами главной POV-героини (например: «На лестничной площадке возвышался промокший Ян... из-под подола подозрительно наглухо запахнутого... *Если соседка снизу...* "Раствор стынет, госпожа гадалка..." - пророкотал кот»)!
+    if (kindHint === 'thought' && povThinker) {
+        const beforePara = cleanPost.slice(Math.max(0, idx - 650), idx).split(/\n\s*\n/).pop() || '';
+        const afterPara = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 450));
+        const observedFromOutsideRe = /(?:на лестничной площадке|в дверях|на пороге|возвышал[ась]*|подозрительно|торчали|шагая через порог|хозяйка|гадалка|журналистка)/i;
+        const mentionedInThisChunk = validCandidates.filter(cName => isNameMentionedInText(cName, cleanPost));
+        if (!mentionedInThisChunk.length) {
+            return povThinker;
+        }
+        if (mentionedInThisChunk.length === 1 && mentionedInThisChunk[0] !== povThinker && observedFromOutsideRe.test(beforePara + ' ' + afterPara)) {
+            return povThinker;
+        }
+    }
+
+    const presentInChunkCandidates = validCandidates.filter(cName => isNameMentionedInText(cName, cleanPost));
+    const pool = presentInChunkCandidates.length ? presentInChunkCandidates : validCandidates;
+
+    const matchedImmediate = pool.filter(cName => isNameMentionedInText(cName, immediateContext));
     if (matchedImmediate.length === 1) return matchedImmediate[0];
-    const matchedInWindow = validCandidates.filter(cName => isNameMentionedInText(cName, nearContext));
+    const matchedInWindow = pool.filter(cName => isNameMentionedInText(cName, nearContext));
     if (matchedInWindow.length === 1) return matchedInWindow[0];
-    // Если это 2-е или 3-е предложение внутри длинного монолога персонажа в одном абзаце — проверяем начало этого абзаца (кто начал говорить в этом абзаце)!
+
     const paraBefore = cleanPost.slice(Math.max(0, idx - 950), idx).split(/\n\s*\n/).pop() || '';
-    const matchedInPara = validCandidates.filter(cName => isNameMentionedInText(cName, paraBefore));
+    const matchedInPara = pool.filter(cName => isNameMentionedInText(cName, paraBefore));
     if (matchedInPara.length === 1) return matchedInPara[0];
     if (matchedInPara.length > 1) {
-        // Берём того персонажа, чьё имя стоит самым первым в начале абзаца (обычно подлежащее: «Джулия скривила накрашенные губы...»)
         const normPara = norm(paraBefore);
         let earliestCand = '';
         let earliestPos = 999999;
@@ -6078,33 +6206,41 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null) 
         }
         if (earliestCand) return earliestCand;
     }
+    if (kindHint === 'thought' && povThinker) return povThinker;
     return '';
 }
 
-function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, cast = [], st = null) {
+function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, cast = [], st = null, kindHint = '', fullStoryText = '') {
     const spk = String(rawSpeaker || '').trim();
-    const names = storyNames();
-    const activeCast = Array.isArray(cast) ? cast.filter(c => c && c !== '__none__') : [];
+    const names = storyNames() || {};
+    const activeCast = Array.isArray(cast)
+        ? cast.map(c => (typeof c === 'string' ? c : (c?.name || ''))).filter(c => c && c !== '__none__')
+        : [];
+    const inferred = inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st, kindHint, fullStoryText);
 
     if (spk) {
+        // Если это мысль (thought), а LLM приписал её персонажу, которого вообще нет как субъекта мысли (например приписал Яну мысль Этель при виде Яна на пороге), доверяем контекстному анализатору POV!
+        if (kindHint === 'thought' && inferred && !isNameMentionedInText(spk, inferred) && !isNameMentionedInText(inferred, spk)) {
+            return inferred;
+        }
         const isMainCharName = names.char && (isNameMentionedInText(names.char, spk) || isNameMentionedInText(spk, names.char));
         if (isMainCharName) {
             const mainInCast = !activeCast.length || activeCast.some(c => isNameMentionedInText(names.char, c) || isNameMentionedInText(c, names.char));
             const mainInPost = isNameMentionedInText(names.char, lastPostText);
             if (!mainInCast || !mainInPost) {
-                return inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st) || '';
+                return inferred || '';
             }
         }
         if (activeCast.length > 0) {
             const spkInCast = activeCast.some(c => isNameMentionedInText(spk, c) || isNameMentionedInText(c, spk));
             const spkInPost = isNameMentionedInText(spk, lastPostText);
             if (!spkInCast && !spkInPost) {
-                return inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st) || '';
+                return inferred || '';
             }
         }
         return spk;
     }
-    return inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st) || '';
+    return inferred || '';
 }
 
 function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defaultSpeaker = '', cast = [], st = null, desiredCount = 3) {
@@ -6123,12 +6259,13 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
     };
 
     const existingWordsList = [];
+    const speechVerbFragmentRe = /^(?:пророкотал[аи]?|пробормотал[аи]?|проворковал[аи]?|прочитал[аи]?|заявил[аи]?|отбрил[аи]?|уронил[аи]?|заметил[аи]?|заверещал[аи]?|фыркнул[аи]?|ф-фыркнул[аи]?|хмыкнул[аи]?|шепнул[аи]?|крикнул[аи]?|добавил[аи]?|ответил[аи]?|спросил[аи]?)\s+(?:кот|п[её]с|он|она|девушка|женщина|мужчина|хозяйка|гадалка|журналистка|юристка|бухгалтерша|деми-кошка|блондин|хирург)/i;
 
     for (const q of (llmQuotes || [])) {
         const rawTxt = String(q?.text || '').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
-        if (!rawTxt) continue;
-        // Сначала восстанавливаем оборванную фразу (даже если от неё осталось всего 2 слова вроде «На зад»!)
+        if (!rawTxt || speechVerbFragmentRe.test(rawTxt)) continue;
         const restoredCandidate = restoreFullQuoteFromSource(rawTxt, lastPostText || storyText);
+        if (speechVerbFragmentRe.test(restoredCandidate)) continue;
         const words = norm(restoredCandidate).split(/\s+/).filter(w => w.length > 2);
         let ok = false;
         if (!words.length) {
@@ -6139,14 +6276,14 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
             ok = (hitsPost / words.length) >= 0.62 || (!lastPostText && (hitsFull / words.length) >= 0.62);
         }
         if (ok) {
-            const shortTxt = formatCompleteQuoteSentence(restoredCandidate, 240);
+            const shortTxt = formatCompleteQuoteSentence(restoredCandidate, 330);
             const key = norm(shortTxt);
             const keyWords = key.split(/\s+/).filter(w => w.length > 2);
             const isDup = seen.has(key) || existingWordsList.some(ew => isSubsequenceMatch(keyWords, ew));
             if (key && !isDup) {
                 seen.add(key);
                 existingWordsList.push(keyWords);
-                const classified = classifyCaptionKindAndSpeaker({ ...q, text: shortTxt }, lastPostText || storyText, defaultSpeaker, cast, st);
+                const classified = classifyCaptionKindAndSpeaker({ ...q, text: shortTxt }, lastPostText || storyText, defaultSpeaker, cast, st, storyText);
                 verified.push({
                     panel: Number(q.panel) || (verified.length + 1),
                     kind: classified.kind,
@@ -6170,7 +6307,7 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
                 let freePanel = 1;
                 while (usedPanels.has(freePanel) && freePanel <= maxQ) freePanel++;
                 usedPanels.add(freePanel);
-                const classified = classifyCaptionKindAndSpeaker(fb, lastPostText || storyText, defaultSpeaker, cast, st);
+                const classified = classifyCaptionKindAndSpeaker(fb, lastPostText || storyText, defaultSpeaker, cast, st, storyText);
                 verified.push({
                     panel: freePanel,
                     kind: classified.kind,
@@ -6184,9 +6321,6 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
     return verified.slice(0, maxQ);
 }
 
-// Умное сопоставление текста (QUOTE1..4) и картинок фреймов (PANEL1..4):
-// 1) Если во 2-м фрейме нарисовано животное/предмет крупным планом без людей (змея, профитроли, подоконник), а прямая речь или мысль персонажа попала под животное — меняем местами с плашкой описания (narration), чтобы речь стояла под говорящим человеком, а описание детали — под самой деталью!
-// 2) Проверяем совпадение предметных ключевых слов (змея, крюк, профитроли, подоконник, шея/ключица, окно, забор) между русским текстом QUOTE и английским промптом PANEL!
 function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
     if (!Array.isArray(quotes) || quotes.length < 2 || !Array.isArray(panelPrompts) || panelPrompts.length < 2) {
         return quotes;
@@ -6194,7 +6328,7 @@ function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
     const nPanels = Math.min(panelPrompts.length, 4);
     const items = quotes.slice(0, nPanels).map((q, idx) => ({ ...q, panel: idx + 1 }));
 
-    const HUMAN_ACTION_RU_RE = /(?:^|[^а-яёa-z0-9])(юристка|журналистка|девушка|женщина|мужчина|софия|софа|этель|джулия|аня|наоя|проворковал[аи]?|поприветствовал[аи]?|улыбнул[ась]*|вздохнул[аи]?|удерживая|на вытянутой руке|вооружилась|разлив)(?=$|[^а-яёa-z0-9])/i;
+    const HUMAN_ACTION_RU_RE = /(?:^|[^а-яёa-z0-9])(юристка|журналистка|девушка|женщина|мужчина|софия|софа|этель|джулия|аня|наоя|ян|проворковал[аи]?|поприветствовал[аи]?|улыбнул[ась]*|вздохнул[аи]?|удерживая|на вытянутой руке|вооружилась|разлив)(?=$|[^а-яёa-z0-9])/i;
     const MACRO_ANIMAL_HEAD_EN_RE = /\b(snake head|forked tongue|fangs|scales|macro shot|animal focus)\b/i;
     const MACRO_ANIMAL_HEAD_RU_RE = /(треугольная башка|термолокатор|раздвоенный язычок|язычок|чешу[яий]|брюхо|сплющила голову|шипение)/i;
 
@@ -6205,6 +6339,9 @@ function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
         { en: /\b(crumbs|windowsill|spit|crushed)\b/i, ru: /(крошк|подоконник|выплюнув|тест)/i, weight: 5 },
         { en: /\b(neck|collarbone|clavicle|bite mark|hickey|bruise|turtleneck|throat)\b/i, ru: /(ше[яеюй]|ключиц|водолазк|подбород|пудр|укус|засос|след)/i, weight: 5 },
         { en: /\b(keys|keychain|car keys|handbag|bag|unbuttoning)\b/i, ru: /(ключ|брелок|сумочк|пуговиц|юбк|сверток|свёрток)/i, weight: 5 },
+        { en: /\b(tarot|cards|card|deck|arcana|moon|cups|swords|pentacles|tower|strength)\b/i, ru: /(таро|карт[аыуой]|колод[аыуе]|аркан|лун[аы]|кубк|меч|пентакл|башн|сил[аы])/i, weight: 4 },
+        { en: /\b(door|knock|knocking|fist|knuckles|lock)\b/i, ru: /(двер[ьию]|удар|костяшк|бум|замок|порог|площадк)/i, weight: 5 },
+        { en: /\b(boots|calves|legs|sack|bag of|powder|coat hem)\b/i, ru: /(икр[ыа]|ботинк|плащ|куль|алебастр|половик|пыль)/i, weight: 5 },
         { en: /\b(fence|gate|iron bars|outdoors|screaming man|rain)\b/i, ru: /(забор|снаружи|клиент|прискакал|грызет|грызёт|тени в окне)/i, weight: 4 },
         { en: /\b(window|curtain|bell|ringing|pine)\b/i, ru: /(окон|окн|штор|колокольчик|трезвон|снаружи|дорожк)/i, weight: 3 },
     ];
@@ -6214,36 +6351,39 @@ function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
         const p = String(pStr);
         const t = String(qObj.text || '');
         const kind = qObj.kind || (qObj.speaker ? 'speech' : 'narration');
-        const isNoHumanPanel = /\b(no humans|animal focus|object focus|food focus|still life)\b/i.test(p) && !/\b(1girl|1boy|2girls|2boys|woman|man)\b/i.test(p);
-        const isHumanPortraitOrTalk = /\b(1girl|1boy|2girls|2boys|portrait|upper body|medium shot|cowboy shot|speaking|smiling|laughing|looking)\b/i.test(p) && !isNoHumanPanel;
+        // Используем isDetailOrMacroPanelPrompt(p), чтобы кадры рук/карт/дверей (даже с 1girl, solo, two hands only!) считались именно деталью без лица и НЕ перетягивали на себя мысли (thought) или прямую речь (speech)!
+        const isDetailPanel = isDetailOrMacroPanelPrompt(p);
+        const isHumanPortraitOrTalk = !isDetailPanel && /\b(1girl|1boy|2girls|2boys|portrait|upper body|medium shot|cowboy shot|speaking|smiling|laughing|looking)\b/i.test(p);
 
         let score = 0;
         const hasHumanWordsInRu = HUMAN_ACTION_RU_RE.test(t);
-        if (isNoHumanPanel) {
+        if (isDetailPanel) {
             if (kind === 'narration') {
-                score += hasHumanWordsInRu ? 1 : 7;
+                score += 9;
             } else if (kind === 'speech') {
-                score -= 6;
+                score -= 10;
             } else if (kind === 'thought') {
-                score -= 4;
+                score -= 8;
             }
             if (MACRO_ANIMAL_HEAD_EN_RE.test(p) && MACRO_ANIMAL_HEAD_RU_RE.test(t)) {
                 score += 6;
             }
         } else if (isHumanPortraitOrTalk) {
-            if (kind === 'speech' || kind === 'thought') score += 4;
-            if (kind === 'narration' && hasHumanWordsInRu) score += 3;
+            if (kind === 'speech' || kind === 'thought') score += 5;
+            if (kind === 'narration' && hasHumanWordsInRu) score += 2;
         }
 
-        for (const pair of SEMANTIC_PAIRS) {
-            if (pair.en.test(p) && pair.ru.test(t)) {
-                score += pair.weight;
+        // Предметные совпадения применяем для описаний (narration) или на портретных кадрах, но НЕ даём словам вроде «займу руки картами» утащить мысль (thought) под безголовые руки!
+        if (!isDetailPanel || kind === 'narration') {
+            for (const pair of SEMANTIC_PAIRS) {
+                if (pair.en.test(p) && pair.ru.test(t)) {
+                    score += pair.weight;
+                }
             }
         }
         return score;
     };
 
-    // Перебираем все перестановки items (для 3 фреймов их всего 6, для 4 фреймов — 24) и выбираем ту, которая даёт максимальное совпадение смысла с картинками фреймов (при равенстве сохраняем исходный порядок)
     const getPermutations = arr => {
         if (arr.length <= 1) return [arr];
         const res = [];
@@ -6258,10 +6398,10 @@ function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
     let bestPerm = items;
     let bestScore = -9999;
     perms.forEach((perm, permIdx) => {
-        let total = permIdx === 0 ? 0.5 : 0;
+        let total = permIdx === 0 ? 0.8 : 0;
         for (let i = 0; i < perm.length; i++) {
             const displacement = Math.abs(i - ((Number(perm[i].panel) || (i + 1)) - 1));
-            total += scoreMatch(perm[i], panelPrompts[i]) - displacement * 1.6;
+            total += scoreMatch(perm[i], panelPrompts[i]) - displacement * 2.1;
         }
         if (total > bestScore) {
             bestScore = total;
@@ -6273,6 +6413,33 @@ function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
         ...q,
         panel: idx + 1,
     }));
+}
+
+function reconcileQuoteSpeakersWithPanels(quotes, panelPrompts, cast = [], fullPostText = '', st = null) {
+    if (!Array.isArray(quotes) || !quotes.length) return quotes;
+    const names = storyNames() || {};
+    const activeCast = Array.isArray(cast)
+        ? cast.map(c => (typeof c === 'string' ? c : (c?.name || ''))).filter(c => c && c !== '__none__')
+        : [];
+    const candidates = [];
+    if (names.user) candidates.push(names.user);
+    if (names.char) candidates.push(names.char);
+    for (const npc of (st?.npcs || [])) {
+        if (npc?.name && !candidates.includes(npc.name)) candidates.push(npc.name);
+    }
+    for (const cName of activeCast) {
+        if (cName && !candidates.includes(cName)) candidates.push(cName);
+    }
+    const povThinker = findDominantPovThinkerInPost(fullPostText, candidates);
+
+    return quotes.map((q, idx) => {
+        if (!q || q.kind === 'narration') return q;
+        let spk = String(q.speaker || '').trim();
+        if (q.kind === 'thought' && (!spk || /^мысли$/i.test(spk)) && povThinker) {
+            spk = povThinker;
+        }
+        return { ...q, speaker: spk };
+    });
 }
 
 function drawRoundedRectPath(ctx2d, x, y, w, h, r) {
@@ -6682,6 +6849,40 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
     return cv.toDataURL('image/png');
 }
 
+function filterForcedCastForChunk(forcedCast, chunkText, fullTargetText) {
+    if (!Array.isArray(forcedCast) || !forcedCast.length) return [];
+    const cleanChunk = stripRoleplayHeaderBracketsAndWeirdSpaces(String(chunkText || '')).trim();
+    const cleanFull = stripRoleplayHeaderBracketsAndWeirdSpaces(String(fullTargetText || '')).trim();
+    if (!cleanChunk || !cleanFull) return forcedCast;
+
+    // Убираем из проверки внутренние мысли *...* и прямую речь "...", чтобы упоминание кого-то в мыслях или разговоре не считалось его физическим приходом в комнату
+    const stripSpeechAndThoughts = t => String(t || '')
+        .replace(/\*[^*\n]{2,1500}\*/g, ' ')
+        .replace(/[«“"][^«»“”"\n]{2,2500}[»”"]/g, ' ');
+
+    const chunkStartIdx = cleanFull.indexOf(cleanChunk.slice(0, Math.min(45, cleanChunk.length)));
+    const textUpToChunkEnd = chunkStartIdx >= 0
+        ? cleanFull.slice(0, chunkStartIdx + cleanChunk.length)
+        : cleanChunk;
+    const narrativeUpToNow = stripSpeechAndThoughts(textUpToChunkEnd);
+    const narrativeInChunk = stripSpeechAndThoughts(cleanChunk);
+
+    // Игнорируем заочные упоминания в гадании на картах Таро («вытянутый на X», «Для X выпал», «На пару X и Y», «Над X и Y развернулся», «А для X с Y»)
+    const stripTarotAbsentia = t => String(t || '')
+        .replace(/(?:вытянут[а-я]*\s+на|для|на\s+пару|над)\s+[А-ЯЁа-яёA-Za-z\sи,]{2,40}(?=[:—–-]|\s+(?:выпал|приземлил|развернул|выплыл|л[её]г))/gi, ' ');
+
+    const physicalNarrativeUpToNow = stripTarotAbsentia(narrativeUpToNow);
+    const physicalNarrativeInChunk = stripTarotAbsentia(narrativeInChunk);
+
+    // Оставляем только тех персонажей из forcedCast, кто уже физически появился в повествовании к текущему моменту!
+    const presentSoFar = forcedCast.filter(cName => isNameMentionedInText(cName, physicalNarrativeUpToNow));
+    if (!presentSoFar.length) return forcedCast.slice(0, 1);
+
+    // Если в этом конкретном отрывке прямо действует кто-то из presentSoFar — берём их; если же в отрывке описываются только карты/предметы (как в абзацах 3–4 гадания), оставляем тех, кто был в комнате до этого (Этель), но НЕ добавляем гостя (Яна), который появится только в 6-м абзаце!
+    const presentInThisChunk = presentSoFar.filter(cName => isNameMentionedInText(cName, physicalNarrativeInChunk));
+    return presentInThisChunk.length ? presentInThisChunk : presentSoFar;
+}
+
 function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, directorWhisper = '', comicOpts = null) {
     const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
     const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
@@ -6709,7 +6910,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         ? `[Краткая предыстория диалога (ТОЛЬКО для понимания того, кто с кем разговаривает — НЕ бери отсюда старую локацию, если в целевом посте герои уже перешли в другое место!)]:\n` +
           prevContextMsgs.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 320)}»`).join('\n\n')
         : '';
-    const fullTargetText = targetPostMsg ? stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '') : '';
+    const fullTargetText = targetPostMsg ? stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '')) : '';
     const hasSpecificChunk = !!(comicOpts?.enabled && comicOpts?.chunkText && String(comicOpts.chunkText).trim());
     const chunkHeaderNote = hasSpecificChunk
         ? `[Краткая справка по началу этого поста (ТОЛЬКО для понимания помещения/локации, где находятся герои): «${fullTargetText.slice(0, 380)}»]\n\n` +
@@ -6744,8 +6945,11 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         ...(st.npcs || []).slice(0, 15).map(n => `— ${n.name}: ${n.appearanceEn ? `[Теги внешности: ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
     ].filter(Boolean).join('\n');
     const npcBlock = npcCardsList ? `Справка по внешности и ролям известных NPC (обязательно используй их описание, если они есть в сцене!):\n${npcCardsList}` : '';
-    const forcedCastLine = Array.isArray(forcedCast) && forcedCast.length
-        ? `ВАЖНО — ИГРОК ЯВНО УКАЗАЛ, КТО ДОЛЖЕН БЫТЬ В КАДРЕ: ${forcedCast.join(', ')}. Обязательно включи ВСЕХ перечисленных (${forcedCast.length} чел.) в строку CAST и подробно опиши внешность, одежду и позу КАЖДОГО из них в строке SCENE!`
+    const effectiveForcedCast = hasSpecificChunk
+        ? filterForcedCastForChunk(forcedCast, comicOpts.chunkText, fullTargetText)
+        : (Array.isArray(forcedCast) ? forcedCast : []);
+    const forcedCastLine = Array.isArray(effectiveForcedCast) && effectiveForcedCast.length
+        ? `ВАЖНО — АКТИВНЫЕ ПЕРСОНАЖИ, ФИЗИЧЕСКИ НАХОДЯЩИЕСЯ В КОМНАТЕ/СЦЕНЕ В ЭТОМ ОТРЫВКЕ: ${effectiveForcedCast.join(', ')}. Включи ТОЛЬКО физически присутствующих в этот момент (${effectiveForcedCast.length} чел.) в строку CAST и SCENE! Если другие люди упоминаются лишь заочно (на картах Таро, в мыслях, разговорах или ещё не вошли в дверь в этом отрывке) — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО рисовать их в комнате!`
         : '';
     const whisperLine = directorWhisper && String(directorWhisper).trim()
         ? `🎬 ШЁПОТ РЕЖИССЁРУ ОТ ИГРОКА (ВЫСШИЙ ПРИОРИТЕТ — выполни это указание в кадре обязательно!): «${String(directorWhisper).trim()}».`
@@ -7268,9 +7472,10 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
         return true;
     }
     const hasCloseUp = /\b(close-up|extreme close-up|macro|focus on)\b/i.test(p);
-    const hasPortraitFace = /\b(portrait|face focus|expressive face|looking at viewer)\b/i.test(p);
-    if (hasCloseUp && !hasPortraitFace) {
-        if (/\b(snake|python|cobra|viper|serpent|lizard|reptile|terrarium|spider|scorpion|frog|toad|turtle|hamster|rat|mouse|rabbit|ferret|parrot|raven|crow|owl|fish|aquarium|handbag|purse|compact mirror|keys|keychain|jam|thumb|finger|tail under skirt)\b/i.test(p)) {
+    const hasPortraitFace = /\b(portrait|face focus|expressive face|looking at viewer|looking back|looking at another|hair|eyes|cat ears|animal ears|smiling|grinning|pouting|blushing|frowning|glaring|laughing|crying|yawning|speaking|talking|glasses|sunglasses|2girls|2boys|multiple girls|multiple boys)\b/i.test(p);
+    const hasExplicitHeadlessOrFocus = /\b(head out of frame|face out of frame|cropped head|neck focus|hands focus|hand focus|object focus|food focus|no humans|eyes only|extreme close-up)\b/i.test(p);
+    if (hasCloseUp && (hasExplicitHeadlessOrFocus || !hasPortraitFace)) {
+        if (/\b(snake|python|cobra|viper|serpent|lizard|reptile|terrarium|spider|scorpion|frog|toad|turtle|hamster|rat|mouse|rabbit|ferret|parrot|raven|crow|owl|fish|aquarium|handbag|purse|compact mirror|keys|keychain|jam|thumb|finger|tail under skirt|tarot|cards|card|deck|arcana|knocking|knuckles|fist|door|boots|calves|sack|alabaster)\b/i.test(p)) {
             return true;
         }
         if (/\b(genitals|penis|erection|testicles|pussy|vagina|clitoris|labia|anus|crotch|groin|pubic|insertion|penetration|vaginal|anal|cum|ejaculation|creampie|fellatio|cunnilingus|handjob|fingering|paizuri|nipples|areolae|breasts focus|ass focus|butt focus|thighs focus)\b/i.test(p)) {
@@ -7332,8 +7537,15 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
         p = p.replace(/\bred\s+(?:liquid|smear|stain|dab|drop)\b/gi, 'sweet glossy strawberry jam');
     }
 
+    // 3б) Если в кадре тасуют карты Таро / игральные карты (shuffling cards / tarot cards) — убираем тег "shuffling" (который в NovelAI рисует веер из 3–4 лишних рук из одного рукава!) и заменяем на аккуратное удержание карт двумя руками!
+    if (/\b(tarot|cards|deck|shuffling)\b/i.test(p)) {
+        p = p.replace(/\bshuffling\s+(?:worn\s+|tarot\s+|playing\s+)?(?:cards|deck)\b/gi, 'holding tarot cards in two hands, two hands only')
+             .replace(/\bshuffling\b/gi, 'holding cards in two hands');
+    }
+
     // 4) Если это кадр фокуса на руках / сумочке / пуговице / джеме на пальце — фиксируем руки ТОЛЬКО одного человека (one person's hands only, max 2 hands), чтобы NovelAI не рисовал 4 чужие руки!
-    if (/\b(hand focus|hands focus|focus on hands|unbuttoning|inside bag|inside handbag|rummaging|holding keys|keys|thumb|finger|jam)\b/i.test(p)) {
+    const isActualHandDetail = /\b(hand focus|hands focus|focus on hands|head out of frame|face out of frame|cropped head)\b/i.test(p) || (isDetailOrMacroPanelPrompt(p) && /\b(unbuttoning|inside bag|inside handbag|rummaging|holding keys|keys|thumb|finger|fingernail|jam)\b/i.test(p));
+    if (isActualHandDetail) {
         p = p.replace(/\b(?:multiple girls|multiple boys|[2-9]girls|[2-9]boys|four hands|multiple hands)\b\s*,?/gi, '');
         if (!/\btwo hands only\b/i.test(p)) {
             p = `1girl, solo, two hands only, ${p}`;
@@ -7494,8 +7706,8 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
     const objectNoFaceNeg = isPureObjectNoHumans ? '1girl, 1boy, human, person, face, eyes, nose, mouth, mascot, cute creature, chibi, blob, slime, face in window, reflection of face, ghostly face, creepy face, pareidolia' : '';
 
     if (isDetailOrMacroPanelPrompt(cleanDesc)) {
-        const isHandDetail = /\b(hand focus|hands focus|focus on hands|unbuttoning|holding|bag|handbag|keys|fingers|thumb|jam)\b/i.test(cleanDesc);
-        const handAntiMutantNeg = isHandDetail ? 'extra hands, multiple hands, 3 hands, 4 hands, extra arms, disembodied hands, mutated hands, bad hands, extra fingers' : '';
+        const isHandDetail = /\b(hand focus|hands focus|focus on hands|unbuttoning|holding|bag|handbag|keys|fingers|thumb|jam|tarot|cards|deck|knocking|fist|knuckles)\b/i.test(cleanDesc);
+        const handAntiMutantNeg = isHandDetail ? 'extra hands, multiple hands, 3 hands, 4 hands, extra arms, 3 arms, disembodied hands, mutated hands, bad hands, extra fingers, fused fingers, motion blur hands, text on cards, letters on cards' : '';
         const mergedNeg = [baseRefs?.extraNeg || '', comicCleanArtNeg, handAntiMutantNeg, jamNotBloodNeg, snakeAntiMutantNeg, foodAntiMascotNeg, objectNoFaceNeg].filter(Boolean).join(', ');
         return { ...(baseRefs || {}), images: [], charCaptions: [], extraNeg: mergedNeg, note: '' };
     }
@@ -7662,7 +7874,11 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 logImageDiag('Из строки SCENE автоматически вырезан блок | NEGATIVE и перенесён в негативный промпт', splitDesc.negative);
             }
             if (Array.isArray(forcedCast) && forcedCast.length) {
-                forcedCast.forEach(fc => {
+                const targetPostForCast = ctx().chat?.[Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1)]?.mes || '';
+                const effForced = (comicOpts?.enabled && comicOpts?.chunkText)
+                    ? filterForcedCastForChunk(forcedCast, comicOpts.chunkText, targetPostForCast)
+                    : forcedCast;
+                effForced.forEach(fc => {
                     const nFc = fc.trim().toLowerCase().replace(/ё/g, 'е');
                     if (nFc && (!isPov || nFc !== storyNames().user.toLowerCase().replace(/ё/g, 'е')) && !cast.some(c => c.includes(nFc) || nFc.includes(c))) {
                         cast.push(nFc);
@@ -7886,6 +8102,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             if (verifiedQuotes.length > 1 && framesToDraw.length > 1) {
                 verifiedQuotes = alignQuotesToPanelsSemantics(verifiedQuotes, framesToDraw);
             }
+            if (verifiedQuotes.length > 0) {
+                const fullPostForSpk = String(ctx().chat?.[targetMesIdx]?.mes || '');
+                verifiedQuotes = reconcileQuoteSpeakersWithPanels(verifiedQuotes, framesToDraw, cast, fullPostForSpk, st);
+            }
             const wantBubbles = activeComicOpts.linesMode !== 'off' && verifiedQuotes.length > 0;
             if (wantBubbles) {
                 const stitchedCleanData = await stitchComicFramesOnCanvas(frameUrls, [], activeComicOpts.styleId, false);
@@ -7968,8 +8188,15 @@ async function attachToLastMessage(url, mesId, sceneMeta = null, silentToast = f
         if (!m || m.is_system) continue;
         m.extra = m.extra || {};
         const oldScene = m.extra.nnbScene || {};
-        const prevHistory = Array.isArray(oldScene.history) ? [...oldScene.history] : (oldScene.url ? [oldScene.url] : []);
-        if (url && !prevHistory.includes(url)) prevHistory.push(url);
+        let prevHistory;
+        if (sceneMeta?.replaceHistory && Array.isArray(sceneMeta.history) && sceneMeta.history.length > 0) {
+            prevHistory = [...sceneMeta.history];
+            if (url && !prevHistory.includes(url)) prevHistory.push(url);
+        } else {
+            prevHistory = Array.isArray(oldScene.history) ? [...oldScene.history] : (oldScene.url ? [oldScene.url] : []);
+            if (url && !prevHistory.includes(url)) prevHistory.push(url);
+        }
+        prevHistory = [...new Set(prevHistory.filter(Boolean))];
         if (sceneMeta) {
             const mergedCleanMap = { ...(oldScene.cleanUrlMap || {}), ...(sceneMeta.cleanUrlMap || {}) };
             if (url && sceneMeta.cleanUnletteredUrl) mergedCleanMap[url] = sceneMeta.cleanUnletteredUrl;
@@ -8646,7 +8873,10 @@ async function showScenePopup(mesId, forceAsk = false) {
         const chunks = choice.multiChunkChapter;
         // Перед запуском новой многостраничной главы очищаем старые черновые слайды этого поста, чтобы старый кадр не вставал перед 1-й страницей новой главы!
         const cInit = ctx();
-        const tIdxInit = Number.isInteger(mesId) ? mesId : (cInit.chat.length - 1);
+        let tIdxInit = Number.isInteger(mesId) ? mesId : (cInit.chat.length - 1);
+        if (!Number.isInteger(mesId)) {
+            while (tIdxInit >= 0 && (!cInit.chat[tIdxInit] || cInit.chat[tIdxInit].is_system)) tIdxInit--;
+        }
         if (cInit.chat?.[tIdxInit]?.extra?.nnbScene) {
             cInit.chat[tIdxInit].extra.nnbScene.history = [];
             cInit.chat[tIdxInit].extra.nnbScene.pageMetaMap = {};
@@ -8750,7 +8980,10 @@ function findNextUndrawnChunkIndex(sceneMeta, totalChunks) {
 async function drawNextComicChunkPage(mesId, baseSceneMeta) {
     if (sceneDrawing) return toastr.info('Сцена уже рисуется — подожди завершения текущего кадра', '📖 Манхва');
     const c = ctx();
-    const targetIdx = Number.isInteger(mesId) ? mesId : (c.chat.length - 1);
+    let targetIdx = Number.isInteger(mesId) ? mesId : (c.chat.length - 1);
+    if (!Number.isInteger(mesId)) {
+        while (targetIdx >= 0 && (!c.chat[targetIdx] || c.chat[targetIdx].is_system)) targetIdx--;
+    }
     const msg = c.chat?.[targetIdx];
     if (!msg?.mes) return;
     const chunks = splitPostIntoComicChunks(msg.mes);
@@ -8933,7 +9166,9 @@ async function editQuotesForSpecificPageUrl(mesId, sceneMeta, targetUrl) {
     const idxInHist = Array.isArray(sceneMeta.history) ? sceneMeta.history.indexOf(targetUrl) : -1;
     if (idxInHist >= 0) sceneMeta.history[idxInHist] = savedUrl;
     if (sceneMeta.url === targetUrl) sceneMeta.url = savedUrl;
+    sceneMeta.replaceHistory = true;
     await attachToLastMessage(sceneMeta.url || savedUrl, mesId, sceneMeta, true);
+    delete sceneMeta.replaceHistory;
     toastr.success('Облачка речи, мыслей и описания обновлены на этой странице!', '💬 Текст манхвы');
 }
 
@@ -8984,13 +9219,15 @@ async function rerollSpecificManhwaPageInPlace(mesId, sceneMeta, targetUrl, rege
         sceneMeta.pageMetaMap = { ...(sceneMeta.pageMetaMap || {}), ...(res.sceneMeta?.pageMetaMap || {}) };
         sceneMeta.cleanUrlMap = { ...(sceneMeta.cleanUrlMap || {}), ...(res.sceneMeta?.cleanUrlMap || {}) };
         sceneMeta.url = res.url;
+        sceneMeta.replaceHistory = true;
         await attachToLastMessage(res.url, mesId, sceneMeta, true);
+        delete sceneMeta.replaceHistory;
         toastr.success(`Страница ${pageNum} успешно обновлена на своём месте в ленте!`, '🔄 Страница обновлена');
     }
 }
 
 async function openManhwaVerticalReaderModal(mesId, sceneMeta) {
-    const urls = Array.isArray(sceneMeta?.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta?.url ? [sceneMeta.url] : []);
+    const urls = getSortedManhwaHistoryUrls(sceneMeta);
     if (!urls.length) return;
     const el = $('<div class="nnb-pop nnb-pop-visual"></div>');
     el.append(`<h3>📜 Чтение и скачивание манхвы лентой (${urls.length} стр.)</h3>`);
@@ -18438,7 +18675,7 @@ function placeMesButtons() {
             const sceneMeta = Number.isInteger(mId) ? c.chat?.[mId]?.extra?.nnbScene : null;
             const hasSavedPrompt = hasValidSceneMeta(sceneMeta);
             const hist = hasSavedPrompt
-                ? (Array.isArray(sceneMeta.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta.url ? [sceneMeta.url] : []))
+                ? getSortedManhwaHistoryUrls(sceneMeta)
                 : [];
             let cIdx = hasSavedPrompt ? hist.indexOf(sceneMeta.url) : -1;
             if (hasSavedPrompt && cIdx < 0) cIdx = hist.length - 1;
