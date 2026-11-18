@@ -7344,7 +7344,11 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         mcCardObj?.card ? mcCardObj.card : '',
         rawMainChDesc ? `[Описание из карточки ${names.char}: ${rawMainChDesc}]` : '',
     ].filter(Boolean).join(' ');
-    const mcAppLine = mcAppParts ? `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}` : '';
+    const mcSceneTxt = hasSpecificChunk ? String(comicOpts.chunkText) : fullTargetText;
+    const mcInScene = isNameMentionedInText(mcCardObj?.name || names.char, mcSceneTxt) || (Array.isArray(forcedCast) && forcedCast.some(fc => isNameMentionedInText(fc, mcCardObj?.name || names.char)));
+    const mcAppLine = !mcAppParts ? '' : (mcInScene
+        ? `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}`
+        : `— ${mcCardObj?.name || names.char} (главный персонаж): В ЭТОМ ОТРЫВКЕ ЕГО НЕТ — не рисуй его и НЕ переноси его внешность (цвет волос, глаза, одежду) на других персонажей!`);
     const allNpcsSorted = [...(st.npcs || [])].sort((a, b) => {
         const aIn = isNameMentionedInText(a?.name || '', fullTargetText) ? 0 : 1;
         const bIn = isNameMentionedInText(b?.name || '', fullTargetText) ? 0 : 1;
@@ -7352,7 +7356,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     });
     const npcCardsList = [
         mcAppLine,
-        ...allNpcsSorted.slice(0, 50).map(n => `— ${n.name}: ${n.appearanceEn ? `[Каноничный тег Danbooru и внешность (ОБЯЗАТЕЛЬНО пиши в промпте "${n.appearanceEn}" вместо "${n.name} (original)"!): ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
+        ...allNpcsSorted.slice(0, 50).map(n => `— ${n.name}: ${n.appearanceEn ? `[Каноничный тег Danbooru и внешность (ОБЯЗАТЕЛЬНО пиши в промпте "${n.appearanceEn}" вместо "${n.name} (original)"! Каноничный тег пиши ТОЧНО как здесь, со скобками; НЕ добавляй ему цвет волос и глаз, которых нет в этих тегах — их задаёт канон, а не прошлые кадры): ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
     ].filter(Boolean).join('\n');
     const npcBlock = npcCardsList ? `Справка по внешности и ролям известных NPC (обязательно используй их описание, если они есть в сцене!):\n${npcCardsList}` : '';
     const effectiveForcedCast = hasSpecificChunk
@@ -8135,6 +8139,56 @@ function transliterateRuNameVariants(ruName) {
     return Array.from(variants).filter(v => v.length >= 2);
 }
 
+// Страж внешности: если у NPC в карточке задан каноничный тег вида «denji (chainsaw man)», то
+// 1) возвращаем ему скобочную форму (модель пишет «denji, chainsaw man», и NovelAI узнаёт персонажа хуже);
+// 2) вычищаем цвета волос, которых нет в его тегах (модель тащит «black hair» из прошлых кадров и с главного героя).
+const NNB_HAIR_COLOR_RE = /^(?:(?:messy|short|long|spiky|shaggy|wavy|curly|straight|tousled|fluffy|medium|very long|very short)\s+)*(?:jet[- ]black|black|dark|dark brown|brown|light brown|blonde|blond|golden|yellow|white|silver|grey|gray|platinum|red|crimson|orange|ginger|auburn|copper|caramel|blue|navy|green|purple|violet|pink|teal)[- ]hair(?:ed)?$/i;
+function hairColorWords(tags) {
+    return (String(tags || '').match(/\b(?:jet[- ]black|black|dark brown|light brown|dark|brown|blonde|blond|golden|yellow|white|silver|grey|gray|platinum|red|crimson|orange|ginger|auburn|copper|caramel|blue|navy|green|purple|violet|pink|teal)(?=[- ]hair)/gi) || []).map(x => x.toLowerCase().replace(/\s+/g, ' '));
+}
+function enforceNpcCanonAppearance(rawPromptStr, st) {
+    let out = String(rawPromptStr || '');
+    if (!out || !st) return out;
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    for (const npc of cards) {
+        const appEn = String(npc?.appearanceEn || '').trim();
+        const cm = appEn.match(/^\s*([^,()]{2,60}?)\s*\(\s*([^)]{2,60}?)\s*\)/);
+        if (!cm) continue;
+        const cName = cm[1].trim(), cSeries = cm[2].trim();
+        const canonTag = `${cName} (${cSeries})`;
+        const escN = cName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escS = cSeries.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const ownHair = hairColorWords(appEn);
+        const segs = out.split(/(\s*\|\|\s*)/);
+        for (let i = 0; i < segs.length; i += 2) {
+            let seg = segs[i];
+            const hasCanon = new RegExp(`(^|,)\\s*${escN}\\b`, 'i').test(seg);
+            if (!hasCanon) continue;
+            seg = seg
+                .replace(new RegExp(`\\b${escN}\\s*,\\s*${escS}\\b`, 'gi'), canonTag)
+                .replace(new RegExp(`(^|,)\\s*${escN}\\s*(?=,|$)`, 'gi'), `$1 ${canonTag}`)
+                .replace(new RegExp(`(^|,)\\s*${escS}\\s*(?=,|$)`, 'gi'), '$1');
+            let toks = seg.split(',').map(t => t.trim()).filter(Boolean);
+            const canonIdx = toks.findIndex(t => t.toLowerCase() === canonTag.toLowerCase());
+            const isSoloSeg = /\bsolo\b/i.test(seg) || /^\s*1(?:boy|girl)\s*,/i.test(seg) && !/\b1(?:boy|girl)\b[\s\S]*\b1(?:boy|girl)\b/i.test(seg) || i > 0;
+            toks = toks.map((t, idx) => {
+                if (!NNB_HAIR_COLOR_RE.test(t)) return t;
+                if (hairColorWords(t).some(c => ownHair.includes(c))) return t;
+                // в сольном кадре / в его CHAR-слоте убираем любой чужой цвет волос; в общем кадре — только рядом с его тегом
+                if (isSoloSeg || (canonIdx >= 0 && idx > canonIdx && idx - canonIdx <= 8)) {
+                    const style = t.replace(/[- ]?hair(?:ed)?$/i, '').split(/\s+/).filter(w => /^(messy|short|long|spiky|shaggy|wavy|curly|straight|tousled|fluffy)$/i.test(w));
+                    return style.length ? `${style.join(' ')} hair` : '';
+                }
+                return t;
+            }).filter(Boolean);
+            segs[i] = (segs[i].match(/^\s*/)[0]) + toks.join(', ');
+        }
+        out = segs.join('');
+    }
+    return out;
+}
+
 function replaceOriginalPlaceholderWithNpcAppearance(rawPromptStr, st) {
     let out = String(rawPromptStr || '');
     if (!out || !st) return out;
@@ -8659,6 +8713,14 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         charCaptions = charCaptions.map(c => replaceOriginalPlaceholderWithNpcAppearance(c, st));
         for (let pi = 0; pi < panelPrompts.length; pi++) {
             panelPrompts[pi] = replaceOriginalPlaceholderWithNpcAppearance(panelPrompts[pi], st);
+        }
+        {
+            const beforeFix = [desc, ...charCaptions, ...panelPrompts].join(' ### ');
+            desc = enforceNpcCanonAppearance(desc, st);
+            charCaptions = charCaptions.map(c => enforceNpcCanonAppearance(c, st));
+            for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = enforceNpcCanonAppearance(panelPrompts[pi], st);
+            const afterFix = [desc, ...charCaptions, ...panelPrompts].join(' ### ');
+            if (afterFix !== beforeFix) logImageDiag('Страж внешности: восстановлен канон-тег NPC / убран чужой цвет волос', afterFix);
         }
 
         // 2) образцы: аватар персоны (только если НЕ вид от первого лица!) и аватары тех, кто реально в кадре
