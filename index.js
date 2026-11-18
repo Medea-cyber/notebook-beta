@@ -4598,9 +4598,11 @@ async function unpackZipFirstFile(u8) {
     throw new Error('Неподдерживаемый метод сжатия ZIP: ' + compression);
 }
 
+let naiDirectorRefUnsupportedInSession = false;
+
 function isPermanentAuthOrConfigError(err) {
     const msg = String(err?.message || err || '');
-    return /\b(401\s+Unauthorized|402\b|недостаточно\s+Anlas|заполни\s+адрес\s+API|не\s+выбрано,\s+чем\s+рисовать|Invalid\s+API\s+key|Incorrect\s+API\s+key)\b/i.test(msg);
+    return /\b(400\b|401\s+Unauthorized|402\b|403\b|недостаточно\s+Anlas|заполни\s+адрес\s+API|не\s+выбрано,\s+чем\s+рисовать|Invalid\s+API\s+key|Incorrect\s+API\s+key)\b/i.test(msg);
 }
 
 // Защита при общем ключе (когда с одного токена NovelAI или GLM сидят двое):
@@ -4626,9 +4628,9 @@ async function withSharedKeyRetry(taskFn, label = 'генерация', maxAttem
             }
             logImageDiag(`⏳ Ключ занят / сбой (${label}, попытка ${attempt}/${maxAttempts}) — авто-повтор через ${waitSec} сек.`, err?.message || String(err));
             if (typeof toastr !== 'undefined') {
-                toastr.info(
-                    `⏳ Ключ сейчас занят параллельной генерацией (${escapeHtml(label)}, попытка ${attempt + 1}/${maxAttempts}) — ждём ${waitSec} сек. и автоматически повторяем запрос…`,
-                    '🔄 Очередь общего ключа',
+                toastr.warning(
+                    `⏳ Ключ занят или перегружен (${escapeHtml(label)}, повтор ${attempt + 1}/${maxAttempts} через ${waitSec} сек.)…`,
+                    '🔄 Очередь ключа',
                     { escapeHtml: false, timeOut: waitMs + 400 }
                 );
             }
@@ -4938,7 +4940,7 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
         // Прикрепляем картинку-референс внешности в NovelAI (в ч/б манга-режиме цветную аватарку НЕ прикрепляем, чтобы NovelAI не копировал с неё цвета!)
         const refMode = String(s.naiCharRefMode || 'char_no_style');
         const hasRefs = Array.isArray(refs?.images) && refs.images.length > 0;
-        const allowRef = refMode !== 'off' && !isStrictMonochrome;
+        const allowRef = refMode !== 'off' && !isStrictMonochrome && !naiDirectorRefUnsupportedInSession;
         let attachedRef = false;
         if (hasRefs && allowRef) {
             const b64 = await formatRefForNovelAiDirector(refs.images[0]);
@@ -4999,7 +5001,7 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
                     'NovelAI рисунок'
                 );
                 return await parseNovelAiResponse(res);
-            }, 'NovelAI кадр', 6, 4500);
+            }, 'NovelAI кадр', 2, 3500);
         };
 
         try {
@@ -5016,8 +5018,9 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
                 return storeImage(dataUrl);
             }
             if (attachedRef) {
-                console.warn('[npc_notebook] NovelAI Character Reference failed (e.g. 402 Anlas), retrying without image ref:', err);
-                toastr.info('NovelAI Character Reference не принят для этого кадра — рисую по текстовым тегам внешности…', '🎨 NovelAI', { timeOut: 5000 });
+                naiDirectorRefUnsupportedInSession = true;
+                console.warn('[npc_notebook] NovelAI Character Reference failed (e.g. 400/402), disabling binary ref for session and retrying with text tags:', err);
+                logImageDiag('NovelAI Character Reference отклонён сервером — переключаемся на быстрые текстовые теги внешности без повторных сбоев');
                 delete params.director_reference_images;
                 delete params.director_reference_descriptions;
                 delete params.director_reference_information_extracted;
@@ -5599,14 +5602,19 @@ function stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr) {
         .trim();
 }
 
-function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
-    const clean = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(rawPostText || ''))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
-    if (!clean) return [];
+function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
+    const rawWithSceneMarkers = String(rawPostText || '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/\r\n/g, '\n')
+        .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g, ' ')
+        .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+        .replace(/^\s*(?:\[[^\]\n]{2,260}\]\s*)+/gi, '')
+        .replace(/\n\s*\[(?:Date|Time|Characters|Время|Дата|Персонажи)\s*:[^\]\n]{1,260}\]\s*/gi, '\n')
+        .replace(/\n\s*\[(?:Location|Локация|Место)\s*:[^\]\n]{1,260}\]\s*/gi, '\n[[SCENE_BREAK]]\n')
+        .trim();
+    if (!rawWithSceneMarkers) return [];
     const maxPages = 10;
-    const rawLines = clean.split(/\n+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    if (!rawLines.length) return [];
 
-    // Умное разбиение абзаца на предложения (не разрезая прямую речь в кавычках и мысли в *...* пополам, и удерживая авторскую ремарку "- пробормотала она." вместе с репликой)
     const splitParagraphIntoSentences = (para) => {
         const out = [];
         let buf = '';
@@ -5615,8 +5623,8 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
         for (let i = 0; i < para.length; i++) {
             const ch = para[i];
             buf += ch;
-            if (ch === '«' || ch === '“') inQuotes = true;
-            else if (ch === '»' || ch === '”') inQuotes = false;
+            if (ch === '“') inQuotes = true;
+            else if (ch === '”') inQuotes = false;
             else if (ch === '"') inQuotes = !inQuotes;
             else if (ch === '*') inAsterisk = !inAsterisk;
 
@@ -5638,28 +5646,48 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
         return out.filter(Boolean);
     };
 
-    let pages = rawLines.map(l => ({ text: l, sents: splitParagraphIntoSentences(l) }));
+    const sceneBlocks = rawWithSceneMarkers.split(/\[\[SCENE_BREAK\]\]/).map(b => b.trim()).filter(Boolean);
+    let pages = [];
 
-    // Склеиваем только совсем короткие технические строки (< 65 симв.), никогда не склеивая полноценные авторские абзацы!
-    const mergedShort = [];
-    for (const pg of pages) {
-        if (mergedShort.length > 0 && pg.text.length < 65) {
-            const prev = mergedShort[mergedShort.length - 1];
-            prev.text = `${prev.text}\n\n${pg.text}`;
-            prev.sents = splitParagraphIntoSentences(prev.text);
-        } else {
-            mergedShort.push(pg);
+    for (let sIdx = 0; sIdx < sceneBlocks.length; sIdx++) {
+        const sLines = stripRoleplayHeaderBracketsAndWeirdSpaces(sceneBlocks[sIdx])
+            .split(/\n+/)
+            .map(p => p.replace(/\s+/g, ' ').trim())
+            .filter(Boolean);
+        let scenePages = sLines.map(l => ({ text: l, sents: splitParagraphIntoSentences(l), sceneIdx: sIdx }));
+
+        // Внутри одной сцены объединяем короткие 1–2-предложенческие абзацы (< 285 симв., вроде одиночного предложения «Скосив сонный зеленый глаз...») с соседним абзацем этой же сцены, чтобы не плодить полупустые страницы из 1 предложения!
+        let i = 0;
+        while (i < scenePages.length) {
+            const cur = scenePages[i];
+            if (cur.text.length < 285 || cur.sents.length <= 1) {
+                if (i > 0 && (scenePages[i - 1].text.length + cur.text.length <= 860)) {
+                    scenePages[i - 1].text = `${scenePages[i - 1].text} ${cur.text}`.trim();
+                    scenePages[i - 1].sents = splitParagraphIntoSentences(scenePages[i - 1].text);
+                    scenePages.splice(i, 1);
+                    continue;
+                } else if (i + 1 < scenePages.length && (cur.text.length + scenePages[i + 1].text.length <= 860)) {
+                    scenePages[i + 1].text = `${cur.text} ${scenePages[i + 1].text}`.trim();
+                    scenePages[i + 1].sents = splitParagraphIntoSentences(scenePages[i + 1].text);
+                    scenePages.splice(i, 1);
+                    continue;
+                }
+            }
+            i++;
         }
+        pages.push(...scenePages);
     }
-    pages = mergedShort;
 
-    // Пока страниц меньше maxPages (10), проверяем самые длинные абзацы (> 540 симв. и >= 4 смысловых предложений/реплик) и делим их на 2 последовательные страницы, чтобы в 3 фрейма влезали ВСЕ фразы без пропусков!
+    // Делим абзац пополам ТОЛЬКО если он совсем гигантский (> 960 симв. и >= 6 предложений) ИЛИ если во всём посте вообще всего 1–2 огромных абзаца (> 650 симв.),
+    // чтобы обычные посты на 5–8 абзацев давали 5–7 плотных страниц, а не раздувались каждый раз до 10 страниц!
+    const splitMinLen = pages.length <= 2 ? 620 : 960;
+    const splitMinSents = pages.length <= 2 ? 4 : 6;
     while (pages.length < maxPages) {
         let bestIdx = -1;
-        let bestLen = 540;
+        let bestLen = splitMinLen;
         for (let i = 0; i < pages.length; i++) {
             const pg = pages[i];
-            if (pg.text.length > bestLen && pg.sents.length >= 4) {
+            if (pg.text.length > bestLen && pg.sents.length >= splitMinSents) {
                 bestLen = pg.text.length;
                 bestIdx = i;
             }
@@ -5684,8 +5712,8 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
         pages.splice(
             bestIdx,
             1,
-            { text: firstHalfTxt, sents: target.sents.slice(0, splitAt) },
-            { text: secondHalfTxt, sents: target.sents.slice(splitAt) }
+            { text: firstHalfTxt, sents: target.sents.slice(0, splitAt), sceneIdx: target.sceneIdx },
+            { text: secondHalfTxt, sents: target.sents.slice(splitAt), sceneIdx: target.sceneIdx }
         );
     }
 
@@ -5693,14 +5721,15 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 460) {
         let minPairIdx = 0;
         let minPairLen = 999999;
         for (let i = 0; i < pages.length - 1; i++) {
-            const pairLen = pages[i].text.length + pages[i + 1].text.length;
+            const sameSceneBonus = pages[i].sceneIdx === pages[i + 1].sceneIdx ? 0 : 5000;
+            const pairLen = pages[i].text.length + pages[i + 1].text.length + sameSceneBonus;
             if (pairLen < minPairLen) {
                 minPairLen = pairLen;
                 minPairIdx = i;
             }
         }
         const combinedTxt = `${pages[minPairIdx].text}\n\n${pages[minPairIdx + 1].text}`;
-        pages.splice(minPairIdx, 2, { text: combinedTxt, sents: splitParagraphIntoSentences(combinedTxt) });
+        pages.splice(minPairIdx, 2, { text: combinedTxt, sents: splitParagraphIntoSentences(combinedTxt), sceneIdx: pages[minPairIdx].sceneIdx });
     }
 
     return pages.map((pg, idx) => {
@@ -5778,36 +5807,42 @@ function restoreFullQuoteFromSource(rawQuote, sourceText, strictVerbatim = false
     let s = stripRoleplayHeaderBracketsAndWeirdSpaces(rawQuote).replace(/\s+/g, ' ').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
     if (!s || !sourceText) return capitalizeSentenceFirstChar(s);
     const prefix = s.replace(/[.…,;:\s—–-]+$/, '').trim();
-    if (prefix.length < 4) return capitalizeSentenceFirstChar(s);
+    if (prefix.length < 2) return capitalizeSentenceFirstChar(s);
 
     const cleanSrc = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(sourceText))).replace(/<[^>]+>/g, '').replace(/\r\n/g, '\n'));
     const lowSrc = cleanSrc.toLowerCase().replace(/ё/g, 'е');
     const lowPref = prefix.toLowerCase().replace(/ё/g, 'е');
     let hitIdx = lowSrc.indexOf(lowPref);
-    if (hitIdx < 0 && lowPref.length >= 16) {
-        hitIdx = lowSrc.indexOf(lowPref.slice(0, 16).trim());
+    if (hitIdx < 0 && lowPref.length >= 14) {
+        hitIdx = lowSrc.indexOf(lowPref.slice(0, 14).trim());
     }
-    if (hitIdx < 0) {
-        const firstWords = lowPref.split(/\s+/).slice(0, 3).join(' ');
-        if (firstWords.length >= 8) {
-            hitIdx = lowSrc.indexOf(firstWords);
+    const prefWords = lowPref.replace(/[^a-zа-я0-9\s-]+/gi, ' ').split(/\s+/).filter(w => w.length >= 2);
+    if (hitIdx < 0 && prefWords.length >= 3) {
+        for (let wIdx = 0; wIdx <= prefWords.length - 3; wIdx++) {
+            const win3 = prefWords.slice(wIdx, wIdx + 3).join(' ');
+            if (win3.length >= 10) {
+                const pos = lowSrc.indexOf(win3);
+                if (pos >= 0) {
+                    hitIdx = pos;
+                    break;
+                }
+            }
         }
     }
     if (hitIdx < 0) {
-        // Если включён строгий режим проверки дословности (чтобы отсечь выдуманные перефразировки GLM вроде «Новый надзорный штаб... был молча закреплён»), возвращаем пустую строку!
         if (strictVerbatim) return '';
         return capitalizeSentenceFirstChar(stripNarratorDashAttribution(s));
     }
 
-    // Проверяем, не находится ли найденный кусок внутри прямой речи в кавычках "..." / «...»: если ВСЯ реплика внутри этих кавычек <= 335 символов, возвращаем всю реплику целиком без потери второго предложения (про подушку с шарфом, про биолога с кульком или про Энджела на складе)!
-    const qSpanRe = /[«“"]([^«»“”"\n]{3,2500}?)[»”"]/g;
+    const qSpanRe = /(?:"([^"\n]{2,2500}?)"|«([^«»\n]{2,2500}?)»|“([^“”\n]{2,2500}?)”)/g;
     let qm;
     while ((qm = qSpanRe.exec(cleanSrc)) !== null) {
-        if (isInlineTitleOrTarotQuote(cleanSrc, qm.index, qm[0], qm[1])) continue;
+        const innerQStr = qm[1] || qm[2] || qm[3] || '';
+        if (isInlineTitleOrTarotQuote(cleanSrc, qm.index, qm[0], innerQStr)) continue;
         const spanStart = qm.index;
         const spanEnd = qm.index + qm[0].length;
         if (hitIdx >= spanStart && hitIdx <= spanEnd) {
-            const fullSpoken = stripNarratorDashAttribution(qm[1].replace(/\s+/g, ' ').trim());
+            const fullSpoken = stripNarratorDashAttribution(innerQStr.replace(/\s+/g, ' ').trim());
             if (fullSpoken.length <= 335) {
                 return capitalizeSentenceFirstChar(fullSpoken);
             }
@@ -5815,24 +5850,36 @@ function restoreFullQuoteFromSource(rawQuote, sourceText, strictVerbatim = false
         }
     }
 
-    let startIdx = hitIdx;
-    const matchedChar = cleanSrc.charAt(hitIdx);
-    const isMidSentence = matchedChar && matchedChar === matchedChar.toLowerCase() && matchedChar !== matchedChar.toUpperCase();
-    if (isMidSentence && hitIdx > 0) {
-        const lookback = cleanSrc.slice(Math.max(0, hitIdx - 110), hitIdx);
-        const boundaryMatch = lookback.match(/.*(?:[.!?;\n]|[«“"*])/s);
-        if (boundaryMatch) {
-            const candidateStart = Math.max(0, hitIdx - 110) + boundaryMatch[0].length;
-            if (hitIdx - candidateStart <= 85) {
-                startIdx = candidateStart;
+    const astSpanRe = /\*([^*\n]{2,1500}?)\*/g;
+    let am;
+    while ((am = astSpanRe.exec(cleanSrc)) !== null) {
+        const spanStart = am.index;
+        const spanEnd = am.index + am[0].length;
+        if (hitIdx >= spanStart && hitIdx <= spanEnd) {
+            const fullThought = stripNarratorDashAttribution(am[1].replace(/\s+/g, ' ').trim());
+            if (fullThought.length <= 335) {
+                return capitalizeSentenceFirstChar(fullThought);
             }
-        } else if (hitIdx <= 85) {
-            startIdx = 0;
+            break;
         }
     }
 
+    let startIdx = hitIdx;
+    const lookbackMax = 180;
+    const lookFrom = Math.max(0, hitIdx - lookbackMax);
+    const lookback = cleanSrc.slice(lookFrom, hitIdx);
+    const boundaryMatch = lookback.match(/.*(?:[.!?;\n]|[»”"*])/s);
+    if (boundaryMatch) {
+        const candidateStart = lookFrom + boundaryMatch[0].length;
+        if (hitIdx - candidateStart <= 165) {
+            startIdx = candidateStart;
+        }
+    } else if (hitIdx <= 165) {
+        startIdx = 0;
+    }
+
     const extraLeadLen = Math.max(0, hitIdx - startIdx);
-    let lineRem = cleanSrc.slice(startIdx, hitIdx + 380).split('\n')[0].replace(/\s+/g, ' ').trim();
+    let lineRem = cleanSrc.slice(startIdx, hitIdx + 390).split('\n')[0].replace(/\s+/g, ' ').trim();
     lineRem = lineRem.replace(/^[,;:\s—–-]+/, '').trim();
     const closeQ = lineRem.search(/[»”"*]/);
     const openQ = lineRem.search(/[«“]/);
@@ -5848,11 +5895,9 @@ function restoreFullQuoteFromSource(rawQuote, sourceText, strictVerbatim = false
         }
     }
     if (lineRem && !/[.!?…]$/.test(lineRem)) lineRem += '.';
-    const finalStr = lineRem.length >= s.replace(/[.…]+$/, '').length ? lineRem : stripNarratorDashAttribution(s);
-    return capitalizeSentenceFirstChar(finalStr);
+    return capitalizeSentenceFirstChar(lineRem);
 }
 
-// Определение типа текста в фрейме: 'speech' (прямая речь вслух), 'thought' (мысли курсивом на сером фоне), 'narration' (авторское описание БЕЗ имени персонажа)
 function isInlineTitleOrTarotQuote(fullText, matchIndex, matchFullStr, innerText) {
     const inner = String(innerText || '').trim();
     if (!inner) return true;
@@ -5891,15 +5936,16 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
     const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
     const cleanSrc = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(sourceText || ''))).replace(/<[^>]+>/g, ''));
     const nTxt = norm(txt);
-    const words = nTxt.split(/\s+/).filter(w => w.length > 2);
+    const words = nTxt.split(/\s+/).filter(w => w.length >= (nTxt.length <= 14 ? 1 : 2));
 
     const speechSpans = [];
     const thoughtSpans = [];
     let m;
-    const qRe = /[«“"]([^«»“”"\n]{2,2500}?)[»”"]/g;
+    const qRe = /(?:"([^"\n]{2,2500}?)"|«([^«»\n]{2,2500}?)»|“([^“”\n]{2,2500}?)”)/g;
     while ((m = qRe.exec(cleanSrc)) !== null) {
-        if (isInlineTitleOrTarotQuote(cleanSrc, m.index, m[0], m[1])) continue;
-        const spanNorm = norm(m[1]);
+        const innerQStr = m[1] || m[2] || m[3] || '';
+        if (isInlineTitleOrTarotQuote(cleanSrc, m.index, m[0], innerQStr)) continue;
+        const spanNorm = norm(innerQStr);
         const ctxWindow = cleanSrc.slice(Math.max(0, m.index - 85), Math.min(cleanSrc.length, m.index + m[0].length + 85)).toLowerCase().replace(/ё/g, 'е');
         if (/(?:^|[^а-яёa-z0-9])(подумал|подумала|подумалось|мысленно|про себя|в мыслях|мелькнуло в голове|пронеслось в голове|подумать)(?=$|[^а-яёa-z0-9])/i.test(ctxWindow)) {
             thoughtSpans.push(spanNorm);
@@ -6014,13 +6060,14 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         }
     };
 
-    const qRe = /[«“"]([^«»“”"\n]{2,2500}?)[»”"]/g;
+    const qRe = /(?:"([^"\n]{2,2500}?)"|«([^«»\n]{2,2500}?)»|“([^“”\n]{2,2500}?)”)/g;
     let m;
     while ((m = qRe.exec(clean)) !== null && candidates.length < 8) {
-        if (isInlineTitleOrTarotQuote(clean, m.index, m[0], m[1])) continue;
+        const innerQStr = m[1] || m[2] || m[3] || '';
+        if (isInlineTitleOrTarotQuote(clean, m.index, m[0], innerQStr)) continue;
         const ctxAround = clean.slice(Math.max(0, m.index - 80), Math.min(clean.length, m.index + m[0].length + 80)).toLowerCase().replace(/ё/g, 'е');
         const isTh = /(?:^|[^а-яёa-z0-9])(подумал|подумала|подумалось|мысленно|про себя|в мыслях|мелькнуло в голове)(?=$|[^а-яёa-z0-9])/i.test(ctxAround);
-        pushBlockOrSentences(m[1], isTh ? 'thought' : 'speech');
+        pushBlockOrSentences(innerQStr, isTh ? 'thought' : 'speech');
     }
     const dRe = /(?:^|\n)\s*[—–-]\s*([^\n]{2,2500})/g;
     while ((m = dRe.exec(clean)) !== null && candidates.length < 8) {
@@ -6037,7 +6084,8 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
     const allNarrativeSents = clean
         .replace(/\*[^*\n]{2,1500}\*/g, ' ')
         .replace(/[^.!?…\n]{0,80}:\s*(?=[«“"])/g, '. ')
-        .replace(/[«“"]([^«»“”"\n]*)[»”"](\s*,?\s*[—–-]\s*[^.!?…\n]+[.!?…])?/g, (fullM, innerQ, attrTail, offset, fullS) => {
+        .replace(/(?:"([^"\n]*)"|«([^«»\n]*)»|“([^“”\n]*)”)(\s*,?\s*[—–-]\s*[^.!?…\n]+[.!?…])?/g, (fullM, q1, q2, q3, attrTail, offset, fullS) => {
+            const innerQ = q1 ?? q2 ?? q3 ?? '';
             if (isInlineTitleOrTarotQuote(fullS, offset, `«${innerQ}»`, innerQ)) {
                 return fullM;
             }
@@ -6047,7 +6095,7 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         .split(/(?<=[.!?…])\s+|\n+/)
         .filter(rawS => !/^\s*[—–-]\s*/.test(rawS) || !speechVerbAttrStartRe.test(rawS.replace(/^\s*[—–-]+\s*/, '')))
         .map(s => s.replace(/^[,;:\s—–-]+/, '').replace(/[:;\s—–-]+$/, '').replace(/\s+/g, ' ').trim())
-        .filter(s => s.length >= 16 && /[.!?…]$/.test(s) && !/^(?:пророкотал[аи]?|пробормотал[аи]?|проворковал[аи]?|прочитал[аи]?|заявил[аи]?|отбрил[аи]?|уронил[аи]?|заверещал[аи]?|фыркнул[аи]?|ф-фыркнул[аи]?)\s+(?:кот|п[её]с|он|она|девушка|женщина|мужчина|хозяйка|гадалка|журналистка|юристка)\b/i.test(s));
+        .filter(s => s.length >= 16 && /[.!?…]$/.test(s) && !/^(?:пророкотал[аи]?|пробормотал[аи]?|проворковал[аи]?|прочитал[аи]?|заявил[аи]?|отбрил[аи]?|уронил[аи]?|заверещал[аи]?|фыркнул[аи]?|ф-фыркнул[аи]?)\s+(?:кот|п[её]с|он|она|девушка|женщина|мужчина|хозяйка|гадалка|журналистка|юристка)(?=$|[^а-яёa-z0-9])/i.test(s));
     if (candidates.length + allNarrativeSents.length < maxQ) {
         const expandedNarr = [];
         for (const ns of allNarrativeSents) {
@@ -6114,9 +6162,34 @@ function extractRealQuotesFromPostText(rawText, defaultSpeaker = '', desiredCoun
         if (!mergedAny) break;
     }
 
-    const firstNarr = uniqueCands.find(c => c.kind === 'narration' && c.pos <= 40);
+    let firstNarr = uniqueCands.find(c => c.kind === 'narration' && c.pos <= 40);
     const dialogueAndThoughts = uniqueCands.filter(c => c.kind === 'speech' || c.kind === 'thought');
+    // Если в отрывке 2 реплики вслух одного героя + мысль + описание (всего > 3 блоков, как во 2-м и 5-м абзацах со складом), объединяем 2 реплики вслух в одну плашку речи (если их сумма <= 335 симв.), чтобы не потерять вторую реплику!
+    if (uniqueCands.length > maxQ) {
+        const speechIndices = [];
+        dialogueAndThoughts.forEach((dt, idx) => { if (dt.kind === 'speech') speechIndices.push(idx); });
+        if (speechIndices.length >= 2) {
+            const idxA = speechIndices[0];
+            const idxB = speechIndices[1];
+            const spA = dialogueAndThoughts[idxA];
+            const spB = dialogueAndThoughts[idxB];
+            if (spA.text.length + 3 + spB.text.length <= 335) {
+                const aTxt = /[.!?…]$/.test(spA.text) ? spA.text : (spA.text + '.');
+                dialogueAndThoughts[idxA] = { ...spA, text: `${aTxt} ${spB.text}`.trim() };
+                dialogueAndThoughts.splice(idxB, 1);
+            }
+        }
+    }
     const restNarr = uniqueCands.filter(c => c.kind === 'narration' && c !== firstNarr);
+    // И если после этого остаётся важное финальное описание действия в конце абзаца (restNarr), а слоты заняты (firstNarr + thought + speech = 3), объединяем firstNarr и restNarr[0] (если в сумме <= 355 симв.), чтобы финальное действие абзаца тоже не потерялось!
+    if (firstNarr && restNarr.length > 0 && (1 + dialogueAndThoughts.length + restNarr.length > maxQ)) {
+        const combNarrLen = firstNarr.text.length + 1 + restNarr[0].text.length;
+        if (combNarrLen <= 355) {
+            const fTxt = /[.!?…]$/.test(firstNarr.text) ? firstNarr.text : (firstNarr.text + '.');
+            firstNarr.text = `${fTxt} ${restNarr[0].text}`.trim();
+            restNarr.shift();
+        }
+    }
     const picked = [];
     if (firstNarr && (dialogueAndThoughts.length < maxQ || firstNarr.pos === 0)) {
         picked.push(firstNarr);
@@ -6303,12 +6376,14 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
     }
     const rawBefore = cleanPost.slice(Math.max(0, idx - 85), idx);
     const rawAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 110));
-    const immediateAfter = (rawAfter.split(/[.!?…\n]/)[0] || '');
+    const immediateAfterFull = (rawAfter.split(/[.!?…\n]/)[0] || '');
+    // Отрезаем придаточные предложения с союзами переключения субъекта (“, однако стоило Софии...”, “, но когда...”, “, пока Этель...”), чтобы имя второго героя в хвосте не перебивало говорящего!
+    const immediateAfter = immediateAfterFull.split(/,\s*(?:однако|но|хотя|пока|тогда как|прежде чем)(?=$|[^а-яёa-z0-9])/i)[0] || '';
     const beforeParts = rawBefore.split(/[.!?…\n]/);
     const immediateBefore = beforeParts[beforeParts.length - 1] || '';
     const immediateContext = `${immediateBefore} ${immediateAfter}`;
-    const windowBefore = cleanPost.slice(Math.max(0, idx - 150), idx);
-    const windowAfter = cleanPost.slice(idx + quoteText.length, Math.min(cleanPost.length, idx + quoteText.length + 150));
+    const windowBefore = cleanPost.slice(Math.max(0, idx - 260), idx);
+    const windowAfter = immediateAfter;
     const nearContext = `${windowBefore} ${windowAfter}`;
 
     // Если это ВНУТРЕННЯЯ МЫСЛЬ (*...*), проверяем, не описан ли перед ней другой персонаж СО СТОРОНЫ глазами главной POV-героини (например: «На лестничной площадке возвышался промокший Ян... из-под подола подозрительно наглухо запахнутого... *Если соседка снизу...* "Раствор стынет, госпожа гадалка..." - пророкотал кот»)!
@@ -6393,7 +6468,8 @@ function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, ca
 
 function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defaultSpeaker = '', cast = [], st = null, desiredCount = 3) {
     const norm = t => String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim();
-    const normLastPost = ' ' + norm(lastPostText || storyText) + ' ';
+    const cleanSourceForPos = stripRoleplayHeaderBracketsAndWeirdSpaces(stripTags(stripActionTags(String(lastPostText || storyText || ''))).replace(/<[^>]+>/g, ''));
+    const normLastPost = ' ' + norm(cleanSourceForPos) + ' ';
     const normFullStory = ' ' + norm(storyText + ' ' + lastPostText) + ' ';
     const verified = [];
     const seen = new Set();
@@ -6403,7 +6479,7 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         if (!wordsA.length || !wordsB.length) return false;
         const setB = new Set(wordsB);
         const common = wordsA.filter(w => setB.has(w)).length;
-        return (common / Math.min(wordsA.length, wordsB.length)) >= 0.7;
+        return (common / Math.min(wordsA.length, wordsB.length)) >= 0.72;
     };
 
     const existingWordsList = [];
@@ -6413,12 +6489,11 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         const rawTxt = String(q?.text || '').replace(/^[«"„“*]+|[»"”*]+$/g, '').trim();
         if (!rawTxt || speechVerbFragmentRe.test(rawTxt)) continue;
         const restoredCandidate = restoreFullQuoteFromSource(rawTxt, lastPostText || storyText, true);
-        if (!restoredCandidate) continue;
-        if (speechVerbFragmentRe.test(restoredCandidate)) continue;
-        const words = norm(restoredCandidate).split(/\s+/).filter(w => w.length > 2);
+        if (!restoredCandidate || speechVerbFragmentRe.test(restoredCandidate)) continue;
+        const words = norm(restoredCandidate).split(/\s+/).filter(w => w.length >= 2);
         let ok = false;
         if (!words.length) {
-            ok = /^[!?…. ]+$/.test(restoredCandidate);
+            ok = /^[!?…. а-яё-]+$/i.test(restoredCandidate);
         } else {
             const hitsPost = words.filter(w => normLastPost.includes(' ' + w)).length;
             const hitsFull = words.filter(w => normFullStory.includes(' ' + w)).length;
@@ -6427,7 +6502,7 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         if (ok) {
             const shortTxt = formatCompleteQuoteSentence(restoredCandidate, 330);
             const key = norm(shortTxt);
-            const keyWords = key.split(/\s+/).filter(w => w.length > 2);
+            const keyWords = key.split(/\s+/).filter(w => w.length >= 2);
             const isDup = seen.has(key) || existingWordsList.some(ew => isSubsequenceMatch(keyWords, ew));
             if (key && !isDup) {
                 seen.add(key);
@@ -6443,12 +6518,73 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
         }
     }
 
+    const fallback = extractRealQuotesFromPostText(lastPostText || storyText, defaultSpeaker, maxQ);
+
+    const missingDialogues = [];
+    for (const fb of fallback) {
+        const key = norm(fb.text);
+        const keyWords = key.split(/\s+/).filter(w => w.length >= 2);
+        const alreadyIn = seen.has(key) || existingWordsList.some(ew => isSubsequenceMatch(keyWords, ew));
+        if (!alreadyIn) {
+            const classified = classifyCaptionKindAndSpeaker(fb, lastPostText || storyText, defaultSpeaker, cast, st, storyText);
+            missingDialogues.push({
+                panel: verified.length + 1,
+                kind: classified.kind,
+                speaker: classified.speaker,
+                text: fb.text,
+            });
+        }
+    }
+
+    for (const md of missingDialogues) {
+        if (verified.length >= maxQ) {
+            let mergedNarr = false;
+            // Сначала пробуем склеить с уже существующим блоком того же типа (две реплики одного героя или два описания в этом абзаце)
+            for (let i = verified.length - 1; i >= 0; i--) {
+                if (verified[i].kind === md.kind && (md.kind === 'speech' || md.kind === 'narration') && (verified[i].text.length + 1 + md.text.length <= 355)) {
+                    const t1 = /[.!?…]$/.test(verified[i].text) ? verified[i].text : (verified[i].text + '.');
+                    verified[i].text = `${t1} ${md.text}`.trim();
+                    const key = norm(md.text);
+                    seen.add(key);
+                    existingWordsList.push(key.split(/\s+/).filter(w => w.length >= 2));
+                    mergedNarr = true;
+                    break;
+                }
+            }
+            if (mergedNarr) continue;
+            for (let i = 0; i < verified.length - 1; i++) {
+                if (verified[i].kind === 'narration' && verified[i + 1].kind === 'narration' && (verified[i].text.length + verified[i + 1].text.length <= 355)) {
+                    const t1 = /[.!?…]$/.test(verified[i].text) ? verified[i].text : (verified[i].text + '.');
+                    verified.splice(i, 2, {
+                        ...verified[i],
+                        text: `${t1} ${verified[i + 1].text}`.trim(),
+                    });
+                    mergedNarr = true;
+                    break;
+                }
+            }
+            if (!mergedNarr && (md.kind === 'thought' || md.kind === 'speech')) {
+                const lastNarrIdx = verified.map(v => v.kind).lastIndexOf('narration');
+                if (lastNarrIdx > 0) {
+                    verified.splice(lastNarrIdx, 1);
+                    mergedNarr = true;
+                }
+            }
+        }
+        if (verified.length < maxQ) {
+            const key = norm(md.text);
+            const keyWords = key.split(/\s+/).filter(w => w.length >= 2);
+            seen.add(key);
+            existingWordsList.push(keyWords);
+            verified.push(md);
+        }
+    }
+
     if (verified.length < maxQ) {
-        const fallback = extractRealQuotesFromPostText(lastPostText || storyText, defaultSpeaker, maxQ);
         const usedPanels = new Set(verified.map(v => Number(v.panel)));
         for (const fb of fallback) {
             const key = norm(fb.text);
-            const keyWords = key.split(/\s+/).filter(w => w.length > 2);
+            const keyWords = key.split(/\s+/).filter(w => w.length >= 2);
             const isDup = seen.has(key) || existingWordsList.some(ew => isSubsequenceMatch(keyWords, ew));
             if (key && !isDup && verified.length < maxQ) {
                 seen.add(key);
@@ -6465,106 +6601,97 @@ function verifyComicQuotesAgainstStory(llmQuotes, storyText, lastPostText, defau
                 });
             }
         }
-        verified.sort((a, b) => (Number(a.panel) || 1) - (Number(b.panel) || 1));
     }
-    return verified.slice(0, maxQ);
+
+    while (verified.length > 0 && verified.length < maxQ) {
+        const candIndices = verified
+            .map((v, idx) => ({ idx, len: v.text.length }))
+            .filter(x => x.len > 55)
+            .sort((a, b) => b.len - a.len);
+        if (!candIndices.length) break;
+        let didSplit = false;
+        const primaryBreaks = ['. ', '! ', '? ', '; ', ' — ', ' – ', ' - ', ': ', ', и ', ', а ', ', но ', ', однако ', ', чтобы ', ', где ', ', поэтому ', ', когда ', ', словно ', ', будто ', ', пока ', ', хотя ', ', прикрыв ', ', закрепляя ', ', спасаясь ', ', наполовину ', ', стоя ', ', поглядывая ', ', при ', ', она ', ', он '];
+        const fallbackBreaks = [', ', ' и '];
+        for (const cand of candIndices) {
+            const item = verified[cand.idx];
+            const txt = item.text;
+            const mid = Math.floor(txt.length / 2);
+            let bestSplitPos = -1;
+            let bestSplitSepLen = 0;
+            let bestDist = 999999;
+            for (const patternGroup of [primaryBreaks, fallbackBreaks]) {
+                for (const bp of patternGroup) {
+                    let searchFrom = 22;
+                    while (searchFrom < txt.length - 22) {
+                        const p = txt.indexOf(bp, searchFrom);
+                        if (p < 0 || p > txt.length - 22) break;
+                        const dist = Math.abs(p - mid);
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            bestSplitPos = p;
+                            bestSplitSepLen = (bp.startsWith(',') || bp.startsWith('.') || bp.startsWith('!') || bp.startsWith('?')) ? 1 : bp.length;
+                        }
+                        searchFrom = p + bp.length;
+                    }
+                }
+                if (bestSplitPos >= 0) break;
+            }
+            if (bestSplitPos < 0) continue;
+            let part1 = txt.slice(0, bestSplitPos).replace(/[,;:\s—–-]+$/, '').trim();
+            if (part1 && !/[.!?…]$/.test(part1)) part1 += '.';
+            let part2 = capitalizeSentenceFirstChar(txt.slice(bestSplitPos + bestSplitSepLen).replace(/^[,;:\s—–-]+/, '').trim());
+            if (part2 && !/[.!?…]$/.test(part2)) part2 += '.';
+            if (part1.length < 18 || part2.length < 18) continue;
+            verified.splice(cand.idx, 1, { ...item, text: part1 }, { ...item, text: part2 });
+            didSplit = true;
+            break;
+        }
+        if (!didSplit) break;
+    }
+
+    const normSrcClean = norm(cleanSourceForPos);
+    verified.forEach((v, idx) => {
+        const probe = norm(v.text).slice(0, 22).trim();
+        const pos = probe ? normSrcClean.indexOf(probe) : -1;
+        v._chronoPos = pos >= 0 ? pos : (idx * 1000);
+    });
+    verified.sort((a, b) => a._chronoPos - b._chronoPos);
+    return verified.slice(0, maxQ).map((v, idx) => {
+        const copy = { ...v, panel: idx + 1 };
+        delete copy._chronoPos;
+        return copy;
+    });
 }
 
 function alignQuotesToPanelsSemantics(quotes, panelPrompts) {
     if (!Array.isArray(quotes) || quotes.length < 2 || !Array.isArray(panelPrompts) || panelPrompts.length < 2) {
         return quotes;
     }
-    const nPanels = Math.min(panelPrompts.length, 4);
+    const nPanels = Math.min(quotes.length, panelPrompts.length, 4);
     const items = quotes.slice(0, nPanels).map((q, idx) => ({ ...q, panel: idx + 1 }));
 
-    const HUMAN_ACTION_RU_RE = /(?:^|[^а-яёa-z0-9])(юристка|журналистка|девушка|женщина|мужчина|софия|софа|этель|джулия|аня|наоя|ян|проворковал[аи]?|поприветствовал[аи]?|улыбнул[ась]*|вздохнул[аи]?|удерживая|на вытянутой руке|вооружилась|разлив)(?=$|[^а-яёa-z0-9])/i;
-    const MACRO_ANIMAL_HEAD_EN_RE = /\b(snake head|forked tongue|fangs|scales|macro shot|animal focus)\b/i;
-    const MACRO_ANIMAL_HEAD_RU_RE = /(треугольная башка|термолокатор|раздвоенный язычок|язычок|чешу[яий]|брюхо|сплющила голову|шипение)/i;
+    for (let i = 0; i < nPanels; i++) {
+        const pStr = String(panelPrompts[i] || '');
+        if (!isDetailOrMacroPanelPrompt(pStr)) continue;
+        const curKind = items[i].kind || (items[i].speaker ? 'speech' : 'narration');
+        if (curKind === 'narration') continue;
 
-    const SEMANTIC_PAIRS = [
-        { en: /\b(snake|python|viper|serpent|scales|forked tongue|reptile|terrarium|paludarium)\b/i, ru: /(зме[яиюей]|куфи[яиюей]|гадюк|чешу[яий]|термолокатор|раздвоенн|языч|палюдариум|террариум)/i, weight: 4 },
-        { en: /\b(hook|metal rod|steel rod|chrome|handling stick)\b/i, ru: /(крюк|стальн|хромирован|поддел|изгиб)/i, weight: 4 },
-        { en: /\b(profiteroles|cream puffs|pastry|cake|bun|food|tea|cups|bowls|table)\b/i, ru: /(профитрол|заварн|крем|пирожн|булк|пуэр|пиал|коробк)/i, weight: 4 },
-        { en: /\b(crumbs|windowsill|spit|crushed)\b/i, ru: /(крошк|подоконник|выплюнув|тест)/i, weight: 5 },
-        { en: /\b(neck|collarbone|clavicle|bite mark|hickey|bruise|turtleneck|throat)\b/i, ru: /(ше[яеюй]|ключиц|водолазк|подбород|пудр|укус|засос|след)/i, weight: 5 },
-        { en: /\b(keys|keychain|car keys|handbag|bag|unbuttoning)\b/i, ru: /(ключ|брелок|сумочк|пуговиц|юбк|сверток|свёрток)/i, weight: 5 },
-        { en: /\b(tarot|cards|card|deck|arcana|moon|cups|swords|pentacles|tower|strength)\b/i, ru: /(таро|карт[аыуой]|колод[аыуе]|аркан|лун[аы]|кубк|меч|пентакл|башн|сил[аы])/i, weight: 4 },
-        { en: /\b(door|knock|knocking|fist|knuckles|lock)\b/i, ru: /(двер[ьию]|удар|костяшк|бум|замок|порог|площадк)/i, weight: 5 },
-        { en: /\b(boots|calves|legs|sack|bag of|powder|coat hem)\b/i, ru: /(икр[ыа]|ботинк|плащ|куль|алебастр|половик|пыль)/i, weight: 5 },
-        { en: /\b(fence|gate|iron bars|outdoors|screaming man|rain)\b/i, ru: /(забор|снаружи|клиент|прискакал|грызет|грызёт|тени в окне)/i, weight: 4 },
-        { en: /\b(window|curtain|bell|ringing|pine)\b/i, ru: /(окон|окн|штор|колокольчик|трезвон|снаружи|дорожк)/i, weight: 3 },
-    ];
-
-    const scoreMatch = (qObj, pStr) => {
-        if (!qObj || !pStr) return 0;
-        const p = String(pStr);
-        const t = String(qObj.text || '');
-        const kind = qObj.kind || (qObj.speaker ? 'speech' : 'narration');
-        // Используем isDetailOrMacroPanelPrompt(p), чтобы кадры рук/карт/дверей (даже с 1girl, solo, two hands only!) считались именно деталью без лица и НЕ перетягивали на себя мысли (thought) или прямую речь (speech)!
-        const isDetailPanel = isDetailOrMacroPanelPrompt(p);
-        const isHumanPortraitOrTalk = !isDetailPanel && /\b(1girl|1boy|2girls|2boys|portrait|upper body|medium shot|cowboy shot|speaking|smiling|laughing|looking)\b/i.test(p);
-
-        let score = 0;
-        const hasHumanWordsInRu = HUMAN_ACTION_RU_RE.test(t);
-        const isPureVoiceOrFaceNarrRu = /(?:голос\s+[а-яё]+\s+сел|сказал[аи]?\s+он[аи]?\s+это|с\s+абсолютно\s+ясным|умиротвор[её]нным\s+лицом|шумно\s+сглотнул|замер\s+с\s+приоткрытым\s+ртом)/i.test(t);
-        const isPureFrameOrHandDetailEn = /\b(picture frame|wooden frame|framed|painting|watercolor|felt toy|plush|ledger|book|safe door|wastebasket|trash|crumpled paper|bolt|latch)\b/i.test(p) && !/\b(portrait|face|eyes|smiling|expression)\b/i.test(p);
-        if (isDetailPanel) {
-            if (kind === 'narration') {
-                if (isPureVoiceOrFaceNarrRu && isPureFrameOrHandDetailEn) {
-                    score -= 6;
-                } else {
-                    score += 9;
-                }
-            } else if (kind === 'speech') {
-                score -= 10;
-            } else if (kind === 'thought') {
-                score -= 8;
-            }
-            if (MACRO_ANIMAL_HEAD_EN_RE.test(p) && MACRO_ANIMAL_HEAD_RU_RE.test(t)) {
-                score += 6;
-            }
-        } else if (isHumanPortraitOrTalk) {
-            if (kind === 'speech' || kind === 'thought') score += 5;
-            if (kind === 'narration' && hasHumanWordsInRu) score += 2;
-        }
-
-        // Предметные совпадения применяем для описаний (narration) или на портретных кадрах, но НЕ даём словам вроде «займу руки картами» утащить мысль (thought) под безголовые руки!
-        if (!isDetailPanel || kind === 'narration') {
-            for (const pair of SEMANTIC_PAIRS) {
-                if (pair.en.test(p) && pair.ru.test(t)) {
-                    score += pair.weight;
-                }
+        const neighbors = [];
+        if (i - 1 >= 0) neighbors.push(i - 1);
+        if (i + 1 < nPanels) neighbors.push(i + 1);
+        for (const nb of neighbors) {
+            const nbPrompt = String(panelPrompts[nb] || '');
+            const nbKind = items[nb].kind || (items[nb].speaker ? 'speech' : 'narration');
+            if (!isDetailOrMacroPanelPrompt(nbPrompt) && nbKind === 'narration') {
+                const tmp = items[i];
+                items[i] = items[nb];
+                items[nb] = tmp;
+                break;
             }
         }
-        return score;
-    };
+    }
 
-    const getPermutations = arr => {
-        if (arr.length <= 1) return [arr];
-        const res = [];
-        for (let i = 0; i < arr.length; i++) {
-            const rest = getPermutations([...arr.slice(0, i), ...arr.slice(i + 1)]);
-            for (const r of rest) res.push([arr[i], ...r]);
-        }
-        return res;
-    };
-
-    const perms = getPermutations(items);
-    let bestPerm = items;
-    let bestScore = -9999;
-    perms.forEach((perm, permIdx) => {
-        let total = permIdx === 0 ? 0.8 : 0;
-        for (let i = 0; i < perm.length; i++) {
-            const displacement = Math.abs(i - ((Number(perm[i].panel) || (i + 1)) - 1));
-            total += scoreMatch(perm[i], panelPrompts[i]) - displacement * 2.1;
-        }
-        if (total > bestScore) {
-            bestScore = total;
-            bestPerm = perm;
-        }
-    });
-
-    return bestPerm.map((q, idx) => ({
+    return items.map((q, idx) => ({
         ...q,
         panel: idx + 1,
     }));
@@ -6885,7 +7012,7 @@ async function overlayComicBubblesOnDataUrl(imageUrl, quotes, comicOpts = null) 
 }
 
 // Склейка 3–4 отдельных кадров NovelAI в настоящую страницу манги/комикса или вертикальную ленту вебтуна на Canvas
-async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comicbright', withBubbles = true) {
+async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comicbright', withBubbles = true, returnBothObject = false) {
     if (!Array.isArray(frameUrls) || !frameUrls.length || typeof document === 'undefined') return frameUrls?.[0] || '';
     const loadedImgs = [];
     for (const u of frameUrls) {
@@ -6998,11 +7125,17 @@ async function stitchComicFramesOnCanvas(frameUrls, quotes = [], styleId = 'comi
         }
     }
 
+    const cleanDataUrl = (returnBothObject && withBubbles && Array.isArray(quotes) && quotes.length)
+        ? cv.toDataURL('image/png')
+        : '';
     if (withBubbles && Array.isArray(quotes) && quotes.length) {
         drawManhwaBubblesOnCanvas(ctx2d, panelRects, quotes);
     }
-
-    return cv.toDataURL('image/png');
+    const letteredDataUrl = cv.toDataURL('image/png');
+    if (returnBothObject) {
+        return { cleanDataUrl: cleanDataUrl || letteredDataUrl, letteredDataUrl };
+    }
+    return letteredDataUrl;
 }
 
 function getActiveSceneSegmentFromFullPost(chunkText, fullRawPostText) {
@@ -7056,10 +7189,11 @@ function filterForcedCastForChunk(forcedCast, chunkText, fullTargetText) {
         : cleanChunk;
     const narrativeUpToNow = stripSpeechAndThoughts(textUpToChunkEnd);
 
-    // Игнорируем заочные упоминания в гадании на картах Таро и заочные пересказы («Наоя предпочёл позорное бегство...»)
+    // Игнорируем заочные упоминания в гадании на картах Таро, заочные пересказы («Наоя предпочёл позорное бегство...», «поручил Софии сверить... чтобы бывший куратор») и притяжательную принадлежность квартиры/предметов («холостяцкой квартиры Яна», «ногтей Этель», «Аниного сапога»)!
     const stripTarotAbsentia = t => String(t || '')
         .replace(/(?:вытянут[а-я]*\s+на|для|на\s+пару|над)\s+[А-ЯЁа-яёA-Za-z\sи,]{2,40}(?=[:—–-]|\s+(?:выпал|приземлил|развернул|выплыл|л[её]г))/gi, ' ')
-        .replace(/[А-ЯЁA-Z][а-яёa-z]+\s+предпоч[её]л\s+позорное\s+бегство[^.!?\n]*/gi, ' ');
+        .replace(/[А-ЯЁA-Z][а-яёa-z]+\s+предпоч[её]л\s+позорное\s+бегство[^.!?\n]*/gi, ' ')
+        .replace(/(?:квартир[аыеуой]|дом[аеу]?|комнат[аыеу]|кабинет[аеу]?|машин[аыеу]|автомобил[ьяюе]|ногт[ейями]+|сапог[аеу]?|кресл[аоуе]|стол[аеу]?)\s+[А-ЯЁA-Z][а-яёa-z]+/gi, ' ');
 
     const physicalNarrativeUpToNow = stripTarotAbsentia(narrativeUpToNow);
 
@@ -7686,7 +7820,17 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
 
 function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCaptions = []) {
     let p = String(rawFrameDesc || '').trim();
-    if (!p || isDetailOrMacroPanelPrompt(p)) return p;
+    if (!p) return p;
+    if (isDetailOrMacroPanelPrompt(p)) {
+        // Если это крупный план губ/вейпа/щеки/уха (lips/mouth/vape/cheek/ear), обязательно сохраняем цвет волос героя из 1-го кадра, чтобы у темноволосой Этель не вырастали рыжие волосы!
+        if (/\b(lips|mouth|vape|biting|cheek|ear)\b/i.test(p) && !/\b(black|brown|dark|blonde|red|ginger|orange|silver|grey|white)\s+hair\b/i.test(p)) {
+            const p1Hair = sourcePool.match(/\b((?:dark\s+brown|black|brown|dark|blonde|silver|grey|white|red|ginger|orange)\s+(?:long\s+|short\s+|wavy\s+|messy\s+)?hair)\b/i);
+            if (p1Hair && p1Hair[1]) {
+                p += `, ${p1Hair[1]}`;
+            }
+        }
+        return p;
+    }
     const isSoloGirl = /\b1girl\b/i.test(p) && !/\b([2-6]girls|[1-6]boys)\b/i.test(p);
     const isSoloBoy = /\b1boy\b/i.test(p) && !/\b([2-6]boys|[1-6]girls)\b/i.test(p);
     if (!isSoloGirl && !isSoloBoy) return p;
@@ -7699,9 +7843,16 @@ function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCapti
     for (const seg of candidateSegments) {
         if (isSoloGirl && /\b1boy\b/i.test(seg) && !/\b1girl\b/i.test(seg)) continue;
         if (isSoloBoy && /\b1girl\b/i.test(seg) && !/\b1boy\b/i.test(seg)) continue;
+        if (isSoloBoy && /\b(shirtless|bare chest|bare torso|topless|naked torso)\b/i.test(seg)) {
+            p = p.replace(/\b(?:black\s+|white\s+|grey\s+|dark\s+|open\s+|unbuttoned\s+)?(?:t-shirt|shirt|coat|leather coat|trench coat|jacket|suit jacket|blazer|sweater|hoodie)\b\s*,?/gi, '');
+            if (!/\b(shirtless|bare chest)\b/i.test(p)) {
+                p += ', shirtless, bare chest, bare shoulders';
+            }
+            break;
+        }
         if (hairColor && !new RegExp(`\\b${hairColor}\\b`, 'i').test(seg)) continue;
 
-        const outfitRe = /\b((?:black|dark|brown|beige|cream|white|grey|gray|green|emerald|burgundy|cherry|crimson|maroon|blue|navy|fitted|woolen|fur|knitted|stretched|oversized| ruffled|silk|formal|three-piece)?\s*(?:three-piece suit|suit jacket|suit|waistcoat|vest|coat|fur coat|jacket|blazer|cardigan|trench coat|sweater|turtleneck|blouse|shirt|dress|knitted dress|robe))\b/gi;
+        const outfitRe = /\b((?:black|dark|brown|beige|cream|white|grey|gray|green|emerald|burgundy|cherry|crimson|maroon|blue|navy|fitted|woolen|fur|knitted|stretched|oversized|ruffled|silk|formal|three-piece)?\s*(?:three-piece suit|suit jacket|suit|waistcoat|vest|coat|fur coat|jacket|blazer|cardigan|trench coat|sweater|turtleneck|blouse|shirt|dress|knitted dress|robe|hoodie|oversized hoodie|cargo pants))\b/gi;
         const matches = [];
         let om;
         while ((om = outfitRe.exec(seg)) !== null) {
@@ -7738,7 +7889,7 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0, pageContextPrompt 
 
     // 0) Убираем любые текстовые звуковые эффекты ("Purrrrr", "PURR", "BOOM", sfx, sound effect), чтобы NovelAI не писал буквы поверх волос героев!
     p = p
-        .replace(/["'«»“”]?\b(?:purr+|grrr+|boom+|knock+|tap+|clink+|sigh+)\b["'«»“”]?/gi, '')
+        .replace(/["'«»“”]?\b(?:purr+|grrr+|boom+|knock+|tap+|clink+|sigh+|mumm+|huff+|pant+|gulp+)\b["'«»“”]?/gi, '')
         .replace(/\b(?:sound effect|sfx|onomatopoeia|text overlay|floating text|written text)\b\s*,?/gi, '')
         .replace(/\b(?:crimson|raspberry|red)\s+(?:spots|blotches|patches|stains)\s+on\s+neck\b/gi, 'deeply blushing neck and ears, flushed red skin on neck')
         .replace(/\b(?:plasters?|bandages?|band-aids?)\s+on\s+fingers\b/gi, 'a single small band-aid on one index finger')
@@ -7772,6 +7923,16 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0, pageContextPrompt 
         }
     }
 
+    // 2а) Если в кадре упоминаются усики-антенны на макушке (ant antennae / insect antennae / antennae on head) — запрещаем NovelAI рисовать настоящего жука/муравья/таракана!
+    if (/\b(ant antennae|insect antennae|antennae|feelers)\b/i.test(p)) {
+        p = p
+            .replace(/\b(?:ant|insect)\s+antennae\b/gi, 'two thin dark head antennae on silver-black hair')
+            .replace(/\banimal focus\b\s*,?/gi, '');
+        if (!/\b1boy\b/i.test(p) && !/\b1girl\b/i.test(p)) {
+            p = `1boy, solo, close-up of head and messy silver-black hair with two thin dark antennae on head, purple skin, pointed elf ears, ${p}`;
+        }
+    }
+
     // 2б) Если в кадре описан хвост деми-человека (black cat tail hitting safe door / tail under skirt) или рисунок акварельного кота в рамке — запрещаем NovelAI рисовать живого четвероногого домашнего кота!
     if (/\b(cat tail|fluffy black tail|tail hitting|tail under|watercolor cat|painting of a cat|framed cat)\b/i.test(p)) {
         p = p.replace(/\banimal focus\b\s*,?/gi, 'object focus, ');
@@ -7796,14 +7957,28 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0, pageContextPrompt 
     if (isActualHandDetail) {
         p = p.replace(/\b(?:multiple girls|multiple boys|[2-9]girls|[2-9]boys|four hands|multiple hands)\b\s*,?/gi, '');
         const combinedCtx = `${p} ${pageContextPrompt || ''}`;
-        const isMaleHand = /\b(1boy|male|man|his|masculine|clawed|furry hand|lion|band-aid|bandaged|knuckles|fist)\b/i.test(p) || (!/\b(1girl|female|woman|her|manicure|handbag|purse|skirt)\b/i.test(p) && /\b1boy\b/i.test(combinedCtx) && !/\b1girl\b/i.test(combinedCtx));
-        if (!/\btwo hands only\b/i.test(p)) {
-            p = `${isMaleHand ? '1boy, male hands' : '1girl'}, solo, two hands only, ${p}`;
+        const isMaleHand = /\b(1boy|male|man|his|masculine|clawed|furry hand|lion|band-aid|bandaged|knuckles|fist|tattooed|purple skin|cargo pants|crate|canister|nose ring|lip piercing|four arms|upper hands|lower hands)\b/i.test(p) || (!/\b(1girl|female|woman|her|manicure|handbag|purse|skirt|pen)\b/i.test(p) && /\b1boy\b/i.test(combinedCtx) && !/\b1girl\b/i.test(combinedCtx));
+        const hasFourArms = /\b(four arms|four hands|lower pair of|upper hands|lower hands)\b/i.test(p);
+        if (!/\btwo hands only\b/i.test(p) && !hasFourArms) {
+            p = `${isMaleHand ? '1boy, male hands' : '1girl, bare hands'}, solo, two hands only, ${p}`;
+        } else if (hasFourArms && isMaleHand && !/\b1boy\b/i.test(p)) {
+            p = `1boy, solo, male hands, ${p}`;
+        }
+        if (!/\bgloves?\b/i.test(p) && !/\bbare hands\b/i.test(p)) {
+            p += ', bare hands';
+        }
+    }
+
+    // Если в макро-кадре показаны мужские треники / бугор в паху / голый мужской торс со шрамами (sweatpants / bulge / erection / abs / pectoral / chest scars) — жёстко фиксируем мужскую анатомию (1boy, solo, male body, masculine physique), чтобы NovelAI никогда не рисовал женские бёдра в белых трусиках!
+    if (/\b(sweatpants|bulge|erection|groin|crotch|abs|pectorals?|muscular chest|scars on chest|claw marks on chest)\b/i.test(p)) {
+        p = p.replace(/\b(1girl|female|woman|panties|underwear)\b\s*,?/gi, '');
+        if (!/\b1boy\b/i.test(p)) {
+            p = `1boy, solo, male body, masculine physique, ${p}`;
         }
     }
 
     if (isDetailOrMacroPanelPrompt(p)) {
-        const hasHandsOrBody = /\b(hand focus|hands|fingers|thumb|neck|collarbone|clavicle|lips|mouth|cheek|ear|thighs|hips|legs|calves|feet|tail|nsfw|explicit|intimate|genitals|penis|pussy|breasts)\b/i.test(p);
+        const hasHandsOrBody = /\b(hand focus|hands|fingers|thumb|neck|collarbone|clavicle|lips|mouth|cheek|ear|thighs|hips|legs|calves|feet|tail|sweatpants|bulge|groin|crotch|abs|chest|nsfw|explicit|intimate|genitals|penis|pussy|breasts)\b/i.test(p);
         const hasAnimal = /\b(animal focus|snake|viper|python|dog|bird|horse)\b/i.test(p) || (/\bcat\b/i.test(p) && !/\b(cat ears|cat tail|watercolor cat|framed cat|painting|felt|plush)\b/i.test(p));
         // 5) Если это чисто предметный кадр без людей и без живых животных (лобовое стекло с дворниками, окно, рамка с рисунком на столе, скомканная бумага в корзине, шпингалет двери) — жёстко ставим no humans!
         if (!hasHandsOrBody && !hasAnimal) {
@@ -7821,7 +7996,12 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0, pageContextPrompt 
             p = `head out of frame, cropped, ${p}`;
         }
     } else {
-        // Если это обычный кадр с персонажами (1-й или 3-й фрейм), следим, чтобы их лица и макушки были на месте, а снизу оставалось место под плашку текста
+        if (!/\b([1-4]boys?|[1-4]girls?)\b/i.test(p) && /\b(nose ring|lip piercing|labret|purple skin|four eyes|multiple eyes|silver-black hair|shaggy bangs|ant antennae|antennae)\b/i.test(p)) {
+            p = `1boy, solo, ${p}`;
+        }
+        if (/\b(plum|burgundy|crimson)\s+blush\b/i.test(p)) {
+            p = p.replace(/\b(?:plum|burgundy|crimson)\s+blush\b/gi, 'deep blush on cheeks');
+        }
         if (panelIdx === 2 && !/\b(close-up|portrait|upper body)\b/i.test(p)) {
             p = `close-up, portrait, upper body, ${p}`;
         }
@@ -7942,8 +8122,11 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
     const nonNsfwClothingNeg = !isNsfwOrBareAllowed ? 'bare shoulders, strapless, strapless dress, off-shoulder, topless, nude, undressed' : '';
     const isJamOrSweetFrame = /\b(jam|jelly|preserve|marmalade|strawberry|berry|syrup)\b/i.test(cleanDesc) && !/\b(blood|wound|injury|horror)\b/i.test(cleanDesc);
     const jamNotBloodNeg = isJamOrSweetFrame ? 'blood, bleeding, gore, wound, injury, bloody hands, cut' : '';
-    const isDemiTailOrFramedCat = /\b(fluffy tail|cat tail|safe door|kemonomimi tail)\b/i.test(cleanDesc);
-    const noRealCatNeg = isDemiTailOrFramedCat ? 'real cat, animal, cat head, cat face, cat eyes, whiskers, four-legged animal, pet cat' : '';
+    const isDemiTailOrFramedCat = /\b(fluffy tail|cat tail|safe door|kemonomimi tail|antennae|feelers)\b/i.test(cleanDesc);
+    const noRealCatNeg = isDemiTailOrFramedCat ? 'real cat, animal, cat head, cat face, cat eyes, whiskers, four-legged animal, pet cat, real insect, bug, ant, cockroach, beetle, arthropod, insect head, compound eyes, mandibles, six legs' : '';
+    const noGlovesNeg = !/\bgloves?\b/i.test(cleanDesc) ? 'gloves, work gloves, rubber gloves, mittens' : '';
+    const isMaleBodyDetail = /\b(sweatpants|bulge|erection|abs|pectorals?|muscular chest|scars on chest|1boy, solo, male body)\b/i.test(cleanDesc);
+    const maleBodyAntiFemaleNeg = isMaleBodyDetail ? '1girl, female, woman, female body, panties, white panties, bikini bottom, wide female hips, feminine waist, bra' : '';
     const isSnakeFrame = /\b(snake|python|viper|serpent|reptile)\b/i.test(cleanDesc);
     const snakeAntiMutantNeg = isSnakeFrame ? 'fishing hook, fishhook, meat hook, metal ring, chain, tied, knotted, two-headed, multiple heads, extra head, split body, two snakes, mutated animal, deformed animal' : '';
     const isFoodFrame = /\b(profiteroles|cream puffs|pastry|cake|bun|bread|food|dessert|tea|cups|crumbs)\b/i.test(cleanDesc);
@@ -7954,7 +8137,7 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
     if (isDetailOrMacroPanelPrompt(cleanDesc)) {
         const isHandDetail = /\b(hand focus|hands focus|focus on hands|unbuttoning|holding|bag|handbag|keys|fingers|thumb|jam|tarot|cards|deck|knocking|fist|knuckles)\b/i.test(cleanDesc);
         const handAntiMutantNeg = isHandDetail ? 'extra hands, multiple hands, 3 hands, 4 hands, extra arms, 3 arms, disembodied hands, mutated hands, bad hands, extra fingers, fused fingers, motion blur hands, text on cards, letters on cards' : '';
-        const mergedNeg = [baseRefs?.extraNeg || '', comicCleanArtNeg, handAntiMutantNeg, jamNotBloodNeg, noRealCatNeg, snakeAntiMutantNeg, foodAntiMascotNeg, objectNoFaceNeg].filter(Boolean).join(', ');
+        const mergedNeg = [baseRefs?.extraNeg || '', comicCleanArtNeg, handAntiMutantNeg, jamNotBloodNeg, noRealCatNeg, noGlovesNeg, maleBodyAntiFemaleNeg, snakeAntiMutantNeg, foodAntiMascotNeg, objectNoFaceNeg].filter(Boolean).join(', ');
         return { ...(baseRefs || {}), images: [], charCaptions: [], extraNeg: mergedNeg, note: '' };
     }
     const hasGirls = /\b([1-6]girls?|female|woman|girl)\b/i.test(cleanDesc);
@@ -7983,9 +8166,71 @@ function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, 
 
     return {
         ...baseRefs,
-        extraNeg: [baseRefs.extraNeg || '', comicCleanArtNeg, nonNsfwClothingNeg, jamNotBloodNeg, noRealCatNeg, snakeAntiMutantNeg, foodAntiMascotNeg].filter(Boolean).join(', '),
+        extraNeg: [baseRefs.extraNeg || '', comicCleanArtNeg, nonNsfwClothingNeg, jamNotBloodNeg, noRealCatNeg, noGlovesNeg, maleBodyAntiFemaleNeg, snakeAntiMutantNeg, foodAntiMascotNeg].filter(Boolean).join(', '),
         charCaptions: activeCharCaps,
     };
+}
+
+let bgKeepAliveAudioCtx = null;
+let bgKeepAliveOsc = null;
+let bgKeepAliveWakeLock = null;
+let bgKeepAliveLockResolver = null;
+
+function startBackgroundGenerationKeepAlive() {
+    try {
+        if (typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function' && !bgKeepAliveLockResolver) {
+            navigator.locks.request('nnb_background_manhwa_generation', { mode: 'exclusive' }, () => new Promise(res => {
+                bgKeepAliveLockResolver = res;
+            })).catch(() => {});
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        if (typeof navigator !== 'undefined' && navigator.wakeLock && typeof navigator.wakeLock.request === 'function' && !bgKeepAliveWakeLock) {
+            navigator.wakeLock.request('screen').then(wl => { bgKeepAliveWakeLock = wl; }).catch(() => {});
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx && !bgKeepAliveAudioCtx) {
+            bgKeepAliveAudioCtx = new AudioCtx();
+            const osc = bgKeepAliveAudioCtx.createOscillator();
+            const gain = bgKeepAliveAudioCtx.createGain();
+            gain.gain.value = 0.00001;
+            osc.connect(gain);
+            gain.connect(bgKeepAliveAudioCtx.destination);
+            osc.start();
+            bgKeepAliveOsc = osc;
+        } else if (bgKeepAliveAudioCtx && bgKeepAliveAudioCtx.state === 'suspended') {
+            bgKeepAliveAudioCtx.resume().catch(() => {});
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function stopBackgroundGenerationKeepAlive() {
+    try {
+        if (bgKeepAliveLockResolver) {
+            const r = bgKeepAliveLockResolver;
+            bgKeepAliveLockResolver = null;
+            r();
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        if (bgKeepAliveWakeLock) {
+            bgKeepAliveWakeLock.release().catch(() => {});
+            bgKeepAliveWakeLock = null;
+        }
+    } catch (e) { /* ignore */ }
+    try {
+        if (bgKeepAliveOsc) {
+            bgKeepAliveOsc.stop();
+            bgKeepAliveOsc.disconnect();
+            bgKeepAliveOsc = null;
+        }
+        if (bgKeepAliveAudioCtx) {
+            bgKeepAliveAudioCtx.close().catch(() => {});
+            bgKeepAliveAudioCtx = null;
+        }
+    } catch (e) { /* ignore */ }
 }
 
 let sceneDrawing = false;
@@ -8005,6 +8250,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
     if (!st || !ctx().chat?.length) return toastr.warning('Сначала открой чат', '🎬 Сцена');
     sceneDrawing = true;
     sceneDrawingStartedAt = Date.now();
+    startBackgroundGenerationKeepAlive();
     const status = popupEl?.find('.nnb-scene-status');
     const say = t => status?.text(t);
     try {
@@ -8336,7 +8582,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 const isWideRowFrame = (framesToDraw.length === 3 && fIdx === 0) || (framesToDraw.length === 4 && (fIdx === 0 || fIdx === 3));
                 const frameOrient = isWebtoonStrip ? 'square' : (isWideRowFrame ? 'landscape' : 'portrait');
                 logImageDiag(`Комикс-полоса: рисуем кадр ${fIdx + 1} из ${framesToDraw.length} (${frameOrient}, слотов CHAR: ${frameRefs?.charCaptions?.length || 0})`, framePrompt);
-                toastr.info(`🎨 Рисуем кадр манхвы ${fIdx + 1} из ${framesToDraw.length}…`, '💬 Манхва по кадрам', { timeOut: 15000 });
+                say(`🎨 Рисую кадр манхвы ${fIdx + 1} из ${framesToDraw.length}…`);
                 const fUrl = await withSharedKeyRetry(async () => {
                     const outUrl = await withTimeout(drawPicture(framePrompt, frameRefs, frameOrient), 120000, `кадр манхвы ${fIdx + 1}`);
                     if (!outUrl) throw new Error(`Пустой ответ на кадре ${fIdx + 1}`);
@@ -8353,12 +8599,13 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 verifiedQuotes = reconcileQuoteSpeakersWithPanels(verifiedQuotes, framesToDraw, cast, fullPostForSpk, st);
             }
             const wantBubbles = activeComicOpts.linesMode !== 'off' && verifiedQuotes.length > 0;
-            if (wantBubbles) {
-                const stitchedCleanData = await stitchComicFramesOnCanvas(frameUrls, [], activeComicOpts.styleId, false);
+            const stitchedBundle = await stitchComicFramesOnCanvas(frameUrls, verifiedQuotes, activeComicOpts.styleId, wantBubbles, true);
+            const stitchedData = typeof stitchedBundle === 'object' ? stitchedBundle.letteredDataUrl : stitchedBundle;
+            const stitchedCleanData = typeof stitchedBundle === 'object' ? stitchedBundle.cleanDataUrl : '';
+            url = await storeImage(stitchedData);
+            if (wantBubbles && stitchedCleanData) {
                 cleanUnletteredUrl = await storeImage(stitchedCleanData);
             }
-            const stitchedData = await stitchComicFramesOnCanvas(frameUrls, verifiedQuotes, activeComicOpts.styleId, wantBubbles);
-            url = await storeImage(stitchedData);
             if (!cleanUnletteredUrl) cleanUnletteredUrl = url;
         } else {
             logImageDiag(`Шаг 2/2: отправка промпта в генератор (${imageSourceName()})`, `Референсов: ${images.length} (${who.join(', ') || 'нет'}), режим референса: ${refModeSetting}`);
@@ -8408,9 +8655,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         st.lastSceneMeta = sceneMeta;
         if (!Array.isArray(st.scenes)) st.scenes = [];
         // Сохраняем все сгенерированные варианты без автоудаления, чтобы можно было спокойно сравнить и выбрать лучший (а лишние удалить вручную кнопкой)!
-        if (cleanUnletteredUrl && cleanUnletteredUrl !== url) {
-            st.scenes.push({ url: cleanUnletteredUrl, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov, comicOpts: activeComicOpts, comicQuotes: verifiedQuotes, panelPrompts, cleanUnletteredUrl });
-        }
+        // Чистый фон без текста хранится в sceneMeta.cleanUrlMap[url] для мгновенного редактирования облачков, не засоряя Альбом дублями каждой страницы
         st.scenes.push({ url, mesId: targetMesIdx, at: ctx().chat.length, date: st.time?.date || '', desc, extraNeg, cast, charCaptions, camMode, prompt, pov: isPov, comicOpts: activeComicOpts, comicQuotes: verifiedQuotes, panelPrompts, cleanUnletteredUrl: cleanUnletteredUrl || '' });
         if (st.scenes.length > 120) st.scenes.shift();
         await ctx().saveMetadata();
@@ -8903,14 +9148,15 @@ let autoOffloadTimer = null;
 function scheduleAutoChatImageOptimization() {
     clearTimeout(autoOffloadTimer);
     autoOffloadTimer = setTimeout(async () => {
+        if (typeof sceneDrawing !== 'undefined' && sceneDrawing) return;
         const st = store();
         if (!st) return;
         const count = await offloadAllBase64InChatAndMeta(st);
         if (count > 0) {
             placeMesButtonsSoon();
-            toastr.info(`Авто-оптимизация: ${count} тяжёлых base64-картинок перенесено из памяти чата в лёгкие файлы на диске!`, '⚡ Ускорение Таверны');
+            logImageDiag(`Авто-оптимизация: ${count} base64-картинок перенесено на диск`);
         }
-    }, 1200);
+    }, 1500);
 }
 
 async function cleanupBloatedAlbumAndChat(st) {
@@ -9117,18 +9363,14 @@ async function showScenePopup(mesId, forceAsk = false) {
 
     if (Array.isArray(choice.multiChunkChapter) && choice.multiChunkChapter.length > 1 && comicOpts?.enabled) {
         const chunks = choice.multiChunkChapter;
-        // Перед запуском новой многостраничной главы очищаем старые черновые слайды этого поста, чтобы старый кадр не вставал перед 1-й страницей новой главы!
         const cInit = ctx();
         let tIdxInit = Number.isInteger(mesId) ? mesId : (cInit.chat.length - 1);
         if (!Number.isInteger(mesId)) {
             while (tIdxInit >= 0 && (!cInit.chat[tIdxInit] || cInit.chat[tIdxInit].is_system)) tIdxInit--;
         }
-        if (cInit.chat?.[tIdxInit]?.extra?.nnbScene) {
-            cInit.chat[tIdxInit].extra.nnbScene.history = [];
-            cInit.chat[tIdxInit].extra.nnbScene.pageMetaMap = {};
-        }
-        const note = toastr.info(`Рисуем главу манхвы из ${chunks.length} страниц сверху вниз… Каждая готовая страница сразу выкладывается в ленту под постом!`, '📚 Глава манхвы', { timeOut: 240000, extendedTimeOut: 40000, tapToDismiss: true });
-        let pagesDone = 0;
+        startBackgroundGenerationKeepAlive();
+        const note = toastr.info(`Рисуем главу манхвы (страница 1 из ${chunks.length})… Все страницы появятся под постом разом по готовности, чтобы текст не скакал!`, '📚 Глава манхвы', { timeOut: 300000, extendedTimeOut: 60000, tapToDismiss: true });
+        const completedPages = [];
         let chapterPassport = '';
         let lastSceneSegIdx = -1;
         const fullRawMesForPassport = String(cInit.chat?.[tIdxInit]?.mes || '');
@@ -9140,6 +9382,12 @@ async function showScenePopup(mesId, forceAsk = false) {
                     chapterPassport = '';
                     lastSceneSegIdx = curSeg.sceneIndex;
                 }
+                try {
+                    if (note && note.find) {
+                        note.find('.toast-message').text(`Рисуем главу манхвы: страница ${i + 1} из ${chunks.length}… По готовности выложим всю главу разом!`);
+                    }
+                } catch (e) { /* ignore */ }
+                logImageDiag(`Глава манхвы: рисуем страницу ${i + 1} из ${chunks.length}`);
                 const chunkComicOpts = {
                     ...comicOpts,
                     chunkIndex: chObj.index,
@@ -9147,19 +9395,17 @@ async function showScenePopup(mesId, forceAsk = false) {
                     chunkText: chObj.text,
                     chapterCharPassport: chapterPassport,
                 };
-                toastr.info(`📖 Рисуем страницу манхвы ${i + 1} из ${chunks.length} (кусочек #${i + 1})…`, '📚 Глава манхвы', { timeOut: 25000 });
                 let pageRes = null;
                 for (let pageAttempt = 1; pageAttempt <= 4; pageAttempt++) {
                     pageRes = await drawScene(null, mesId, camMode, null, forcedCast, whisper, chunkComicOpts);
                     if (pageRes?.url) break;
                     if (pageAttempt < 4) {
                         const waitSec = 5 + pageAttempt * 2;
-                        toastr.info(`⏳ Ключ был занят на странице ${i + 1} из ${chunks.length} — ждём ${waitSec} сек. и повторяем эту страницу, прежде чем идти дальше…`, '🔄 Очередь страниц манхвы', { timeOut: waitSec * 1000 });
+                        toastr.warning(`⏳ Ключ был занят на странице ${i + 1} из ${chunks.length} — ждём ${waitSec} сек. и повторяем эту страницу…`, '🔄 Очередь страниц манхвы', { timeOut: waitSec * 1000 });
                         await new Promise(r => setTimeout(r, waitSec * 1000));
                     }
                 }
                 if (pageRes?.url) {
-                    pagesDone++;
                     if (pageRes.sceneMeta) {
                         pageRes.sceneMeta.inlineViewMode = 'vertical';
                         if (!chapterPassport) {
@@ -9167,29 +9413,33 @@ async function showScenePopup(mesId, forceAsk = false) {
                             const p1 = pageRes.sceneMeta.panelPrompts?.[0] || pageRes.sceneMeta.desc || '';
                             chapterPassport = [
                                 caps.length ? caps.map((c, idx) => `CHAR${idx + 1}: ${c}`).join('\n') : '',
-                                p1 ? `Образец одежды и внешности из 1-й страницы: ${p1}` : '',
+                                p1 ? `Образец одежды и внешности из 1-й страницы этой сцены: ${p1}` : '',
                             ].filter(Boolean).join('\n');
                         }
                     }
-                    await attachToLastMessage(pageRes.url, mesId, pageRes.sceneMeta, true);
+                    completedPages.push(pageRes);
                 }
             }
-            if (pagesDone > 0) {
-                toastr.success(`Готова глава манхвы из ${pagesDone} страниц! Все страницы выложены сверху вниз прямо под постом — можно сразу читать или скачать одной кнопкой!`, '📚 Глава манхвы', { timeOut: 8000 });
+            if (completedPages.length > 0) {
+                if (cInit.chat?.[tIdxInit]?.extra?.nnbScene) {
+                    cInit.chat[tIdxInit].extra.nnbScene.history = [];
+                    cInit.chat[tIdxInit].extra.nnbScene.pageMetaMap = {};
+                }
+                for (let k = 0; k < completedPages.length; k++) {
+                    const pr = completedPages[k];
+                    await attachToLastMessage(pr.url, mesId, pr.sceneMeta, true);
+                }
+                toastr.success(`Готова глава манхвы из ${completedPages.length} страниц! Все страницы выложены сверху вниз под постом.`, '📚 Глава манхвы', { timeOut: 7000 });
             }
         } catch (e) {
             console.error('[npc_notebook] multiChunkChapter error:', e);
         } finally {
             sceneDrawing = false;
+            stopBackgroundGenerationKeepAlive();
             try { toastr.clear(note); } catch (e) { /* ignore */ }
         }
         return;
     }
-
-    const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean';
-    const chunkBadge = (comicOpts?.enabled && comicOpts?.chunkTotal > 1)
-        ? ` (Страница ${(Number(comicOpts.chunkIndex) || 0) + 1} из ${comicOpts.chunkTotal})`
-        : '';
     const toastMsg = reuseMeta
         ? 'Перерисовываю сцену по готовому промпту… Нажми на уведомление, чтобы скрыть.'
         : comicOpts?.enabled
