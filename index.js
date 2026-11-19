@@ -5430,7 +5430,8 @@ function collectRecentScenePrompts(st, chat, beforeIdx, maxCount = 5) {
     const list = [];
     if (Array.isArray(chat)) {
         // Если для текущего поста уже нарисована 1-я страница манхвы, включаем её промпт первым, чтобы на 2-й и 3-й странице этого же поста одежда и внешность героев были 1-в-1!
-        for (let i = Math.min(beforeIdx, chat.length - 1); i >= 0 && list.length < maxCount; i--) {
+        for (let i = Math.min(beforeIdx - 1, chat.length - 1); i >= 0 && list.length < maxCount; i--) {
+            // сам перерисовываемый пост пропускаем: его старый промпт — как раз то, что пытаемся исправить
             const d = chat[i]?.extra?.nnbScene?.desc || chat[i]?.extra?.nsiScene?.desc;
             if (d && String(d).trim() && !list.includes(String(d).trim())) {
                 list.unshift(String(d).trim());
@@ -5439,6 +5440,7 @@ function collectRecentScenePrompts(st, chat, beforeIdx, maxCount = 5) {
     }
     if (list.length < maxCount && Array.isArray(st?.scenes)) {
         for (let i = st.scenes.length - 1; i >= 0 && list.length < maxCount; i--) {
+            if (Number(st.scenes[i]?.mesId) >= beforeIdx) continue;
             const d = st.scenes[i]?.desc;
             if (d && String(d).trim() && !list.includes(String(d).trim())) {
                 list.unshift(String(d).trim());
@@ -7306,7 +7308,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     // 1) OLDBlock: последние 2 промпта ТОЛЬКО для сохранения внешности и одежды (с жёстким запретом тащить старую локацию!)
     const oldPrompts = collectRecentScenePrompts(st, chat, targetIdx, 2);
     const oldBlock = oldPrompts.length
-        ? `[СПРАВКА ПО ОДЕЖДЕ И ВНЕШНОСТИ ИЗ ПРОШЛЫХ КАДРОВ (OLDBlock)]\nИспользуй эти прошлые промпты ИСКЛЮЧИТЕЛЬНО для сохранения черт внешности и одежды персонажей (если они не переодевались).\n⚠️ СТРОЖАЙШИЙ ЗАПРЕТ НА КОПИРОВАНИЕ СТАРОЙ ЛОКАЦИИ: НИКОГДА не копируй из OLDBlock старое помещение, улицу или заведение (например, bar, counter, tavern, cafe, hospital, street, office), если в ГЛАВНОМ ЦЕЛЕВОМ ПОСТЕ ниже сцена уже происходит в другом месте (например, дома, в комнате, в спальне, на кухне, в коридоре)! Фон и локацию бери СТРОГО из ГЛАВНОГО ЦЕЛЕВОГО ПОСТА:\n` +
+        ? `[СПРАВКА ПО ОДЕЖДЕ И ВНЕШНОСТИ ИЗ ПРОШЛЫХ КАДРОВ (OLDBlock)]\nИспользуй эти прошлые промпты ИСКЛЮЧИТЕЛЬНО для сохранения ОДЕЖДЫ персонажей (если они не переодевались). ⚠️ Каноничные теги Danbooru, цвет волос, глаз и приметы бери ТОЛЬКО из «Справки по внешности NPC» ниже — если прошлый кадр им противоречит, прав не он, а справка!\n⚠️ СТРОЖАЙШИЙ ЗАПРЕТ НА КОПИРОВАНИЕ СТАРОЙ ЛОКАЦИИ: НИКОГДА не копируй из OLDBlock старое помещение, улицу или заведение (например, bar, counter, tavern, cafe, hospital, street, office), если в ГЛАВНОМ ЦЕЛЕВОМ ПОСТЕ ниже сцена уже происходит в другом месте (например, дома, в комнате, в спальне, на кухне, в коридоре)! Фон и локацию бери СТРОГО из ГЛАВНОГО ЦЕЛЕВОГО ПОСТА:\n` +
           oldPrompts.map((p, idx) => `${idx + 1}) Прошлый кадр: ${p}`).join('\n')
         : '';
 
@@ -7383,7 +7385,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         ? `\n⚠️ КАНОНИЧНЫЕ ТЕГИ DANBOORU ЭТОЙ СЦЕНЫ (ОБЯЗАТЕЛЬНО пиши их в КАЖДОМ фрейме и в слоте CHAR с этим героем!): ${[comicOpts.chapterCanonByGender.boy ? `мужчина: "${comicOpts.chapterCanonByGender.boy}"` : '', comicOpts.chapterCanonByGender.girl ? `женщина: "${comicOpts.chapterCanonByGender.girl}"` : ''].filter(Boolean).join('; ')}`
         : '';
     const passportLine = (comicOpts?.chapterCharPassport && String(comicOpts.chapterCharPassport).trim())
-        ? `[👗 СКВОЗНОЙ ПАСПОРТ ОДЕЖДЫ И ВНЕШНОСТИ ТЕКУЩЕЙ ГЛАВЫ (СТРОГО СОХРАНЯЙ КАНОНИЧНЫЕ ТЕГИ DANBOORU, ОДЕЖДУ, ЦВЕТ ВОЛОС, ОЧКИ И ЗВЕРИНЫЕ УШКИ/ХВОСТЫ ВО ВСЕХ ФРЕЙМАХ И CHAR-СЛОТАХ ЭТОЙ СТРАНИЦЫ, ЕСЛИ ГЕРОИ НЕ ПЕРЕОДЕВАЛИСЬ В ТЕКСТЕ!)]:\n${String(comicOpts.chapterCharPassport).trim()}${canonCarryLine}`
+        ? `[👗 СКВОЗНОЙ ПАСПОРТ ОДЕЖДЫ И ВНЕШНОСТИ ТЕКУЩЕЙ ГЛАВЫ (СТРОГО СОХРАНЯЙ КАНОНИЧНЫЕ ТЕГИ DANBOORU, ОДЕЖДУ, ЦВЕТ ВОЛОС, ОЧКИ И ЗВЕРИНЫЕ УШКИ/ХВОСТЫ ВО ВСЕХ ФРЕЙМАХ И CHAR-СЛОТАХ ЭТОЙ СТРАНИЦЫ; но если паспорт противоречит «Справке по внешности NPC» (канон-тег или цвет волос героя) — права справка, ЕСЛИ ГЕРОИ НЕ ПЕРЕОДЕВАЛИСЬ В ТЕКСТЕ!)]:\n${String(comicOpts.chapterCharPassport).trim()}${canonCarryLine}`
         : '';
     const isNaiSource = settings().imageSource === 'novelai';
     let comicInstruction = '';
@@ -8254,6 +8256,95 @@ function canonByGenderFromCards(st, cast, sceneText) {
     return res;
 }
 
+// Несколько канонных героев одного пола в сцене: определяем, кто в кадре/слоте, по совпадению примет из карточки
+// (уши, хвост, шрам, цвет волос, очки…) и по имени в реплике этого кадра. Тег ставим, только если победитель явный.
+const NNB_GENERIC_APPEAR_TOK_RE = /^(?:1boy|1girl|boy|girl|male|female|man|woman|adult|solo|mature male|mature female|tall|short|slim|muscular|handsome|beautiful|young|anime|manga)$/i;
+function canonCandidatesFromCards(st, cast, sceneText) {
+    const out = { boy: [], girl: [] };
+    if (!st) return out;
+    const castNorm = (cast || []).map(x => String(x || '').toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    for (const n of cards) {
+        if (!n?.name) continue;
+        const canon = parseCanonFromAppearance(n.appearanceEn);
+        if (!canon) continue;
+        const nm = String(n.name).toLowerCase().replace(/ё/g, 'е');
+        const present = castNorm.some(c => c.includes(nm) || nm.includes(c)) || (sceneText && isNameMentionedInText(n.name, sceneText));
+        if (!present) continue;
+        const g = guessCardGender(n, canon);
+        if (!g) continue;
+        const sig = String(n.appearanceEn).split(',').map(t => t.trim().toLowerCase()).filter(t => t && !NNB_GENERIC_APPEAR_TOK_RE.test(t)
+            && t !== canon.name.toLowerCase() && t !== canon.series.toLowerCase() && t !== canon.tag.toLowerCase());
+        out[g].push({ name: n.name, tag: canon.tag, core: canon.name, sig });
+    }
+    return out;
+}
+function signatureScore(seg, sig) {
+    const segToks = String(seg || '').toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
+    let score = 0;
+    for (const t of sig) {
+        if (segToks.includes(t)) { score += 2; continue; }
+        // мягкое совпадение по ключевому слову: «dog ears» ~ «black dog ears», «scar on mouth» ~ «scar on lip»
+        const words = t.split(/\s+/).filter(w => w.length >= 4 && !/^(hair|eyes|with|black|white|short|long)$/.test(w));
+        if (words.length && words.every(w => segToks.some(st => st.includes(w)))) score += 1;
+    }
+    return score;
+}
+function assignCanonBySignature(rawPromptStr, candidates, hintText = '') {
+    let out = String(rawPromptStr || '');
+    if (!out) return out;
+    const segs = out.split(/(\s*\|\|\s*)/);
+    for (let i = 0; i < segs.length; i += 2) {
+        let seg = segs[i];
+        if (!seg || /\b(?:no humans|head out of frame|hand focus|object focus|animal focus)\b/i.test(seg)) continue;
+        if (hasAnyCanonTagInSegment(seg)) continue;
+        for (const g of ['boy', 'girl']) {
+            const list = candidates[g] || [];
+            if (list.length < 2) continue; // одиночного героя уже ставит canonByGenderFromCards
+            const gTok = g === 'boy' ? '1boy' : '1girl';
+            const multiRe = g === 'boy' ? /\b(?:2boys|3boys|4boys|multiple boys)\b/i : /\b(?:2girls|3girls|4girls|multiple girls)\b/i;
+            if (!new RegExp(`\\b${gTok}\\b`, 'i').test(seg) || multiRe.test(seg)) continue;
+            const scored = list.map(c => ({ c, s: signatureScore(seg, c.sig) + (hintText && isNameMentionedInText(c.name, hintText) ? 3 : 0) }))
+                .sort((a, b) => b.s - a.s);
+            if (!scored.length || scored[0].s <= 0 || (scored[1] && scored[0].s - scored[1].s < 2)) continue; // ничья — не гадаем
+            const tagVal = scored[0].c.tag;
+            if (/^\s*(?:CHAR\d+\s*:\s*)?(?:1boy\s*,\s*1girl|1girl\s*,\s*1boy)\b/i.test(seg)) {
+                seg = seg.replace(/(^\s*(?:CHAR\d+\s*:\s*)?(?:1boy\s*,\s*1girl|1girl\s*,\s*1boy)\s*,?)/i, `$1 ${tagVal},`);
+            } else {
+                seg = seg.replace(new RegExp(`(\\b${gTok}\\s*,?)`, 'i'), `$1 ${tagVal},`);
+            }
+            seg = seg.replace(/,\s*,/g, ',');
+        }
+        segs[i] = seg;
+    }
+    return segs.join('');
+}
+
+function stripAbsentCardCanons(rawPromptStr, st, cast, sceneText) {
+    let out = String(rawPromptStr || '');
+    if (!out || !st) return out;
+    const castNorm = (cast || []).map(x => String(x || '').toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    for (const n of cards) {
+        if (!n?.name) continue;
+        const canon = parseCanonFromAppearance(n.appearanceEn);
+        if (!canon) continue;
+        const nm = String(n.name).toLowerCase().replace(/ё/g, 'е');
+        const present = castNorm.some(c => c.includes(nm) || nm.includes(c)) || (sceneText && isNameMentionedInText(n.name, sceneText));
+        if (present) continue;
+        const escN = canon.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escS = canon.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        out = out
+            .replace(new RegExp(`(^|,)\\s*${escN}\\s*\\(\\s*${escS}\\s*\\)\\s*(?=,|\\|\\||$)`, 'gi'), '$1')
+            .replace(new RegExp(`(^|,)\\s*${escN}\\s*,\\s*${escS}\\s*(?=,|\\|\\||$)`, 'gi'), '$1')
+            .replace(new RegExp(`(^|,)\\s*${escN}\\s*(?=,|\\|\\||$)`, 'gi'), '$1')
+            .replace(/,\s*,/g, ',').replace(/,\s*(\|\|)/g, ' $1').replace(/^\s*,\s*/, '');
+    }
+    return out;
+}
+
 function extractCanonTagsByGender(promptsList) {
     const found = { boy: '', girl: '' };
     const list = Array.isArray(promptsList) ? promptsList : [];
@@ -8874,8 +8965,23 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = enforceNpcCanonAppearance(panelPrompts[pi], st);
             {
                 const cardSceneTxt = (comicOpts?.enabled && comicOpts?.chunkText) ? String(comicOpts.chunkText) : String(ctx().chat?.[Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1)]?.mes || '');
+                {
+                    const b0 = [desc, ...charCaptions, ...panelPrompts].join(' ### ');
+                    desc = stripAbsentCardCanons(desc, st, cast, cardSceneTxt);
+                    charCaptions = charCaptions.map(c => stripAbsentCardCanons(c, st, cast, cardSceneTxt));
+                    for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = stripAbsentCardCanons(panelPrompts[pi], st, cast, cardSceneTxt);
+                    if ([desc, ...charCaptions, ...panelPrompts].join(' ### ') !== b0) logImageDiag('Страж внешности: убраны канон-теги героев, которых нет в этой сцене (затащены из прошлых кадров)');
+                }
                 const fromCards = canonByGenderFromCards(st, cast, cardSceneTxt);
-                if (fromCards.boy || fromCards.girl) {
+                const multiCanon = canonCandidatesFromCards(st, cast, cardSceneTxt);
+                logImageDiag('Страж внешности: канон из карточек в сцене', `парни: ${multiCanon.boy.map(c => `${c.name} → ${c.tag}`).join('; ') || '—'} | девушки: ${multiCanon.girl.map(c => `${c.name} → ${c.tag}`).join('; ') || '—'} | CAST: ${(cast || []).join(', ') || '—'}`);
+                if (multiCanon.boy.length >= 2 || multiCanon.girl.length >= 2) {
+                    const qFor = idx => (Array.isArray(rawLlmQuotes) ? rawLlmQuotes.filter(q => Number(q?.panel) === idx + 1).map(q => `${q?.speaker || ''} ${q?.text || ''}`).join(' ') : '');
+                    desc = assignCanonBySignature(desc, multiCanon, '');
+                    charCaptions = charCaptions.map(c => assignCanonBySignature(c, multiCanon, ''));
+                    for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = assignCanonBySignature(panelPrompts[pi], multiCanon, qFor(pi));
+                }
+                if (fromCards.boy || fromCards.girl || multiCanon.boy.length >= 2 || multiCanon.girl.length >= 2) {
                     desc = carryOverChapterCanonTags(desc, fromCards, cast, cardSceneTxt);
                     charCaptions = charCaptions.map(c => carryOverChapterCanonTags(c, fromCards, cast, cardSceneTxt));
                     for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = carryOverChapterCanonTags(panelPrompts[pi], fromCards, cast, cardSceneTxt);
@@ -8884,14 +8990,23 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = enforceNpcCanonAppearance(panelPrompts[pi], st);
                 }
             }
-            if (comicOpts?.chapterCanonByGender && (comicOpts.chapterCanonByGender.boy || comicOpts.chapterCanonByGender.girl)) {
+            let chapterCanonSafe = comicOpts?.chapterCanonByGender ? { ...comicOpts.chapterCanonByGender } : null;
+            if (chapterCanonSafe) {
+                const ccTxt = (comicOpts?.enabled && comicOpts?.chunkText) ? String(comicOpts.chunkText) : '';
+                const mc2 = canonCandidatesFromCards(st, cast, ccTxt);
+                for (const g of ['boy', 'girl']) {
+                    if (mc2[g].length >= 2) chapterCanonSafe[g] = '';
+                    else if (mc2[g].length === 1 && chapterCanonSafe[g] && chapterCanonSafe[g].toLowerCase() !== mc2[g][0].tag.toLowerCase()) chapterCanonSafe[g] = mc2[g][0].tag;
+                }
+            }
+            if (chapterCanonSafe && (chapterCanonSafe.boy || chapterCanonSafe.girl)) {
                 const activeCheckTxt = [
                     comicOpts.chunkText || '',
-                    ...(Array.isArray(comicQuotes) ? comicQuotes.map(q => `${q?.speaker || ''} ${q?.text || ''}`) : []),
+                    ...(Array.isArray(rawLlmQuotes) ? rawLlmQuotes.map(q => `${q?.speaker || ''} ${q?.text || ''}`) : []),
                 ].join(' ');
-                desc = carryOverChapterCanonTags(desc, comicOpts.chapterCanonByGender, cast, activeCheckTxt);
-                charCaptions = charCaptions.map(c => carryOverChapterCanonTags(c, comicOpts.chapterCanonByGender, cast, activeCheckTxt));
-                for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = carryOverChapterCanonTags(panelPrompts[pi], comicOpts.chapterCanonByGender, cast, activeCheckTxt);
+                desc = carryOverChapterCanonTags(desc, chapterCanonSafe, cast, activeCheckTxt);
+                charCaptions = charCaptions.map(c => carryOverChapterCanonTags(c, chapterCanonSafe, cast, activeCheckTxt));
+                for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = carryOverChapterCanonTags(panelPrompts[pi], chapterCanonSafe, cast, activeCheckTxt);
             }
             const afterFix = [desc, ...charCaptions, ...panelPrompts].join(' ### ');
             if (afterFix !== beforeFix) logImageDiag('Страж внешности: восстановлен канон-тег NPC / сцены', afterFix);
