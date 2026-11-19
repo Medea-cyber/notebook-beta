@@ -20873,43 +20873,52 @@ function mountWelcomeUsageWidget() {
 }
 
 async function openUsageStatsModal() {
-    const el = $('<div class="nnb-pop" style="text-align:left;"><h3>📊 Статистика чатов, ботов и токенов</h3></div>');
-    const sub = $('<div class="nnb-pop-sub" style="margin-bottom:10px;">Считает сообщения и токены по всем сохранённым чатам и обновляется в реальном времени. Можно выбрать готовый период или любые свои даты.</div>');
-    el.append(sub);
+    const el = $('<div class="nnb-pop" style="text-align:left; padding-bottom:6px;"><h3 style="margin:0 0 8px 0; font-size:1.08em;">📊 Статистика чатов и токенов</h3></div>');
 
     let activePreset = 'all';
     let sortBy = 'msgs'; // 'msgs' | 'toks'
     let fromYmd = '';
     let toYmd = '';
+    let searchQuery = '';
     let cache = loadUsageStatsCache();
 
-    // Панель периодов + кастомные даты
-    const controls = $('<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;"></div>');
-    const presetsRow = $('<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>');
+    // Компактная панель периодов в одну строку
+    const controls = $('<div style="display:flex; flex-direction:column; gap:6px; margin-bottom:8px;"></div>');
+    const presetsRow = $('<div style="display:flex; gap:5px; flex-wrap:wrap; align-items:center;"></div>');
     const presets = [
         { id: 'today', label: 'Сегодня' },
-        { id: '7d', label: '7 дней' },
-        { id: '30d', label: '30 дней' },
-        { id: 'month', label: 'Этот месяц' },
+        { id: '7d', label: '7 дн.' },
+        { id: '30d', label: '30 дн.' },
+        { id: 'month', label: 'Месяц' },
         { id: 'all', label: 'Всё время' },
     ];
     const presetBtns = {};
-    const dateRow = $('<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between;"></div>');
-    const rangeWrap = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:0.86em;"><span>Период:</span></div>');
+
+    const toolsRow = $('<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; justify-content:space-between;"></div>');
+    const sortBtn = $('<div class="menu_button" style="margin:0; padding:4px 8px; font-size:0.8em; white-space:nowrap;"><i class="fa-solid fa-arrow-down-wide-short"></i> По соо</div>');
+    const dateToggleBtn = $('<div class="menu_button" style="margin:0; padding:4px 8px; font-size:0.8em; white-space:nowrap;"><i class="fa-solid fa-calendar-days"></i> Даты</div>');
+    const scanBtn = $('<div class="menu_button" style="margin:0; padding:4px 8px; font-size:0.8em; white-space:nowrap;"><i class="fa-solid fa-rotate"></i> Обновить</div>');
+    const leftTools = $('<div style="display:flex; gap:5px; align-items:center; flex-wrap:wrap;"></div>').append(sortBtn, dateToggleBtn);
+    toolsRow.append(leftTools, scanBtn);
+
+    const rangeWrap = $('<div style="display:none; gap:6px; align-items:center; flex-wrap:wrap; font-size:0.82em; padding:6px 8px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12)); background:rgba(0,0,0,0.14);"><span>С:</span></div>');
     const fromInp = $('<input type="date" class="text_pole" style="width:auto; margin:0; padding:3px 6px; font-size:0.9em;">');
     const toInp = $('<input type="date" class="text_pole" style="width:auto; margin:0; padding:3px 6px; font-size:0.9em;">');
-    rangeWrap.append(fromInp, '<span>—</span>', toInp);
+    rangeWrap.append(fromInp, '<span>по:</span>', toInp);
+    dateToggleBtn.on('click', () => { rangeWrap.slideToggle(120); });
 
-    const rightTools = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;"></div>');
-    const sortBtn = $('<div class="menu_button" style="margin:0; padding:4px 9px; font-size:0.84em;"><i class="fa-solid fa-arrow-down-wide-short"></i> Сорт: сообщения</div>');
-    const scanBtn = $('<div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-rotate"></i> Пересчитать все чаты</div>');
-    rightTools.append(sortBtn, scanBtn);
-    dateRow.append(rangeWrap, rightTools);
+    const progressLine = $('<div style="display:none; font-size:0.82em; opacity:0.88; padding:6px 9px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor); margin-bottom:6px;"></div>');
+    const kpiHost = $('<div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px; margin-bottom:10px;"></div>');
 
-    const progressLine = $('<div style="display:none; font-size:0.84em; opacity:0.88; padding:6px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor);"></div>');
-    const kpiHost = $('<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(145px, 1fr)); gap:8px; margin-bottom:12px;"></div>');
-    const listHost = $('<div style="display:flex; flex-direction:column; gap:7px; max-height:46vh; overflow-y:auto; padding-right:2px;"></div>');
-    const footerInfo = $('<div style="font-size:0.78em; opacity:0.72; margin-top:8px;"></div>');
+    // Поиск + заголовок списка топов
+    const listHeader = $('<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; flex-wrap:wrap;"></div>');
+    const listTitle = $('<div style="font-weight:700; font-size:0.92em;">🏆 Топ ботов</div>');
+    const searchInp = $('<input type="text" class="text_pole" placeholder="🔍 Поиск бота…" style="width:155px; max-width:55%; margin:0; padding:4px 8px; font-size:0.82em;">');
+    listHeader.append(listTitle, searchInp);
+
+    // Без внутреннего скролла (overflow-y) — весь попап скроллится целиком, поэтому на телефоне удобно листать весь топ!
+    const listHost = $('<div style="display:flex; flex-direction:column; gap:7px;"></div>');
+    const footerInfo = $('<div style="font-size:0.75em; opacity:0.68; margin-top:10px;"></div>');
 
     const applyPreset = (pid) => {
         activePreset = pid;
@@ -20938,7 +20947,7 @@ async function openUsageStatsModal() {
     };
 
     for (const p of presets) {
-        const b = $(`<div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em;"></div>`).text(p.label);
+        const b = $(`<div class="menu_button" style="margin:0; padding:4px 8px; font-size:0.8em; white-space:nowrap;"></div>`).text(p.label);
         b.on('click', () => applyPreset(p.id));
         presetBtns[p.id] = b;
         presetsRow.append(b);
@@ -20956,11 +20965,15 @@ async function openUsageStatsModal() {
         Object.values(presetBtns).forEach(b => { b.css('outline', 'none'); b.css('font-weight', '400'); });
         renderStatsView();
     });
+    searchInp.on('input', () => {
+        searchQuery = String(searchInp.val() || '').trim().toLowerCase();
+        renderStatsView();
+    });
     sortBtn.on('click', () => {
         sortBy = sortBy === 'msgs' ? 'toks' : 'msgs';
         sortBtn.html(sortBy === 'msgs'
-            ? '<i class="fa-solid fa-arrow-down-wide-short"></i> Сорт: сообщения'
-            : '<i class="fa-solid fa-arrow-down-wide-short"></i> Сорт: токены');
+            ? '<i class="fa-solid fa-arrow-down-wide-short"></i> По соо'
+            : '<i class="fa-solid fa-arrow-down-wide-short"></i> По токенам');
         renderStatsView();
     });
 
@@ -20968,53 +20981,58 @@ async function openUsageStatsModal() {
         kpiHost.empty();
         listHost.empty();
         if (!cache || !Object.keys(cache.chars || {}).length) {
-            listHost.html('<div class="nnb-empty">Данных пока нет — нажми «🔄 Пересчитать все чаты», чтобы собрать статистику по твоим ботам.</div>');
+            listHost.html('<div class="nnb-empty">Данных пока нет — нажми «🔄 Обновить», чтобы собрать статистику по твоим ботам.</div>');
             footerInfo.text('');
             return;
         }
         const agg = aggregateUsageStatsForPeriod(cache, fromYmd, toYmd);
         agg.rows.sort((a, b) => sortBy === 'toks' ? (b.toks - a.toks) : (b.msgs - a.msgs));
         const leader = agg.rows[0];
-        const cardCss = 'padding:9px 11px; border-radius:9px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.14)); background:rgba(0,0,0,0.18);';
+        const cardCss = 'padding:7px 9px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.14)); background:rgba(0,0,0,0.18);';
         kpiHost.append(
-            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Всего сообщений</div><div style="font-size:1.35em; font-weight:700;">${fmtCompactNum(agg.totalMsgs)}</div><div style="font-size:0.76em; opacity:0.78;">твоих ${fmtCompactNum(agg.totalUserMsgs)} • ботов ${fmtCompactNum(agg.totalBotMsgs)}</div></div>`,
-            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Токенов в текстах</div><div style="font-size:1.35em; font-weight:700;">${fmtCompactNum(agg.totalToks)}</div><div style="font-size:0.76em; opacity:0.78;">твоих ${fmtCompactNum(agg.totalUserToks)} • ботов ${fmtCompactNum(agg.totalBotToks)}</div></div>`,
-            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Активных ботов</div><div style="font-size:1.35em; font-weight:700;">${agg.rows.length}</div><div style="font-size:0.76em; opacity:0.78;">за выбранный период</div></div>`,
-            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Фаворит периода</div><div style="font-size:1.05em; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${leader ? escapeHtml(leader.name) : '—'}</div><div style="font-size:0.76em; opacity:0.78;">${leader ? `${fmtCompactNum(leader.msgs)} соо • ${fmtCompactNum(leader.toks)} ток.` : 'нет данных'}</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.74em; opacity:0.72;">Сообщений</div><div style="font-size:1.18em; font-weight:700; line-height:1.2;">${fmtCompactNum(agg.totalMsgs)}</div><div style="font-size:0.72em; opacity:0.74;">ты ${fmtCompactNum(agg.totalUserMsgs)} • боты ${fmtCompactNum(agg.totalBotMsgs)}</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.74em; opacity:0.72;">Токенов</div><div style="font-size:1.18em; font-weight:700; line-height:1.2;">${fmtCompactNum(agg.totalToks)}</div><div style="font-size:0.72em; opacity:0.74;">ты ${fmtCompactNum(agg.totalUserToks)} • боты ${fmtCompactNum(agg.totalBotToks)}</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.74em; opacity:0.72;">Ботов</div><div style="font-size:1.18em; font-weight:700; line-height:1.2;">${agg.rows.length}</div><div style="font-size:0.72em; opacity:0.74;">за период</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.74em; opacity:0.72;">Фаворит</div><div style="font-size:1.0em; font-weight:700; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${leader ? escapeHtml(leader.name) : '—'}</div><div style="font-size:0.72em; opacity:0.74;">${leader ? `${fmtCompactNum(leader.msgs)} соо • ${fmtCompactNum(leader.toks)} ток.` : '—'}</div></div>`,
         );
 
-        if (!agg.rows.length) {
-            listHost.html('<div class="nnb-empty">За выбранный период сообщений не найдено. Попробуй расширить даты или выбрать «Всё время».</div>');
+        const filtered = searchQuery
+            ? agg.rows.map((r, i) => ({ ...r, rank: i + 1 })).filter(r => r.name.toLowerCase().includes(searchQuery))
+            : agg.rows.map((r, i) => ({ ...r, rank: i + 1 }));
+
+        listTitle.text(`🏆 Топ ботов (${filtered.length})`);
+
+        if (!filtered.length) {
+            listHost.html('<div class="nnb-empty">Никого не найдено за этот период или по этому фильтру.</div>');
         } else {
             const maxVal = Math.max(1, ...agg.rows.map(r => sortBy === 'toks' ? r.toks : r.msgs));
-            agg.rows.forEach((r, idx) => {
+            filtered.forEach((r) => {
                 const pct = Math.max(3, Math.round(((sortBy === 'toks' ? r.toks : r.msgs) / maxVal) * 100));
                 const share = agg.totalMsgs ? Math.round((r.msgs / agg.totalMsgs) * 100) : 0;
+                const medal = r.rank === 1 ? '🥇' : (r.rank === 2 ? '🥈' : (r.rank === 3 ? '🥉' : `#${r.rank}`));
                 const avUrl = r.avatar ? `/characters/${encodeURIComponent(r.avatar)}` : '';
                 const avHtml = avUrl
-                    ? `<img src="${avUrl}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; flex-shrink:0; border:1px solid var(--SmartThemeBorderColor);" onerror="this.style.display='none'">`
-                    : `<div style="width:40px; height:40px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-weight:700;">${idx + 1}</div>`;
+                    ? `<img src="${avUrl}" style="width:42px; height:42px; border-radius:50%; object-fit:cover; flex-shrink:0; border:1px solid var(--SmartThemeBorderColor);" onerror="this.style.display='none'">`
+                    : `<div style="width:42px; height:42px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-weight:700;">${r.rank}</div>`;
                 const row = $(`
-                    <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:9px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12)); background:rgba(0,0,0,0.14);">
-                        <div style="width:20px; text-align:center; font-weight:700; opacity:0.7; font-size:0.88em;">#${idx + 1}</div>
+                    <div style="display:flex; align-items:center; gap:9px; padding:8px 9px; border-radius:9px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12)); background:rgba(0,0,0,0.15);">
+                        <div style="min-width:26px; text-align:center; font-weight:700; opacity:0.85; font-size:0.88em;">${medal}</div>
                         ${avHtml}
                         <div style="flex:1; min-width:0;">
-                            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
-                                <b style="font-size:0.95em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.name)}</b>
-                                <span style="font-size:0.82em; opacity:0.88;"><b>${fmtCompactNum(r.msgs)}</b> соо (${share}%) • <b>${fmtCompactNum(r.toks)}</b> ток.</span>
-                            </div>
-                            <div style="height:6px; border-radius:4px; background:rgba(255,255,255,0.09); margin:5px 0 4px 0; overflow:hidden;">
+                            <div style="font-size:0.96em; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-bottom:2px;">${escapeHtml(r.name)}</div>
+                            <div style="font-size:0.81em; opacity:0.9;"><b>${fmtCompactNum(r.msgs)}</b> соо (${share}%) • <b>${fmtCompactNum(r.toks)}</b> ток. • чатов: ${r.chats}</div>
+                            <div style="height:5px; border-radius:4px; background:rgba(255,255,255,0.09); margin:5px 0 4px 0; overflow:hidden;">
                                 <div style="height:100%; width:${pct}%; border-radius:4px; background:var(--SmartThemeQuoteColor, #e0c068);"></div>
                             </div>
-                            <div style="font-size:0.75em; opacity:0.72;">твоих: ${fmtCompactNum(r.u)} (${fmtCompactNum(r.ut)} ток.) • от бота: ${fmtCompactNum(r.b)} (${fmtCompactNum(r.bt)} ток.) • чатов: ${r.chats}</div>
+                            <div style="font-size:0.74em; opacity:0.7;">твоих: ${fmtCompactNum(r.u)} (${fmtCompactNum(r.ut)} ток.) • бот: ${fmtCompactNum(r.b)} (${fmtCompactNum(r.bt)} ток.)</div>
                         </div>
                     </div>
                 `);
                 listHost.append(row);
             });
         }
-        const upd = cache.updatedAt ? new Date(cache.updatedAt).toLocaleString('ru-RU') : 'только живые счётчики';
-        footerInfo.text(`Последний полный пересчёт: ${upd}. Токены берутся из метаданных Таверны или оцениваются по длине русских/английских текстов.`);
+        const upd = cache.updatedAt ? new Date(cache.updatedAt).toLocaleString('ru-RU') : 'живые счётчики';
+        footerInfo.text(`Обновлено: ${upd}.`);
     };
 
     let scanning = false;
@@ -21038,8 +21056,8 @@ async function openUsageStatsModal() {
     };
     scanBtn.on('click', runScan);
 
-    controls.append(presetsRow, dateRow);
-    el.append(controls, progressLine, kpiHost, listHost, footerInfo);
+    controls.append(presetsRow, toolsRow, rangeWrap);
+    el.append(controls, progressLine, kpiHost, listHeader, listHost, footerInfo);
     applyPreset('all');
     if (!cache || !cache.updatedAt) {
         setTimeout(runScan, 120);
