@@ -17028,6 +17028,7 @@ const PANEL_HTML = `
       <div class="nnb-buttons">
         <div class="menu_button" id="nnb_open_book"><i class="fa-solid fa-book-open"></i> Открыть блокнот</div>
         <div class="menu_button" id="nnb_open_world"><i class="fa-solid fa-earth-americas"></i> Создать мир</div>
+        <div class="menu_button" id="nnb_open_stats"><i class="fa-solid fa-chart-column"></i> Статистика</div>
       </div>
       <div class="nnb-status"></div>
       <label class="checkbox_label"><input type="checkbox" id="nnb_toasts"> Уведомлять о новых записях</label>
@@ -20605,6 +20606,447 @@ function cleanEnglishExtensionsMenu() {
     });
 }
 
+
+// ---------- 📊 Статистика чатов, ботов и токенов (доступна на главном экране и с фильтром по периоду) ----------
+
+const NNB_USAGE_CACHE_KEY = 'nnb_usage_stats_v1';
+
+function nnbLocalYmd(d = new Date()) {
+    const dt = d instanceof Date ? d : new Date(d);
+    if (Number.isNaN(dt.getTime())) return '';
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function parseStMessageDateToYmd(rawDate, fallbackYmd = '') {
+    if (rawDate === null || rawDate === undefined || rawDate === '') return fallbackYmd;
+    if (typeof rawDate === 'number' && Number.isFinite(rawDate)) {
+        const ms = rawDate > 1e12 ? rawDate : rawDate * 1000;
+        return nnbLocalYmd(new Date(ms)) || fallbackYmd;
+    }
+    const s = String(rawDate).trim();
+    if (!s) return fallbackYmd;
+    if (/^\d{10,13}$/.test(s)) {
+        const n = Number(s);
+        return nnbLocalYmd(new Date(n > 1e12 ? n : n * 1000)) || fallbackYmd;
+    }
+    // ISO / YYYY-MM-DD / YYYY-M-D @...
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})\b/);
+    if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+    // DD.MM.YYYY or DD/MM/YYYY
+    m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})\b/);
+    if (m) return `${m[3]}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
+    // SillyTavern human date: "March 28, 2025 9:40am"
+    const cleaned = s.replace(/(\d)(am|pm)\b/i, '$1 $2').replace(/@/g, ' ');
+    const parsed = Date.parse(cleaned);
+    if (!Number.isNaN(parsed)) return nnbLocalYmd(new Date(parsed)) || fallbackYmd;
+    return fallbackYmd;
+}
+
+function estimateStMessageTokens(msg) {
+    const exact = Number(msg?.extra?.token_count);
+    if (Number.isFinite(exact) && exact > 0) return Math.round(exact);
+    const txt = String(msg?.mes || '').trim();
+    if (!txt) return 0;
+    const cyr = (txt.match(/[а-яёА-ЯЁ]/g) || []).length;
+    const other = Math.max(0, txt.length - cyr);
+    return Math.max(1, Math.round(cyr / 2.35 + other / 3.9));
+}
+
+function loadUsageStatsCache() {
+    try {
+        const raw = localStorage.getItem(NNB_USAGE_CACHE_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (data && typeof data === 'object' && data.chars && typeof data.chars === 'object') return data;
+    } catch (e) { /* ignore */ }
+    return null;
+}
+
+function saveUsageStatsCache(data) {
+    try {
+        localStorage.setItem(NNB_USAGE_CACHE_KEY, JSON.stringify(data));
+    } catch (e) { /* ignore */ }
+}
+
+function fmtCompactNum(n) {
+    const v = Number(n) || 0;
+    if (v >= 1e6) return `${(v / 1e6).toFixed(2).replace(/\.00$/, '')}M`;
+    if (v >= 1e4) return `${(v / 1e3).toFixed(1).replace(/\.0$/, '')}K`;
+    return v.toLocaleString('ru-RU');
+}
+
+function recordLiveUsageMessage(isUserMsg) {
+    try {
+        const c = ctx();
+        if (!Array.isArray(c.chat) || !c.chat.length) return;
+        const msg = c.chat[c.chat.length - 1];
+        if (!msg || msg.is_system) return;
+        if (!!msg.is_user !== !!isUserMsg) return;
+        const ch = (c.characterId !== undefined && c.characters?.[c.characterId]) ? c.characters[c.characterId] : null;
+        const charName = String(ch?.name || c.name2 || (!msg.is_user ? msg.name : '') || '').trim();
+        if (!charName) return;
+        const avatar = String(ch?.avatar || '').trim();
+        const key = avatar || charName.toLowerCase();
+        const day = parseStMessageDateToYmd(msg.send_date, nnbLocalYmd(new Date()));
+        const tok = estimateStMessageTokens(msg);
+        const cache = loadUsageStatsCache() || { updatedAt: 0, chars: {} };
+        if (!cache.chars[key]) {
+            cache.chars[key] = { name: charName, avatar, chats: 1, days: {} };
+        }
+        const entry = cache.chars[key];
+        entry.name = charName;
+        if (avatar) entry.avatar = avatar;
+        if (!entry.days[day]) entry.days[day] = { u: 0, b: 0, ut: 0, bt: 0 };
+        if (msg.is_user) {
+            entry.days[day].u += 1;
+            entry.days[day].ut += tok;
+        } else {
+            entry.days[day].b += 1;
+            entry.days[day].bt += tok;
+        }
+        saveUsageStatsCache(cache);
+        renderWelcomeUsageWidgetSoon();
+    } catch (e) { /* ignore */ }
+}
+
+async function scanAllChatsUsageStats(onProgress = null) {
+    const c = ctx();
+    const chars = Array.isArray(c.characters) ? c.characters : [];
+    const headers = typeof c.getRequestHeaders === 'function' ? c.getRequestHeaders() : { 'Content-Type': 'application/json' };
+    const result = { updatedAt: Date.now(), chars: {} };
+
+    for (let ci = 0; ci < chars.length; ci++) {
+        const ch = chars[ci];
+        if (!ch || !ch.avatar) continue;
+        if (onProgress) onProgress(ci + 1, chars.length, ch.name || ch.avatar);
+        let chatList = [];
+        try {
+            const res = await fetch('/api/characters/chats', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ avatar_url: ch.avatar }),
+            });
+            if (res.ok) {
+                const parsed = await res.json();
+                chatList = Array.isArray(parsed) ? parsed : Object.values(parsed || {});
+            }
+        } catch (e) { continue; }
+        if (!chatList.length) continue;
+
+        const key = String(ch.avatar);
+        const charEntry = { name: String(ch.name || ch.avatar), avatar: key, chats: chatList.length, days: {} };
+
+        for (const chatInfo of chatList) {
+            const rawFile = String(chatInfo?.file_name || '');
+            if (!rawFile) continue;
+            const fileName = rawFile.replace(/\.jsonl$/i, '');
+            const chatFallbackDay = parseStMessageDateToYmd(chatInfo?.last_mes || ch.date_last_chat, 'unknown');
+            try {
+                const res = await fetch('/api/chats/get', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        ch_name: ch.name,
+                        file_name: fileName,
+                        avatar_url: ch.avatar,
+                    }),
+                });
+                if (!res.ok) continue;
+                const msgs = await res.json();
+                if (!Array.isArray(msgs)) continue;
+                let lastKnownDay = chatFallbackDay;
+                for (const m of msgs) {
+                    if (!m || m.is_system || m.chat_metadata || typeof m.mes !== 'string') continue;
+                    const day = parseStMessageDateToYmd(m.send_date, lastKnownDay);
+                    if (day && day !== 'unknown') lastKnownDay = day;
+                    const dKey = day || 'unknown';
+                    if (!charEntry.days[dKey]) charEntry.days[dKey] = { u: 0, b: 0, ut: 0, bt: 0 };
+                    const tok = estimateStMessageTokens(m);
+                    if (m.is_user) {
+                        charEntry.days[dKey].u += 1;
+                        charEntry.days[dKey].ut += tok;
+                    } else {
+                        charEntry.days[dKey].b += 1;
+                        charEntry.days[dKey].bt += tok;
+                    }
+                }
+            } catch (e) { /* skip broken chat */ }
+        }
+        if (Object.keys(charEntry.days).length) {
+            result.chars[key] = charEntry;
+        }
+    }
+
+    saveUsageStatsCache(result);
+    renderWelcomeUsageWidgetSoon();
+    return result;
+}
+
+function aggregateUsageStatsForPeriod(cache, fromYmd, toYmd) {
+    const rows = [];
+    let totalUserMsgs = 0;
+    let totalBotMsgs = 0;
+    let totalUserToks = 0;
+    let totalBotToks = 0;
+    const includeAll = !fromYmd && !toYmd;
+
+    for (const entry of Object.values(cache?.chars || {})) {
+        let u = 0, b = 0, ut = 0, bt = 0;
+        for (const [day, d] of Object.entries(entry.days || {})) {
+            if (!includeAll) {
+                if (day === 'unknown') continue;
+                if (fromYmd && day < fromYmd) continue;
+                if (toYmd && day > toYmd) continue;
+            }
+            u += Number(d.u) || 0;
+            b += Number(d.b) || 0;
+            ut += Number(d.ut) || 0;
+            bt += Number(d.bt) || 0;
+        }
+        const msgs = u + b;
+        const toks = ut + bt;
+        if (msgs > 0) {
+            rows.push({
+                name: entry.name,
+                avatar: entry.avatar,
+                chats: entry.chats || 1,
+                u, b, msgs,
+                ut, bt, toks,
+            });
+            totalUserMsgs += u;
+            totalBotMsgs += b;
+            totalUserToks += ut;
+            totalBotToks += bt;
+        }
+    }
+    return {
+        rows,
+        totalUserMsgs,
+        totalBotMsgs,
+        totalMsgs: totalUserMsgs + totalBotMsgs,
+        totalUserToks,
+        totalBotToks,
+        totalToks: totalUserToks + totalBotToks,
+    };
+}
+
+let _welcomeStatsTimer = null;
+function renderWelcomeUsageWidgetSoon() {
+    clearTimeout(_welcomeStatsTimer);
+    _welcomeStatsTimer = setTimeout(mountWelcomeUsageWidget, 180);
+}
+
+function mountWelcomeUsageWidget() {
+    const wp = $('.welcomePanel').first();
+    if (!wp.length) return;
+    let bar = wp.find('#nnb_welcome_stats_bar');
+    if (!bar.length) {
+        bar = $(`<div id="nnb_welcome_stats_bar" style="margin:8px auto 10px auto; max-width:760px; padding:8px 12px; border-radius:10px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.16)); background:var(--SmartThemeBlurTintColor, rgba(0,0,0,0.28)); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; cursor:pointer;"></div>`);
+        bar.on('click', () => openUsageStatsModal());
+        wp.prepend(bar);
+    }
+    const cache = loadUsageStatsCache();
+    if (!cache || !Object.keys(cache.chars || {}).length) {
+        bar.html(`
+            <div style="display:flex; align-items:center; gap:8px; font-size:0.9em;">
+                <i class="fa-solid fa-chart-column" style="color:var(--SmartThemeQuoteColor, #e0c068);"></i>
+                <span><b>Статистика чатов и токенов</b> — нажми, чтобы посчитать любимых ботов, сообщения и токены</span>
+            </div>
+            <div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-chart-simple"></i> Открыть</div>
+        `);
+        return;
+    }
+    const agg = aggregateUsageStatsForPeriod(cache, '', '');
+    agg.rows.sort((a, b) => b.msgs - a.msgs);
+    const top = agg.rows[0];
+    const topStr = top ? ` • Топ: <b>${escapeHtml(top.name)}</b> (${fmtCompactNum(top.msgs)} соо)` : '';
+    bar.html(`
+        <div style="display:flex; align-items:center; gap:8px; font-size:0.88em; flex-wrap:wrap;">
+            <i class="fa-solid fa-chart-column" style="color:var(--SmartThemeQuoteColor, #e0c068);"></i>
+            <span><b>Статистика:</b> ${fmtCompactNum(agg.totalMsgs)} соо • ~${fmtCompactNum(agg.totalToks)} токенов${topStr}</span>
+        </div>
+        <div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-sliders"></i> Подробнее</div>
+    `);
+}
+
+async function openUsageStatsModal() {
+    const el = $('<div class="nnb-pop" style="text-align:left;"><h3>📊 Статистика чатов, ботов и токенов</h3></div>');
+    const sub = $('<div class="nnb-pop-sub" style="margin-bottom:10px;">Считает сообщения и токены по всем сохранённым чатам и обновляется в реальном времени. Можно выбрать готовый период или любые свои даты.</div>');
+    el.append(sub);
+
+    let activePreset = 'all';
+    let sortBy = 'msgs'; // 'msgs' | 'toks'
+    let fromYmd = '';
+    let toYmd = '';
+    let cache = loadUsageStatsCache();
+
+    // Панель периодов + кастомные даты
+    const controls = $('<div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px;"></div>');
+    const presetsRow = $('<div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>');
+    const presets = [
+        { id: 'today', label: 'Сегодня' },
+        { id: '7d', label: '7 дней' },
+        { id: '30d', label: '30 дней' },
+        { id: 'month', label: 'Этот месяц' },
+        { id: 'all', label: 'Всё время' },
+    ];
+    const presetBtns = {};
+    const dateRow = $('<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between;"></div>');
+    const rangeWrap = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:0.86em;"><span>Период:</span></div>');
+    const fromInp = $('<input type="date" class="text_pole" style="width:auto; margin:0; padding:3px 6px; font-size:0.9em;">');
+    const toInp = $('<input type="date" class="text_pole" style="width:auto; margin:0; padding:3px 6px; font-size:0.9em;">');
+    rangeWrap.append(fromInp, '<span>—</span>', toInp);
+
+    const rightTools = $('<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;"></div>');
+    const sortBtn = $('<div class="menu_button" style="margin:0; padding:4px 9px; font-size:0.84em;"><i class="fa-solid fa-arrow-down-wide-short"></i> Сорт: сообщения</div>');
+    const scanBtn = $('<div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-rotate"></i> Пересчитать все чаты</div>');
+    rightTools.append(sortBtn, scanBtn);
+    dateRow.append(rangeWrap, rightTools);
+
+    const progressLine = $('<div style="display:none; font-size:0.84em; opacity:0.88; padding:6px 10px; border-radius:8px; border:1px solid var(--SmartThemeBorderColor);"></div>');
+    const kpiHost = $('<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(145px, 1fr)); gap:8px; margin-bottom:12px;"></div>');
+    const listHost = $('<div style="display:flex; flex-direction:column; gap:7px; max-height:46vh; overflow-y:auto; padding-right:2px;"></div>');
+    const footerInfo = $('<div style="font-size:0.78em; opacity:0.72; margin-top:8px;"></div>');
+
+    const applyPreset = (pid) => {
+        activePreset = pid;
+        const now = new Date();
+        const today = nnbLocalYmd(now);
+        if (pid === 'today') {
+            fromYmd = today; toYmd = today;
+        } else if (pid === '7d') {
+            const d = new Date(now); d.setDate(d.getDate() - 6);
+            fromYmd = nnbLocalYmd(d); toYmd = today;
+        } else if (pid === '30d') {
+            const d = new Date(now); d.setDate(d.getDate() - 29);
+            fromYmd = nnbLocalYmd(d); toYmd = today;
+        } else if (pid === 'month') {
+            fromYmd = `${today.slice(0, 7)}-01`; toYmd = today;
+        } else if (pid === 'all') {
+            fromYmd = ''; toYmd = '';
+        }
+        fromInp.val(fromYmd);
+        toInp.val(toYmd);
+        Object.entries(presetBtns).forEach(([k, b]) => {
+            b.css('outline', k === activePreset ? '2px solid var(--SmartThemeQuoteColor, #e0c068)' : 'none');
+            b.css('font-weight', k === activePreset ? '700' : '400');
+        });
+        renderStatsView();
+    };
+
+    for (const p of presets) {
+        const b = $(`<div class="menu_button" style="margin:0; padding:4px 10px; font-size:0.84em;"></div>`).text(p.label);
+        b.on('click', () => applyPreset(p.id));
+        presetBtns[p.id] = b;
+        presetsRow.append(b);
+    }
+
+    fromInp.on('change', () => {
+        activePreset = 'custom';
+        fromYmd = String(fromInp.val() || '').trim();
+        Object.values(presetBtns).forEach(b => { b.css('outline', 'none'); b.css('font-weight', '400'); });
+        renderStatsView();
+    });
+    toInp.on('change', () => {
+        activePreset = 'custom';
+        toYmd = String(toInp.val() || '').trim();
+        Object.values(presetBtns).forEach(b => { b.css('outline', 'none'); b.css('font-weight', '400'); });
+        renderStatsView();
+    });
+    sortBtn.on('click', () => {
+        sortBy = sortBy === 'msgs' ? 'toks' : 'msgs';
+        sortBtn.html(sortBy === 'msgs'
+            ? '<i class="fa-solid fa-arrow-down-wide-short"></i> Сорт: сообщения'
+            : '<i class="fa-solid fa-arrow-down-wide-short"></i> Сорт: токены');
+        renderStatsView();
+    });
+
+    const renderStatsView = () => {
+        kpiHost.empty();
+        listHost.empty();
+        if (!cache || !Object.keys(cache.chars || {}).length) {
+            listHost.html('<div class="nnb-empty">Данных пока нет — нажми «🔄 Пересчитать все чаты», чтобы собрать статистику по твоим ботам.</div>');
+            footerInfo.text('');
+            return;
+        }
+        const agg = aggregateUsageStatsForPeriod(cache, fromYmd, toYmd);
+        agg.rows.sort((a, b) => sortBy === 'toks' ? (b.toks - a.toks) : (b.msgs - a.msgs));
+        const leader = agg.rows[0];
+        const cardCss = 'padding:9px 11px; border-radius:9px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.14)); background:rgba(0,0,0,0.18);';
+        kpiHost.append(
+            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Всего сообщений</div><div style="font-size:1.35em; font-weight:700;">${fmtCompactNum(agg.totalMsgs)}</div><div style="font-size:0.76em; opacity:0.78;">твоих ${fmtCompactNum(agg.totalUserMsgs)} • ботов ${fmtCompactNum(agg.totalBotMsgs)}</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Токенов в текстах</div><div style="font-size:1.35em; font-weight:700;">${fmtCompactNum(agg.totalToks)}</div><div style="font-size:0.76em; opacity:0.78;">твоих ${fmtCompactNum(agg.totalUserToks)} • ботов ${fmtCompactNum(agg.totalBotToks)}</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Активных ботов</div><div style="font-size:1.35em; font-weight:700;">${agg.rows.length}</div><div style="font-size:0.76em; opacity:0.78;">за выбранный период</div></div>`,
+            `<div style="${cardCss}"><div style="font-size:0.78em; opacity:0.75;">Фаворит периода</div><div style="font-size:1.05em; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${leader ? escapeHtml(leader.name) : '—'}</div><div style="font-size:0.76em; opacity:0.78;">${leader ? `${fmtCompactNum(leader.msgs)} соо • ${fmtCompactNum(leader.toks)} ток.` : 'нет данных'}</div></div>`,
+        );
+
+        if (!agg.rows.length) {
+            listHost.html('<div class="nnb-empty">За выбранный период сообщений не найдено. Попробуй расширить даты или выбрать «Всё время».</div>');
+        } else {
+            const maxVal = Math.max(1, ...agg.rows.map(r => sortBy === 'toks' ? r.toks : r.msgs));
+            agg.rows.forEach((r, idx) => {
+                const pct = Math.max(3, Math.round(((sortBy === 'toks' ? r.toks : r.msgs) / maxVal) * 100));
+                const share = agg.totalMsgs ? Math.round((r.msgs / agg.totalMsgs) * 100) : 0;
+                const avUrl = r.avatar ? `/characters/${encodeURIComponent(r.avatar)}` : '';
+                const avHtml = avUrl
+                    ? `<img src="${avUrl}" style="width:40px; height:40px; border-radius:50%; object-fit:cover; flex-shrink:0; border:1px solid var(--SmartThemeBorderColor);" onerror="this.style.display='none'">`
+                    : `<div style="width:40px; height:40px; border-radius:50%; background:rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-weight:700;">${idx + 1}</div>`;
+                const row = $(`
+                    <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:9px; border:1px solid var(--SmartThemeBorderColor, rgba(255,255,255,0.12)); background:rgba(0,0,0,0.14);">
+                        <div style="width:20px; text-align:center; font-weight:700; opacity:0.7; font-size:0.88em;">#${idx + 1}</div>
+                        ${avHtml}
+                        <div style="flex:1; min-width:0;">
+                            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                                <b style="font-size:0.95em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(r.name)}</b>
+                                <span style="font-size:0.82em; opacity:0.88;"><b>${fmtCompactNum(r.msgs)}</b> соо (${share}%) • <b>${fmtCompactNum(r.toks)}</b> ток.</span>
+                            </div>
+                            <div style="height:6px; border-radius:4px; background:rgba(255,255,255,0.09); margin:5px 0 4px 0; overflow:hidden;">
+                                <div style="height:100%; width:${pct}%; border-radius:4px; background:var(--SmartThemeQuoteColor, #e0c068);"></div>
+                            </div>
+                            <div style="font-size:0.75em; opacity:0.72;">твоих: ${fmtCompactNum(r.u)} (${fmtCompactNum(r.ut)} ток.) • от бота: ${fmtCompactNum(r.b)} (${fmtCompactNum(r.bt)} ток.) • чатов: ${r.chats}</div>
+                        </div>
+                    </div>
+                `);
+                listHost.append(row);
+            });
+        }
+        const upd = cache.updatedAt ? new Date(cache.updatedAt).toLocaleString('ru-RU') : 'только живые счётчики';
+        footerInfo.text(`Последний полный пересчёт: ${upd}. Токены берутся из метаданных Таверны или оцениваются по длине русских/английских текстов.`);
+    };
+
+    let scanning = false;
+    const runScan = async () => {
+        if (scanning) return;
+        scanning = true;
+        scanBtn.css('opacity', '0.55');
+        progressLine.show().text('⏳ Сканирую чаты персонажей…');
+        try {
+            cache = await scanAllChatsUsageStats((cur, tot, name) => {
+                progressLine.text(`⏳ Сканирую ботов: ${cur} / ${tot} — ${name}…`);
+            });
+            progressLine.hide();
+            renderStatsView();
+        } catch (e) {
+            progressLine.text(`Ошибка сканирования: ${e?.message || e}`);
+        } finally {
+            scanning = false;
+            scanBtn.css('opacity', '1');
+        }
+    };
+    scanBtn.on('click', runScan);
+
+    controls.append(presetsRow, dateRow);
+    el.append(controls, progressLine, kpiHost, listHost, footerInfo);
+    applyPreset('all');
+    if (!cache || !cache.updatedAt) {
+        setTimeout(runScan, 120);
+    }
+    await ctx().callGenericPopup(el, ctx().POPUP_TYPE.TEXT, '', { wide: true, large: true, okButton: 'Закрыть' });
+}
+
 function addMenuItems() {
     const menu = $('#extensionsMenu');
     if (!menu.length) return;
@@ -20612,6 +21054,7 @@ function addMenuItems() {
         const item = (id, icon, text, fn) => $(`<div id="${id}" class="list-group-item flex-container flexGap5 interactable" tabindex="0"><div class="fa-solid ${icon} extensionsMenuExtensionButton"></div><span></span></div>`)
             .find('span').text(text).end().on('click', fn);
         menu.append(item('nnb_menu_book', 'fa-book-open', 'Блокнот рассказчика', () => openBook()));
+        menu.append(item('nnb_menu_stats', 'fa-chart-column', 'Статистика: боты, соо и токены', () => openUsageStatsModal()));
         menu.append(item('nnb_menu_turbo', 'fa-bolt', 'Ускорение Таверны (Турбо-режим чата)', () => openChatTurboSettingsPopup()));
         menu.append(item('nnb_menu_migrate', 'fa-suitcase-rolling', 'Переезд в новый чат (саммари + блокнот)', () => openChatMigrationModal()));
         menu.append(item('nnb_menu_world', 'fa-earth-americas', 'Мир и карточка героини', () => openWorldOverviewOrCreator()));
@@ -20665,6 +21108,7 @@ jQuery(async () => {
     $('#extensions_settings2').append(PANEL_HTML);
     $('body').append(BOOK_HTML);
     $('#nnb_open_book').on('click', () => { try { openBook(); } catch (e) { console.error('[npc_notebook] open', e); toastr.error(escapeHtml(e?.message || e), 'Блокнот не открылся', { escapeHtml: false }); } });
+    $('#nnb_open_stats').on('click', () => { try { openUsageStatsModal(); } catch (e) { console.error('[npc_notebook] stats', e); } });
     bindBook();
     $(document).on('keydown', e => { if (e.key === 'Escape' && $('#nnb_book').is(':visible') && !$('dialog[open]').length) closeBook(); });
 
@@ -20700,7 +21144,7 @@ jQuery(async () => {
     });
     try {
         const chatEl = document.getElementById('chat');
-        if (chatEl) new MutationObserver(placeMesButtonsSoon).observe(chatEl, { childList: true });
+        if (chatEl) new MutationObserver(() => { placeMesButtonsSoon(); renderWelcomeUsageWidgetSoon(); }).observe(chatEl, { childList: true });
     } catch (e) { /* ignore */ }
     bind('nnb_ward_img', 'wardrobeImages', 'checkbox');
     bind('nnb_img_ref', 'imageRef', 'checkbox');
@@ -21062,7 +21506,7 @@ jQuery(async () => {
     });
 
     const ev = c.event_types;
-    c.eventSource.on(ev.MESSAGE_RECEIVED, onMessageReceived);
+    c.eventSource.on(ev.MESSAGE_RECEIVED, () => { recordLiveUsageMessage(false); onMessageReceived(); });
     for (const e of [ev.MESSAGE_SENT, ev.CHAT_CHANGED, ev.MESSAGE_DELETED]) {
         if (e) c.eventSource.on(e, () => { updateInjection(); renderPanel(); });
     }
@@ -21080,7 +21524,7 @@ jQuery(async () => {
         if (ev[e]) c.eventSource.on(ev[e], placeMesButtonsSoon);
     }
     c.eventSource.on(ev.CHAT_CHANGED, clearFastForward);
-    if (ev.MESSAGE_SENT) c.eventSource.on(ev.MESSAGE_SENT, onMessageSentHint);
+    if (ev.MESSAGE_SENT) c.eventSource.on(ev.MESSAGE_SENT, () => { recordLiveUsageMessage(true); onMessageSentHint(); });
     // Промпт сцены (тренд, переход по карте, перемотка) сохраняется при остановке и реролле до следующего хода игрока
     if (ev.CHAT_COMPLETION_PROMPT_READY) c.eventSource.on(ev.CHAT_COMPLETION_PROMPT_READY, fixOwnPromptRole);
 
@@ -21088,5 +21532,6 @@ jQuery(async () => {
     renderPanel();
     renderDirection();
     placeMesButtons();
+    renderWelcomeUsageWidgetSoon();
     scheduleAutoChatImageOptimization();
 });
