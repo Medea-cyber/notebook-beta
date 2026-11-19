@@ -8227,9 +8227,20 @@ function parseCanonFromAppearance(appEn) {
 }
 function guessCardGender(n, canon) {
     if (canon?.gender) return canon.gender;
-    const t = `${n?.card || ''} ${n?.status || ''}`.toLowerCase();
+    let t = `${n?.card || ''} ${n?.status || ''}`.toLowerCase();
+    if (n?.isMainChar) {
+        try {
+            const c = ctx();
+            const d = c.characterId !== undefined ? c.characters?.[c.characterId]?.description : '';
+            if (d) t += ' ' + String(c.substituteParams(String(d))).toLowerCase().slice(0, 3000);
+        } catch (e) { /* ignore */ }
+    }
+    const he = (t.match(/(?:^|[^а-яё])(?:он|его|ему|ним|сам)(?=[^а-яё]|$)/g) || []).length;
+    const she = (t.match(/(?:^|[^а-яё])(?:она|её|ее|ей|ней|сама)(?=[^а-яё]|$)/g) || []).length;
     if (/\b(мужчин|парен|юнош|муж\b|отец|брат|сын)/.test(t)) return 'boy';
     if (/\b(женщин|девушк|девочк|жена|мать|сестр|дочь)/.test(t)) return 'girl';
+    if (he >= 2 && he >= she * 2) return 'boy';
+    if (she >= 2 && she >= he * 2) return 'girl';
     return '';
 }
 // Канон-теги героев, которые реально в сцене, — прямо из их карточек (не ждём, пока модель сама их напишет)
@@ -8273,7 +8284,7 @@ function canonCandidatesFromCards(st, cast, sceneText) {
         const present = castNorm.some(c => c.includes(nm) || nm.includes(c)) || (sceneText && isNameMentionedInText(n.name, sceneText));
         if (!present) continue;
         const g = guessCardGender(n, canon);
-        if (!g) continue;
+        if (!g) { try { logImageDiag(`Страж внешности: у «${n.name}» есть канон-тег, но не понятен пол — добавь в его теги 1boy или 1girl`); } catch (e) { /* ignore */ } continue; }
         const sig = String(n.appearanceEn).split(',').map(t => t.trim().toLowerCase()).filter(t => t && !NNB_GENERIC_APPEAR_TOK_RE.test(t)
             && t !== canon.name.toLowerCase() && t !== canon.series.toLowerCase() && t !== canon.tag.toLowerCase());
         out[g].push({ name: n.name, tag: canon.tag, core: canon.name, sig });
@@ -10436,6 +10447,14 @@ async function rerollSpecificManhwaPageInPlace(mesId, sceneMeta, targetUrl, rege
                 chunkTotal: chunks.length || 1,
                 chunkText: chObj ? chObj.text : '',
             };
+            // старые «канон главы» и паспорт сохранены вместе со страницей — если та страница была ошибочной, они повторяют ошибку
+            delete freshOpts.chapterCanonByGender;
+            if (freshOpts.chapterCharPassport) {
+                const stR = store();
+                freshOpts.chapterCharPassport = stripAbsentCardCanons(String(freshOpts.chapterCharPassport), stR, [], freshOpts.chunkText || '');
+                if (pageNum === 1) delete freshOpts.chapterCharPassport; // паспорт и есть промпт этой самой страницы
+            }
+            logImageDiag(`Новый промпт по кусочку #${(freshOpts.chunkIndex || 0) + 1}: старый канон главы сброшен, паспорт ${freshOpts.chapterCharPassport ? 'очищен' : 'не используется'}`);
             res = await drawScene(null, mesId, sceneMeta.camMode || 'third', null, sceneMeta.cast?.filter(x => x !== '__none__') || null, '', freshOpts);
         } else {
             const reusePageObj = {
