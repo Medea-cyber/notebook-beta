@@ -656,7 +656,10 @@ const GENRE_HINTS = {
   }
   function chronicleLines(st, count) {
       const today = st.time.date;
-      return timeline(st).slice(-count).map(e => `— ${formatDate(e.date, false)}${today ? ` (${agoText(daysBetween(e.date, today))})` : ''}: ${e.text}`);
+      return timeline(st).slice(-count).map(e => {
+          const wd = weekday(e.date).toLowerCase();
+          return `— ${formatDate(e.date, false)}, ${wd}${today ? ` (${agoText(daysBetween(e.date, today))})` : ''}: ${e.text}`;
+      });
   }
 
   // Шапка для обычных ответов
@@ -677,7 +680,7 @@ const GENRE_HINTS = {
               lines.push('Праздники и события рядом (персонажи о них знают; разыгрывать не обязательно, но игнорировать странно):');
               up.slice(0, 2).forEach(h => lines.push(holidayLine(h, t.date)));
           }
-          const chron = chronicleLines(st, 4);
+          const chron = chronicleLines(st, 12);
           if (chron.length) {
               lines.push('Хроника — когда что произошло (держись этих сроков; не путай «на прошлой неделе» и «месяц назад»):');
               chron.forEach(l => lines.push(l));
@@ -2407,24 +2410,19 @@ async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, lab
         ? [
             () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
             () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
-            () => svc.sendRequest(pid, fullPrompt, maxTokens),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
+            () => svc.sendRequest(pid, singleUserMsgs, maxTokens),
         ]
         : [
             () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
-            () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
             () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: false, includePreset: firstPresetFlag }),
             () => svc.sendRequest(pid, singleUserMsgs, maxTokens),
-            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
-            () => svc.sendRequest(pid, fullPrompt, maxTokens),
         ];
 
+    const attemptTimeoutMs = maxTokens >= 4096 || String(fullPrompt || '').length > 20000 ? 110000 : 75000;
     let lastErr = null;
     for (const runAttempt of attempts) {
         try {
-            const raw = await withTimeout(runAttempt(), 75000, label);
+            const raw = await withTimeout(runAttempt(), attemptTimeoutMs, label);
             const txt = extractTextFromApiResult(raw);
             if (txt && String(txt).trim()) {
                 return String(txt).trim();
@@ -2491,6 +2489,7 @@ async function generateViaStandaloneTextSource(taskPrompt) {
     const src = String(s.textSource || '').trim();
     if (!src) return null;
 
+    const isSelfContained = String(taskPrompt || '').includes(SELF_CONTAINED_PROMPT_MARKER);
     const fullPrompt = buildStandaloneContextPrompt(taskPrompt);
 
     if (src === 'custom-api') {
@@ -2516,7 +2515,7 @@ async function generateViaStandaloneTextSource(taskPrompt) {
                 max_tokens: 4096,
                 temperature: 0.7,
             }),
-        }), 75000, `быстрое подключение блокнота (${model})`);
+        }), (isSelfContained || fullPrompt.length > 20000 ? 110000 : 75000), `быстрое подключение блокнота (${model})`);
         const text = await res.text();
         let json = null;
         try { json = JSON.parse(text); } catch (e) { /* ignore */ }
@@ -2527,7 +2526,8 @@ async function generateViaStandaloneTextSource(taskPrompt) {
     }
 
     // Профиль подключения Таверны (ConnectionManagerRequestService)
-    return await sendViaTavernProfile(src, fullPrompt, 4096, 'профиль подключения блокнота');
+    // Для самодостаточных задач (саммари переезда, дневники и т.д.) отключаем пресет чата, чтобы не раздувать промпт и не ловить таймауты
+    return await sendViaTavernProfile(src, fullPrompt, 4096, 'профиль подключения блокнота', '', isSelfContained);
 }
 
 let ownPromptIsSelfContained = false;
@@ -2555,10 +2555,11 @@ async function quietGenerateOnce(prompt) {
                 toastr.warning(`Отдельное подключение блокнота не ответило (${escapeHtml(standaloneErr?.message || standaloneErr)}) — использую основное подключение чата.`, '⚡ Подключение блокнота', { escapeHtml: false, timeOut: 7000 });
             }
         }
+        const mainChatTimeoutMs = cleanPromptForChat.length > 20000 ? 150000 : 120000;
         if (fn.length === 0) {
-            return await fn({ quietPrompt: cleanPromptForChat });
+            return await withTimeout(fn({ quietPrompt: cleanPromptForChat }), mainChatTimeoutMs, 'основное подключение чата');
         }
-        return await fn(cleanPromptForChat, false, false);
+        return await withTimeout(fn(cleanPromptForChat, false, false), mainChatTimeoutMs, 'основное подключение чата');
     } finally {
         ownRequest = false;
         ownPrompt = '';
@@ -7318,7 +7319,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     const hasSpecificChunk = !!(comicOpts?.enabled && comicOpts?.chunkText && String(comicOpts.chunkText).trim());
     const activeSceneSeg = hasSpecificChunk ? getActiveSceneSegmentFromFullPost(comicOpts.chunkText, rawTargetMes) : { sceneText: fullTargetText, sceneHeader: '', sceneIndex: 0 };
     const chunkHeaderNote = hasSpecificChunk
-        ? `[Контекст текущей сцены поста (для точного понимания текущей локации и во что одеты герои в этой сцене — например, если ниже в этом же абзаце сказано, что на герое кардиган или изумрудная юбка, рисуй именно эту одежду с первого же кадра!): «${(activeSceneSeg.sceneHeader ? activeSceneSeg.sceneHeader + ' ' : '') + (activeSceneSeg.sceneText || fullTargetText).slice(0, 620)}»]\n\n` +
+        ? `[Контекст текущей сцены поста (для точного понимания локации, имён всех вошедших героев, их звериных черт — ушек/хвоста пумы/кота/пса — и одежды на протяжении всей сцены): «${(activeSceneSeg.sceneHeader ? activeSceneSeg.sceneHeader + ' ' : '') + (activeSceneSeg.sceneText || fullTargetText).slice(0, 2600)}»]\n\n` +
           `[🎯 ЦЕЛЕВОЙ КУСОЧЕК ПОСТА ДЛЯ ЭТОЙ СТРАНИЦЫ МАНХВЫ (СТРАНИЦА ${(Number(comicOpts.chunkIndex) || 0) + 1} ИЗ ${Number(comicOpts.chunkTotal) || 1}) — СТРОЙ ВСЕ ФРЕЙМЫ (PANEL1..PANEL${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) И БЕРИ ВСЕ РЕПЛИКИ (QUOTE1..QUOTE${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) ИСКЛЮЧИТЕЛЬНО ИЗ ЭТОГО КУСОЧКА ТЕКСТА!]:\n` +
           `${targetPostMsg?.is_user ? names.user : (targetPostMsg?.name || names.char)}: «${String(comicOpts.chunkText).trim()}»`
         : (targetPostMsg
@@ -9772,13 +9773,24 @@ async function showScenePopup(mesId, forceAsk = false) {
                 if (pageRes?.url) {
                     if (pageRes.sceneMeta) {
                         pageRes.sceneMeta.inlineViewMode = 'vertical';
+                        const caps = Array.isArray(pageRes.sceneMeta.charCaptions) ? pageRes.sceneMeta.charCaptions : [];
+                        const p1 = pageRes.sceneMeta.panelPrompts?.[0] || pageRes.sceneMeta.desc || '';
+                        const hasNewBoy = /\b1boy\b/i.test(p1) && !/\b1boy\b/i.test(chapterPassport);
+                        const hasNewGirl = /\b1girl\b/i.test(p1) && !/\b1girl\b/i.test(chapterPassport);
+                        const hasNewTail = /\b(?:puma|cougar|cat|dog|wolf|fox|lion|animal)_?\s*tail\b/i.test(p1) && !/\b(?:puma|cougar|cat|dog|wolf|fox|lion|animal)_?\s*tail\b/i.test(chapterPassport);
                         if (!chapterPassport) {
-                            const caps = Array.isArray(pageRes.sceneMeta.charCaptions) ? pageRes.sceneMeta.charCaptions : [];
-                            const p1 = pageRes.sceneMeta.panelPrompts?.[0] || pageRes.sceneMeta.desc || '';
                             chapterPassport = [
                                 caps.length ? caps.map((c, idx) => `CHAR${idx + 1}: ${c}`).join('\n') : '',
                                 p1 ? `Образец одежды и внешности из 1-й страницы этой сцены: ${p1}` : '',
+                            ].filter(Boolean).join('\n').slice(0, 1800);
+                        } else if ((hasNewBoy || hasNewGirl || hasNewTail) && chapterPassport.length < 1800) {
+                            const extraSample = [
+                                caps.length ? caps.map((c, idx) => `CHAR${idx + 1}: ${c}`).join('\n') : '',
+                                p1 ? `Дополнение внешности нового участника со страницы ${i + 1}: ${p1}` : '',
                             ].filter(Boolean).join('\n');
+                            if (extraSample) {
+                                chapterPassport = (chapterPassport + '\n' + extraSample).slice(0, 2200);
+                            }
                         }
                     }
                     completedPages.push(pageRes);
@@ -17993,11 +18005,13 @@ async function generateMigrationStorySummary(st) {
     let recentCount = Math.min(total, 24);
     if (st.time?.dayStartedAtMsg && st.time.dayStartedAtMsg > 0 && st.time.dayStartedAtMsg < total) {
         const sinceDayStart = total - st.time.dayStartedAtMsg + 2;
-        if (sinceDayStart > recentCount && sinceDayStart <= 84) {
+        if (sinceDayStart > recentCount && sinceDayStart <= 54) {
             recentCount = Math.min(total, sinceDayStart);
+        } else if (sinceDayStart > 54) {
+            recentCount = Math.min(total, 54);
         }
     } else {
-        while (recentCount < total && recentCount < 84) {
+        while (recentCount < total && recentCount < 54) {
             const startIdx = total - recentCount;
             const checkWindow = chat.slice(startIdx, Math.min(total, startIdx + 10));
             const foundDayStart = checkWindow.some(m => DAY_BOUNDARY_RE.test(String(m?.mes || '')));
@@ -18005,9 +18019,15 @@ async function generateMigrationStorySummary(st) {
             recentCount = Math.min(total, recentCount + 10);
         }
     }
-    const perPostMaxLen = recentCount > 45 ? 520 : 680;
-    const latestSlice = chat.slice(-recentCount).map((m, i) => fmtMsg(m, total - recentCount + i, perPostMaxLen));
+    const perPostMaxLen = recentCount > 36 ? 400 : 560;
+    const recentMsgs = chat.slice(-recentCount);
+    const latestSlice = recentMsgs.map((m, i) => {
+        const fromEnd = recentMsgs.length - 1 - i;
+        const limit = fromEnd === 0 ? 3500 : (fromEnd === 1 ? 1800 : perPostMaxLen);
+        return fmtMsg(m, total - recentCount + i, limit);
+    });
     latestDayDigest = latestSlice.join('\n\n');
+    const lastPostFull = recentMsgs.length ? fmtMsg(recentMsgs[recentMsgs.length - 1], total - 1, 3500) : '';
 
     if (total > recentCount) {
         const midEnd = total - recentCount;
@@ -18031,7 +18051,10 @@ async function generateMigrationStorySummary(st) {
     const archiveLines = (st.archive || []).filter(a => a.status === 'done').map(a => `• ${a.tag ? `[${a.tag}] ` : ''}${a.text}`).join('\n');
     const evolvedLines = (st.evolved || []).map(ev => `• ${ev.who}: ${ev.text}`).join('\n');
     const activeNotesLines = (st.notes || []).map(n => `• ${n.tag ? `[${n.tag}] ` : ''}${n.text}`).join('\n');
-    const intriguesLines = (st.intrigues || []).map(it => `• Тайна «${it.text}»${(it.clues || []).length ? ` (улики: ${it.clues.join('; ')})` : ''}`).join('\n');
+    const intriguesLines = (st.intrigues || []).map(it => {
+        const cluesTxt = (it.clues || []).map(cl => (typeof cl === 'string' ? cl : (cl?.text || ''))).filter(Boolean).join('; ');
+        return `• Тайна «${it.text}»${cluesTxt ? ` (улики: ${cluesTxt})` : ''}`;
+    }).join('\n');
 
     const prevSum = st?.storySummary ? `[Предыдущая сводка прошлых глав (обязательно сохрани важные факты из неё!)]:\n${st.storySummary}\n\n` : '';
     const npcInfo = formatNpcs(st.npcs || [], false, st);
@@ -18068,6 +18091,9 @@ ${intriguesLines}
 ${earlierDigest ? `\n${earlierDigest}\n` : ''}
 === КУЛЬМИНАЦИЯ И ВСЕ СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}, последние посты ${total - recentCount + 1}–${total} из ${total}) — ПРОЧИТАЙ ВНИМАТЕЛЬНО И ОБЯЗАТЕЛЬНО ПОДРОБНО ОПИШИ В РАЗДЕЛЕ 2 И 4! ===
 ${latestDayDigest}
+${lastPostFull ? `
+=== САМЫЙ ПОСЛЕДНИЙ ПОСТ СЦЕНЫ (ФИНАЛЬНАЯ ТОЧКА — ОБЯЗАТЕЛЬНО ВКЛЮЧИ ЕГО СОБЫТИЯ, РЕПЛИКИ И КОНЦОВКУ В РАЗДЕЛЫ 2 И 4!) ===
+${lastPostFull}` : ''}
 
 Напиши подробную летопись в 4 развёрнутых разделах (перечисляй конкретные сцены, диалоги, поступки, подарки, споры, примирения и важные детали без пропусков):
 1. ЗАВЯЗКА И ПРЕДЫДУЩИЕ ДНИ ИСТОРИИ: с чего всё началось и какие ключевые события, поездки, встречи и повороты произошли в предыдущие дни ролевой.
@@ -18075,8 +18101,13 @@ ${latestDayDigest}
 3. ОТНОШЕНИЯ ГЕРОЕВ И КАНОНИЧНЫЕ ДЕТАЛИ: что сейчас между ${names.user}, ${names.char} и каждым важным NPC, какие есть общие секреты, договорённости, подарки и привычки.
 4. ТОЧКА ОСТАНОВКИ (ПРЯМО СЕЙЧАС): точная дата (${curDateStr}), локация, обстановка, во что одеты герои и на какой именно реплике или действии остановилась самая последняя сцена.]`;
 
-    const res = await withBusy(`📝 Модель составляет полную летопись всех ${total} сообщений (включая последний день)…`, () => quietGenerate(prompt));
-    return stripActionTags(cleanAnswer(res || '')).trim();
+    startBackgroundGenerationKeepAlive();
+    try {
+        const res = await withBusy(`📝 Модель составляет полную летопись всех ${total} сообщений (включая последний день)…`, () => quietGenerate(prompt));
+        return stripActionTags(cleanAnswer(res || '')).trim();
+    } finally {
+        stopBackgroundGenerationKeepAlive();
+    }
 }
 
 async function applyMigrationPackageToCurrentChat(pkg, insertBridgeMessage = true) {
@@ -18164,7 +18195,11 @@ async function openChatMigrationModal() {
                 st.storySummary = generated;
                 await commit();
                 toastr.success('Саммари истории готово! Можешь проверить или дополнить текст.', '📝 Саммари');
+            } else {
+                toastr.warning('Модель вернула пустое саммари — попробуй ещё раз.', '📝 Саммари');
             }
+        } catch (err) {
+            toastr.error(`Не удалось составить саммари: ${escapeHtml(err?.message || err)}`, '📝 Саммари', { escapeHtml: false, timeOut: 8000 });
         } finally {
             btn.css({ opacity: 1, pointerEvents: 'auto' }).html('<i class="fa-solid fa-wand-magic-sparkles"></i> ✨ Сгенерировать саммари по текущему чату');
         }
