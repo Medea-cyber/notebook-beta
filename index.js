@@ -1965,7 +1965,7 @@ function formatNpcScaleSummary(n) {
     return parts.join(' ');
 }
 
-function formatNpcs(list, forThink = false, st = store()) {
+function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
     const all = [];
     if (st) {
         const mc = ensureMainCharCard(st);
@@ -2012,6 +2012,14 @@ function formatNpcs(list, forThink = false, st = store()) {
         }
     }
 
+    if (mode === 'active') {
+        return fullLines.join('\n');
+    }
+    if (mode === 'sleeping') {
+        return sleepingLines.length
+            ? `[Второстепенные знакомые за кадром (сейчас не в сцене — справочник; не путай их внешность с героями в текущей сцене):\n${sleepingLines.join('\n')}]`
+            : '';
+    }
     if (sleepingLines.length) {
         fullLines.push(`\n[Второстепенные знакомые за кадром (сейчас не в сцене — краткая справка):\n${sleepingLines.join('\n')}]`);
     }
@@ -2264,13 +2272,20 @@ ${st.storySummary.trim()}]`
 
     if (s.tokenSaverMode !== false) {
         // 💎 РЕЖИМ ЭКОНОМИИ ТОКЕНОВ БЕЗ ПОТЕРИ ВНИМАНИЯ МОДЕЛИ:
-        // 1) Только неизменяемое «📜 Саммари прошлых глав» (события ДО начала текущего чата) ставится в хронологическое начало чата (depth = 999),
-        //    где оно не двигается при новых постах и кэшируется на 100%!
-        // 2) Все активные механики сюжета (Мир, Тренды, Сны, Арки, Тайны, Заявленные линии, Время, Локация, Наряд, Герои, Связи и Задумки)
-        //    остаются на рабочей глубине s.depth у конца чата, чтобы модель держала их в полном фокусе и ничего не забывала!
+        // 1) Стабильная база (Саммари прошлых глав, связи между персонажами и «спящие» НПС за кадром) ставится в начало чата (depth = 999),
+        //    где она попадает в prompt cache и не смешивается с активными героями в текущей комнате!
+        // 2) Активный фокус сцены (Время, Локация, Наряд, Герои в сцене, Арки, Задумки, Интриги) остаётся на рабочей глубине s.depth у конца чата.
+        const staticBlocks = [];
+        if (summaryBlock) staticBlocks.push(summaryBlock);
+        if (showNpcs) {
+            const sleepingBlock = formatNpcs(st.npcs, false, st, 'sleeping');
+            if (sleepingBlock) staticBlocks.push(sleepingBlock);
+        }
+        if (showRels) staticBlocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
+
         c.setExtensionPrompt(
             INJECT_STATIC_KEY,
-            summaryBlock || '',
+            staticBlocks.join('\n\n'),
             POS_IN_CHAT,
             999,
             false,
@@ -2282,8 +2297,10 @@ ${st.storySummary.trim()}]`
         if (livingBlock) dynamicBlocks.push(livingBlock);
         if (wardBlock) dynamicBlocks.push(wardBlock);
         if (linesBlock) dynamicBlocks.push(linesBlock);
-        if (showNpcs) dynamicBlocks.push(NPC_INJECT_HEADER + '\n' + formatNpcs(st.npcs, false, st));
-        if (showRels) dynamicBlocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
+        if (showNpcs) {
+            const activeNpcsStr = formatNpcs(st.npcs, false, st, 'active');
+            if (activeNpcsStr) dynamicBlocks.push(NPC_INJECT_HEADER + '\n' + activeNpcsStr);
+        }
         if (showArcs) dynamicBlocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
         if (st.notes.length) dynamicBlocks.push(fillTemplate(s.injectPrompt, st.notes));
         if (showIntrigues) dynamicBlocks.push(INTRIGUE_INJECT_HEADER + '\n' + formatIntrigues(st.intrigues));
@@ -2663,7 +2680,8 @@ ${writerNote}]
         : '';
     // НЕ вызываем buildStandaloneContextPrompt (чтобы в GLM не попадали ch.personality, ch.scenario и 25 постов гротескной комедии)!
     // Внутри taskPrompt уже есть чистые блоки внешности, OLDBlock и текущая сцена.
-    const fullPrompt = writerBlock + ctx().substituteParams(String(taskPrompt || ''));
+    const userOnlyPrompt = ctx().substituteParams(String(taskPrompt || ''));
+    const fullPrompt = writerBlock + userOnlyPrompt;
 
     if (src === 'custom-api') {
         let base = String(s.imgPromptApiBase || 'https://open.bigmodel.cn/api/paas/v4').trim().replace(/\/+$/, '');
@@ -2680,7 +2698,7 @@ ${writerNote}]
         if (writerNote) {
             messages.push({ role: 'system', content: writerNote });
         }
-        messages.push({ role: 'user', content: fullPrompt });
+        messages.push({ role: 'user', content: writerNote ? userOnlyPrompt : fullPrompt });
         return await withSharedKeyRetry(async () => {
             const res = await withTimeout(imagesFetch(endpoint, {
                 method: 'POST',
@@ -2710,7 +2728,7 @@ ${writerNote}]
     }
 
     return await withSharedKeyRetry(
-        () => sendViaTavernProfile(src, fullPrompt, 4096, 'профиль модели для промптов картинок', writerNote, true),
+        () => sendViaTavernProfile(src, writerNote ? userOnlyPrompt : fullPrompt, 4096, 'профиль модели для промптов картинок', writerNote, true),
         'профиль промптов раскадровки',
         5,
         4000
@@ -3771,6 +3789,56 @@ ${rosterBrief}
         `В следующем посте будет показано, что сейчас происходит за кадром у: <b>${targetList.slice(0, 8).map(h => escapeHtml(h.name)).join(', ')}</b>`,
         '🎬 За кадром',
         { escapeHtml: false, timeOut: 6500 }
+    );
+    const send = $('#send_but');
+    if (send.length) send.trigger('click');
+    else if (typeof c.generate === 'function') c.generate('normal');
+}
+
+async function nextDayWithDivination() {
+    const s = settings();
+    if (!s.enabled) return toastr.info('Блокнот выключен', 'Блокнот рассказчика');
+    const c = ctx();
+    const st = store();
+    if (!st || !c.chat?.length) return toastr.warning('Сначала открой чат', '🔮 Новый день + гадание');
+
+    const mc = ensureMainCharCard(st);
+    const allHeroes = [...(mc ? [mc] : []), ...(st.npcs || [])].filter(h => h && h.name);
+    const oracleCard = allHeroes.find(h => /этель/i.test(h.name))
+        || allHeroes.find(h => /(?:гадалка|таро|прорицател)/i.test(`${h.card || ''} ${h.status || ''}`));
+    const oracleName = oracleCard ? oracleCard.name : 'Этель';
+    const otherHeroes = allHeroes.filter(h => h.name.toLowerCase() !== oracleName.toLowerCase());
+    const rosterBrief = otherHeroes.slice(0, 10).map(h => {
+        const stPart = h.status ? ` (${h.status})` : '';
+        return `• ${h.name}${stPart}`;
+    }).join('\n');
+
+    let nextDayLabel = '';
+    if (st.direction.time && st.time?.date) {
+        st.time.date = addDays(st.time.date, 1);
+        st.time.dayStartedAtMsg = c.chat.length;
+        if (s.events) {
+            try { await holidayStep(st); } catch (e) { /* ignore */ }
+        }
+        nextDayLabel = `${weekday(st.time.date)}, ${formatDate(st.time.date)}`;
+        save();
+        updateInjection();
+    }
+
+    const whenStr = nextDayLabel ? ` Наступает новый день: ${nextDayLabel}.` : '';
+    const promptText = `${FF_MARKER} игрок нажал кнопку «🔮 Новый день + гадание». Переходим к следующему дню.${whenStr}
+Но перед переходом к основной сцене нового дня обязательно вставь гадание от ${oracleName} (на картах Таро / расклад):
+1) Одно развёрнутое гадание побольше — на главное событие, которое является самым интересным и интригующим из того, что ты можешь придумать для сюжета (подано именно как образное гадание с картами и намёками, а не сухой пересказ).
+2) Коротко по остальным персонажам — по 1–2 предложения на каждого в формате гадания${rosterBrief ? `:\n${rosterBrief}` : '.'}
+После гадания плавно переходи к следующему дню${nextDayLabel ? ` (${nextDayLabel})` : ''}. Пиши художественно, как обычный пост ролевой, не упоминай кнопку или перемотку.]`;
+
+    setSceneAdvancePrompt(promptText);
+    toastr.info(
+        nextDayLabel
+            ? `📅 Переходим к <b>${escapeHtml(nextDayLabel)}</b> с гаданием от ${escapeHtml(oracleName)}`
+            : `Переходим к следующему дню с гаданием от ${escapeHtml(oracleName)}`,
+        '🔮 Новый день + гадание',
+        { escapeHtml: false, timeOut: 6000 }
     );
     const send = $('#send_but');
     if (send.length) send.trigger('click');
@@ -7389,19 +7457,35 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
             ? `— ${mcCardObj?.name || names.char} (главный персонаж — КАНОНИЧНЫЙ: в каждом кадре и CHAR-слоте с ним ОБЯЗАТЕЛЬНО пиши его каноничный тег Danbooru ТОЧНО как здесь: "${parseCanonFromAppearance(mcCardObj.appearanceEn).tag}" и дальше его теги "${mcCardObj.appearanceEn}"; НЕ заменяй канон описанием похожей внешности!): ${mcAppParts}`
             : `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}`)
         : `— ${mcCardObj?.name || names.char} (главный персонаж): В ЭТОМ ОТРЫВКЕ ЕГО НЕТ — не рисуй его и НЕ переноси его внешность (цвет волос, глаза, одежду) на других персонажей!`);
-    const allNpcsSorted = [...(st.npcs || [])].sort((a, b) => {
-        const aIn = isNameMentionedInText(a?.name || '', fullTargetText) ? 0 : 1;
-        const bIn = isNameMentionedInText(b?.name || '', fullTargetText) ? 0 : 1;
-        return aIn - bIn;
-    });
-    const npcCardsList = [
-        mcAppLine,
-        ...allNpcsSorted.slice(0, 50).map(n => `— ${n.name}: ${n.appearanceEn ? `[Каноничный тег Danbooru и внешность (ОБЯЗАТЕЛЬНО пиши в промпте "${n.appearanceEn}" вместо "${n.name} (original)"! Каноничный тег пиши ТОЧНО как здесь, со скобками; НЕ добавляй ему цвет волос и глаз, которых нет в этих тегах — их задаёт канон, а не прошлые кадры; НЕ заменяй каноничный тег описанием похожей внешности): ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
-    ].filter(Boolean).join('\n');
-    const npcBlock = npcCardsList ? `Справка по внешности и ролям известных NPC (обязательно используй их описание, если они есть в сцене!):\n${npcCardsList}` : '';
     const effectiveForcedCast = hasSpecificChunk
         ? filterForcedCastForChunk(forcedCast, comicOpts.chunkText, rawTargetMes || fullTargetText)
         : (Array.isArray(forcedCast) ? forcedCast : []);
+    const sceneMatchText = hasSpecificChunk
+        ? `${comicOpts.chunkText || ''}\n${effectiveForcedCast.join(', ')}`
+        : `${fullTargetText}\n${effectiveForcedCast.join(', ')}`;
+    const allNpcsSorted = [...(st.npcs || [])].sort((a, b) => {
+        const aIn = isNameMentionedInText(a?.name || '', sceneMatchText) ? 0 : 1;
+        const bIn = isNameMentionedInText(b?.name || '', sceneMatchText) ? 0 : 1;
+        return aIn - bIn;
+    });
+    // Экономия токенов + защита от путаницы похожих героев (например, двух чёрных деми-котов):
+    // отправляем полные карточки ТОЛЬКО тех NPC, которые упомянуты в текущем посте/куске или в effectiveForcedCast!
+    const sceneRelevantNpcs = allNpcsSorted.filter(n => {
+        const nm = String(n?.name || '').trim();
+        if (!nm) return false;
+        if (effectiveForcedCast.some(fc => isNameMentionedInText(nm, fc) || isNameMentionedInText(fc, nm))) return true;
+        return isNameMentionedInText(nm, sceneMatchText) || (!hasSpecificChunk && isNameMentionedInText(nm, prevContext));
+    });
+    const npcsForPrompt = sceneRelevantNpcs.length ? sceneRelevantNpcs.slice(0, 12) : allNpcsSorted.slice(0, 6);
+    const hasAnyCanonNpc = npcsForPrompt.some(n => !!n.appearanceEn);
+    const canonHeaderHint = hasAnyCanonNpc
+        ? ' (если у героя указаны [Теги: ...], пиши их ТОЧНО как здесь вместо "Имя (original)", не подменяя канон описанием и не додумывая другой цвет волос/глаз!)'
+        : '';
+    const npcCardsList = [
+        mcAppLine,
+        ...npcsForPrompt.map(n => `— ${n.name}: ${n.appearanceEn ? `[Теги: ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
+    ].filter(Boolean).join('\n');
+    const npcBlock = npcCardsList ? `Справка по внешности и ролям персонажей этой сцены${canonHeaderHint}:\n${npcCardsList}` : '';
     const forcedCastLine = Array.isArray(effectiveForcedCast) && effectiveForcedCast.length
         ? `ВАЖНО — АКТИВНЫЕ ПЕРСОНАЖИ, ФИЗИЧЕСКИ НАХОДЯЩИЕСЯ В КОМНАТЕ/СЦЕНЕ В ЭТОМ ОТРЫВКЕ: ${effectiveForcedCast.join(', ')}. Включи ТОЛЬКО физически присутствующих в этот момент (${effectiveForcedCast.length} чел.) в строку CAST и SCENE! Если другие люди упоминаются лишь заочно (на картах Таро, в мыслях, разговорах или ещё не вошли в дверь в этом отрывке) — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО рисовать их в комнате!`
         : '';
@@ -7964,6 +8048,8 @@ function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCapti
     if (!isSoloGirl && !isSoloBoy) return p;
     const hairMatch = p.match(/\b(black|brown|dark|blonde|red|ginger|orange|copper|caramel|auburn|chestnut|ashy|ash|golden|platinum|pink|white|silver|grey|gray)\s+(?:wavy\s+|curly\s+|long\s+|short\s+|straight\s+|messy\s+|leonine\s+)?(?:hair|mane)\b/i);
     const hairColor = hairMatch ? hairMatch[1].toLowerCase() : '';
+    const eyeMatch = p.match(/\b(green|emerald|hazel|amber|brown|blue|grey-blue|red|dark red|crimson|purple|violet|yellow|gold|golden|caramel|grey|gray|black)\s+eyes\b/i);
+    const eyeColor = eyeMatch ? eyeMatch[1].toLowerCase() : '';
     const pAlreadyHasOutfit = /\b(jacket|coat|vest|waistcoat|shirt|blouse|dress|hospital gown|gown|sweater|turtleneck|cardigan|hoodie|suit|blazer|inner top|tank top|t-shirt)\b/i.test(p);
 
     const candidateSegments = sourcePool.split(/\|\||\|/).map(s => s.trim()).filter(Boolean);
@@ -7981,9 +8067,11 @@ function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCapti
             }
             break;
         }
-        // Если на странице 2+ персонажа одного пола и цвет волос в портрете не определился — не копируем чужую одежду!
-        if (!hairColor && sameGenderSegCount >= 2) continue;
+        // Если на странице 2+ персонажа одного пола и не определились ни цвет волос, ни цвет глаз — не копируем чужую одежду!
+        if (!hairColor && !eyeColor && sameGenderSegCount >= 2) continue;
         if (hairColor && !new RegExp(`\\b${hairColor}\\b`, 'i').test(seg)) continue;
+        // Если у сольного героя указан цвет глаз, а в слоте — другой цвет глаз (например, зелёные у Кайлара vs ореховые у Яна), пропускаем чужой слот!
+        if (eyeColor && /\beyes\b/i.test(seg) && !new RegExp(`\\b${eyeColor}\\s+eyes\\b`, 'i').test(seg)) continue;
         // Если у сольного портрета уже описан верх одежды, не доклеиваем чужие пиджаки/галстуки поверх
         if (pAlreadyHasOutfit) continue;
 
@@ -8332,7 +8420,7 @@ function signatureScore(seg, sig) {
     const segToks = String(seg || '').toLowerCase().split(',').map(t => t.trim()).filter(Boolean);
     let score = 0;
     for (const t of sig) {
-        if (segToks.includes(t)) { score += 2; continue; }
+        if (segToks.includes(t)) { score += (/\beyes\b/.test(t) ? 3 : 2); continue; }
         // мягкое совпадение по ключевому слову: «dog ears» ~ «black dog ears», «scar on mouth» ~ «scar on lip»
         const words = t.split(/\s+/).filter(w => w.length >= 4 && !/^(hair|eyes|ears|tail|tails|horns|wings|with|black|white|short|long|small|large|animal)$/.test(w));
         if (words.length && words.every(w => segToks.some(st => st.includes(w)))) score += 1;
@@ -20532,6 +20620,7 @@ function addMenuItems() {
         menu.append(item('nnb_menu_trends', 'fa-fire', 'Мода и тренды сезона', () => openTrendsModal()));
         menu.append(item('nnb_menu_customer', 'fa-bell-concierge', 'Лавка: следующий покупатель', () => nextShopCustomer()));
         menu.append(item('nnb_menu_ff', 'fa-forward', 'Дальше: следующее событие', fastForward));
+        menu.append(item('nnb_menu_nextday_divination', 'fa-wand-magic-sparkles', 'Новый день + гадание (Этель)', nextDayWithDivination));
         menu.append(item('nnb_menu_offscreen', 'fa-clapperboard', 'За кадром: что у остальных героев', offscreenCutaway));
         menu.append(item('nnb_menu_scene', 'fa-image', 'Сцена / Комикс: нарисовать', () => showScenePopup(undefined, true)));
         menu.append(item('nnb_menu_map', 'fa-map', 'Карта: куда пойти', () => showMapPopup()));
