@@ -7356,7 +7356,9 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     const mcSceneTxt = hasSpecificChunk ? String(comicOpts.chunkText) : fullTargetText;
     const mcInScene = isNameMentionedInText(mcCardObj?.name || names.char, mcSceneTxt) || (Array.isArray(forcedCast) && forcedCast.some(fc => isNameMentionedInText(fc, mcCardObj?.name || names.char)));
     const mcAppLine = !mcAppParts ? '' : (mcInScene
-        ? `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}`
+        ? (parseCanonFromAppearance(mcCardObj?.appearanceEn)
+            ? `— ${mcCardObj?.name || names.char} (главный персонаж — КАНОНИЧНЫЙ: в каждом кадре и CHAR-слоте с ним ОБЯЗАТЕЛЬНО пиши его каноничный тег Danbooru ТОЧНО как здесь: "${parseCanonFromAppearance(mcCardObj.appearanceEn).tag}" и дальше его теги "${mcCardObj.appearanceEn}"; НЕ заменяй канон описанием похожей внешности!): ${mcAppParts}`
+            : `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}`)
         : `— ${mcCardObj?.name || names.char} (главный персонаж): В ЭТОМ ОТРЫВКЕ ЕГО НЕТ — не рисуй его и НЕ переноси его внешность (цвет волос, глаза, одежду) на других персонажей!`);
     const allNpcsSorted = [...(st.npcs || [])].sort((a, b) => {
         const aIn = isNameMentionedInText(a?.name || '', fullTargetText) ? 0 : 1;
@@ -7365,7 +7367,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     });
     const npcCardsList = [
         mcAppLine,
-        ...allNpcsSorted.slice(0, 50).map(n => `— ${n.name}: ${n.appearanceEn ? `[Каноничный тег Danbooru и внешность (ОБЯЗАТЕЛЬНО пиши в промпте "${n.appearanceEn}" вместо "${n.name} (original)"! Каноничный тег пиши ТОЧНО как здесь, со скобками; НЕ добавляй ему цвет волос и глаз, которых нет в этих тегах — их задаёт канон, а не прошлые кадры): ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
+        ...allNpcsSorted.slice(0, 50).map(n => `— ${n.name}: ${n.appearanceEn ? `[Каноничный тег Danbooru и внешность (ОБЯЗАТЕЛЬНО пиши в промпте "${n.appearanceEn}" вместо "${n.name} (original)"! Каноничный тег пиши ТОЧНО как здесь, со скобками; НЕ добавляй ему цвет волос и глаз, которых нет в этих тегах — их задаёт канон, а не прошлые кадры; НЕ заменяй каноничный тег описанием похожей внешности): ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
     ].filter(Boolean).join('\n');
     const npcBlock = npcCardsList ? `Справка по внешности и ролям известных NPC (обязательно используй их описание, если они есть в сцене!):\n${npcCardsList}` : '';
     const effectiveForcedCast = hasSpecificChunk
@@ -8165,18 +8167,10 @@ function enforceNpcCanonAppearance(rawPromptStr, st) {
     if (st.mainCharCard) cards.push(st.mainCharCard);
     for (const npc of cards) {
         const appEn = String(npc?.appearanceEn || '').trim();
-        const cmParen = appEn.match(/^\s*([^,()]{2,60}?)\s*\(\s*([^)]{2,60}?)\s*\)/);
-        let cmComma = null;
-        if (!cmParen) {
-            const commaToks = appEn.split(',').map(x => x.trim()).filter(Boolean);
-            if (commaToks.length >= 2 && NNB_CANON_SERIES_RE.test(commaToks[1]) && !NNB_NON_CANON_NAME_RE.test(commaToks[0])) {
-                cmComma = [appEn, commaToks[0], commaToks[1]];
-            }
-        }
-        const cm = cmParen || cmComma;
-        if (!cm) continue;
-        const cName = cm[1].trim(), cSeries = cm[2].trim();
-        const canonTag = cmParen ? `${cName} (${cSeries})` : `${cName}, ${cSeries}`;
+        const canonP = parseCanonFromAppearance(appEn);
+        if (!canonP) continue;
+        const cName = canonP.name, cSeries = canonP.series;
+        const canonTag = canonP.tag;
         const escN = cName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const escS = cSeries.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const ownHair = hairColorWords(appEn);
@@ -8185,10 +8179,12 @@ function enforceNpcCanonAppearance(rawPromptStr, st) {
             let seg = segs[i];
             const hasCanon = new RegExp(`(^|,)\\s*${escN}\\b`, 'i').test(seg);
             if (!hasCanon) continue;
+            // «name, series» → «name»; убираем одиночные «series»; одиночное «name» → канон-тег (без дублей серии)
             seg = seg
-                .replace(new RegExp(`\\b${escN}\\s*,\\s*${escS}\\b`, 'gi'), canonTag)
+                .replace(new RegExp(`\\b${escN}\\s*,\\s*${escS}\\b`, 'gi'), cName)
+                .replace(new RegExp(`(^|,)\\s*${escS}\\s*(?=,|$)`, 'gi'), '$1')
                 .replace(new RegExp(`(^|,)\\s*${escN}\\s*(?=,|$)`, 'gi'), `$1 ${canonTag}`)
-                .replace(new RegExp(`(^|,)\\s*${escS}\\s*(?=,|$)`, 'gi'), '$1');
+                .replace(/,\s*,/g, ',');
             let toks = seg.split(',').map(t => t.trim()).filter(Boolean);
             const canonIdx = toks.findIndex(t => t.toLowerCase() === canonTag.toLowerCase());
             const isSoloSeg = /\bsolo\b/i.test(seg) || /^\s*1(?:boy|girl)\s*,/i.test(seg) && !/\b1(?:boy|girl)\b[\s\S]*\b1(?:boy|girl)\b/i.test(seg) || i > 0;
@@ -8212,6 +8208,51 @@ function enforceNpcCanonAppearance(rawPromptStr, st) {
 const NNB_CANON_SERIES_RE = /^(?:jujutsu kaisen|chainsaw man|naruto|bleach|one piece|genshin impact|honkai(?::| )star rail|demon slayer|kimetsu no yaiba|attack on titan|shingeki no kyojin|jojo(?:'s bizarre adventure)?|boku no hero academia|my hero academia|bungou stray dogs|tokyo revengers|blue lock|haikyuu!?|devil may cry|resident evil|final fantasy(?: [ivx0-9]+)?|persona(?: [0-9]+)?|baldur'?s gate(?: [0-9]+)?|arcane|hazbin hotel|helluva boss|overwatch|league of legends|valorant|arknights|wuthering waves|zenless zone zero|blue archive|touhou|evangelion|berserk|vagabond|vinland saga|hunter x hunter|fullmetal alchemist|death note|code geass|spy x family|dandadan|kagurabachi|sakamoto days|solo leveling|omniscient reader(?:'s viewpoint)?|heaven official'?s blessing|mo dao zu shi|undertale|deltarune|elden ring|dark souls|the witcher|cyberpunk(?: 2077)?|metal gear(?: solid)?|silent hill|yakuza|dragon ball(?: z| super)?|sailor moon|inuyasha|gintama|mob psycho 100|one punch man|sousou no frieren|frieren|dungeon meshi|kusuriya no hitorigoto|oshi no ko|bocchi the rock!?|steins;gate|re:zero|mushoku tensei|overlord|konosuba|sword art online|tokyo ghoul|kuroshitsuji|black butler|vanitas no carte|pandora hearts|d\.gray-man|soul eater|fire force|fairy tail|black clover|dr\. stone|kuroko no basuke|yuri!!!? on ice|banana fish|link click|alien stage|love and deepspace|twisted wonderland|ensemble stars!?|project sekai|vocaloid|hololive|nijisanji|fate\/[a-z0-9 ]+)$/i;
 const NNB_NON_CANON_NAME_RE = /^(?:1boy|1girl|2boys|2girls|solo|male|female|adult|man|woman|boy|girl|medium shot|cowboy shot|close-up|upper body|full body|portrait|indoors|outdoors|character not looking at viewer|dynamic angle|depth of field|looking at viewer)$/i;
 const NNB_NON_SERIES_PAREN_RE = /^(?:original|cosplay|outfit|style|young|adult|old|male|female|top|bottom|left|right|character|oc)$/i;
+
+// Канон-тег из карточки: «toji (jujutsu kaisen)» или «fushiguro touji, jujutsu kaisen»; ведущие 1boy/male и т.п. пропускаем
+function parseCanonFromAppearance(appEn) {
+    const toks = String(appEn || '').split(',').map(x => x.trim()).filter(Boolean);
+    let gender = '';
+    const gTxt = String(appEn || '').toLowerCase();
+    if (/\b(1boy|boy|male|man|husband|father)\b/.test(gTxt) && !/\b(1girl|girl|female|woman)\b/.test(gTxt)) gender = 'boy';
+    else if (/\b(1girl|girl|female|woman)\b/.test(gTxt) && !/\b(1boy|male|man)\b/.test(gTxt)) gender = 'girl';
+    while (toks.length && /^(?:1boy|1girl|solo|male|female|adult|man|woman|boy|girl|mature male|mature female)$/i.test(toks[0])) toks.shift();
+    if (!toks.length) return null;
+    const pm = toks[0].match(/^([^()]{2,60}?)\s*\(\s*([^)]{2,60}?)\s*\)$/);
+    if (pm && !NNB_NON_CANON_NAME_RE.test(pm[1].trim()) && !NNB_NON_SERIES_PAREN_RE.test(pm[2].trim())) return { name: pm[1].trim(), series: pm[2].trim(), tag: `${pm[1].trim()} (${pm[2].trim()})`, paren: true, gender };
+    if (toks.length >= 2 && NNB_CANON_SERIES_RE.test(toks[1]) && !NNB_NON_CANON_NAME_RE.test(toks[0])) return { name: toks[0], series: toks[1], tag: `${toks[0]}, ${toks[1]}`, paren: false, gender };
+    return null;
+}
+function guessCardGender(n, canon) {
+    if (canon?.gender) return canon.gender;
+    const t = `${n?.card || ''} ${n?.status || ''}`.toLowerCase();
+    if (/\b(мужчин|парен|юнош|муж\b|отец|брат|сын)/.test(t)) return 'boy';
+    if (/\b(женщин|девушк|девочк|жена|мать|сестр|дочь)/.test(t)) return 'girl';
+    return '';
+}
+// Канон-теги героев, которые реально в сцене, — прямо из их карточек (не ждём, пока модель сама их напишет)
+function canonByGenderFromCards(st, cast, sceneText) {
+    const res = { boy: '', girl: '', boyCast: [], girlCast: [] };
+    if (!st) return res;
+    const castNorm = (cast || []).map(x => String(x || '').toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    const found = { boy: [], girl: [] };
+    for (const n of cards) {
+        if (!n?.name) continue;
+        const canon = parseCanonFromAppearance(n.appearanceEn);
+        if (!canon) continue;
+        const nm = String(n.name).toLowerCase().replace(/ё/g, 'е');
+        const present = castNorm.some(c => c.includes(nm) || nm.includes(c)) || (sceneText && isNameMentionedInText(n.name, sceneText));
+        if (!present) continue;
+        const g = guessCardGender(n, canon);
+        if (g) found[g].push({ tag: canon.tag, name: nm });
+    }
+    // если двое одного пола с канон-тегами — не угадываем, кто в каком кадре
+    if (found.boy.length === 1) { res.boy = found.boy[0].tag; res.boyCast = [found.boy[0].name]; }
+    if (found.girl.length === 1) { res.girl = found.girl[0].tag; res.girlCast = [found.girl[0].name]; }
+    return res;
+}
 
 function extractCanonTagsByGender(promptsList) {
     const found = { boy: '', girl: '' };
@@ -8831,6 +8872,18 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             desc = enforceNpcCanonAppearance(desc, st);
             charCaptions = charCaptions.map(c => enforceNpcCanonAppearance(c, st));
             for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = enforceNpcCanonAppearance(panelPrompts[pi], st);
+            {
+                const cardSceneTxt = (comicOpts?.enabled && comicOpts?.chunkText) ? String(comicOpts.chunkText) : String(ctx().chat?.[Number.isInteger(mesId) ? mesId : (ctx().chat.length - 1)]?.mes || '');
+                const fromCards = canonByGenderFromCards(st, cast, cardSceneTxt);
+                if (fromCards.boy || fromCards.girl) {
+                    desc = carryOverChapterCanonTags(desc, fromCards, cast, cardSceneTxt);
+                    charCaptions = charCaptions.map(c => carryOverChapterCanonTags(c, fromCards, cast, cardSceneTxt));
+                    for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = carryOverChapterCanonTags(panelPrompts[pi], fromCards, cast, cardSceneTxt);
+                    desc = enforceNpcCanonAppearance(desc, st);
+                    charCaptions = charCaptions.map(c => enforceNpcCanonAppearance(c, st));
+                    for (let pi = 0; pi < panelPrompts.length; pi++) panelPrompts[pi] = enforceNpcCanonAppearance(panelPrompts[pi], st);
+                }
+            }
             if (comicOpts?.chapterCanonByGender && (comicOpts.chapterCanonByGender.boy || comicOpts.chapterCanonByGender.girl)) {
                 const activeCheckTxt = [
                     comicOpts.chunkText || '',
