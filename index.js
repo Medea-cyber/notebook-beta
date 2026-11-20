@@ -2395,16 +2395,22 @@ async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, lab
 
     const attemptTimeoutMs = maxTokens >= 4096 || String(fullPrompt || '').length > 20000 ? 110000 : 75000;
     let lastErr = null;
-    for (const runAttempt of attempts) {
+    for (let ai = 0; ai < attempts.length; ai++) {
         try {
-            const raw = await withTimeout(runAttempt(), attemptTimeoutMs, label);
+            const raw = await withTimeout(attempts[ai](), attemptTimeoutMs, label);
             const txt = extractTextFromApiResult(raw);
             if (txt && String(txt).trim()) {
                 return String(txt).trim();
             }
+            if (typeof logImageDiag === 'function' && /промпт/i.test(label)) {
+                logImageDiag(`⚠️ ${label}: попытка ${ai + 1}/${attempts.length} вернула пустой ответ — пробую следующий вариант`);
+            }
         } catch (err) {
             lastErr = err;
             console.warn(`[npc_notebook] sendViaTavernProfile attempt failed (${label}):`, err?.message || err);
+            if (typeof logImageDiag === 'function' && /промпт/i.test(label)) {
+                logImageDiag(`⚠️ ${label}: попытка ${ai + 1}/${attempts.length} не удалась`, err?.message || String(err));
+            }
         }
     }
     throw lastErr || new Error(`Профиль «${prof?.name || pid}» вернул пустой ответ`);
@@ -2729,7 +2735,7 @@ ${writerNote}]
     }
 
     return await withSharedKeyRetry(
-        () => sendViaTavernProfile(src, writerNote ? userOnlyPrompt : fullPrompt, 4096, 'профиль модели для промптов картинок', writerNote, true),
+        () => sendViaTavernProfile(src, writerNote ? userOnlyPrompt : fullPrompt, 1536, 'профиль модели для промптов картинок', writerNote, true),
         'профиль промптов раскадровки',
         5,
         4000
@@ -4905,20 +4911,7 @@ function sanitizeNovelAiPositiveAndNegative(posPrompt, negPrompt) {
         neg = [neg, split.negative].filter(Boolean).join(', ');
     }
 
-    const isExplicitlyShirtless = /\b(shirtless|bare chest|bare torso|topless|naked torso|unbuttoned|open shirt|open cardigan showing chest)\b/i.test(pos);
-    const hasUpperClothes = /\b(cardigan|sweater|jacket|coat|hoodie|shirt|t-shirt|turtleneck|vest|blazer|suit|uniform)\b/i.test(pos);
-
-    if (!isExplicitlyShirtless && hasUpperClothes) {
-        // В Danbooru "flat male chest" / "male chest" = оголённая мужская грудь! Заменяем на безопасное описание мужской фигуры
-        pos = pos.replace(/\bflat\s+male\s+chest\b/gi, 'masculine upper body');
-        pos = pos.replace(/\bmale\s+chest\b/gi, 'masculine torso');
-        // Если на персонаже кардиган (cardigan), но не упомянута футболка/рубашка под ним — добавляем shirt under cardigan, чтобы кардиган не рисовался на голое тело
-        if (/\bcardigan\b/i.test(pos) && !/\b(shirt|t-shirt|tee|turtleneck|sweater|blouse|top|under\s+cardigan)\b/i.test(pos)) {
-            pos = pos.replace(/\b([a-z]+\s+cardigan|cardigan)\b/i, '$1 over plain shirt, closed front');
-        }
-    }
-
-    // Убираем "no breasts" / "no female chest" из позитивного промпта (в позитиве NovelAI читает само слово после "no") и переносим в негатив
+    // Убираем "no breasts" / "no female chest" из позитивного промпта (в позитиве NovelAI читает само слово после "no")
     if (/\bno\s+(?:breasts|female\s+chest|chest)\b/i.test(pos)) {
         pos = pos.replace(/,?\s*\bno\s+(?:breasts|female\s+chest|chest)\b/gi, '');
         if (!/\bbreasts\b/i.test(neg)) {
@@ -7440,7 +7433,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
             : '');
     const moment = chunkHeaderNote;
     const a = st.wardrobe?.active;
-    const outfit = (!isPov && a?.status === 'worn') ? `${names.user} сейчас одет(а): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}.` : '';
+    const outfit = (!isPov && a?.status === 'worn') ? `[👗 АКТИВНЫЙ НАРЯД ${names.user} ИЗ ГАРДЕРОБА (ВЫСШИЙ ПРИОРИТЕТ — ОБЯЗАТЕЛЬНО рисуй ${names.user} ИМЕННО В ЭТОМ НАРЯДЕ, ИГНОРИРУЯ любую старую одежду вроде майки/кардигана из OLDBlock и прошлых кадров!): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}]` : '';
     const rawPersonaDesc = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
     const cleanPersonaAppearance = rawPersonaDesc ? ctx().substituteParams(String(rawPersonaDesc)).slice(0, 600) : '';
     const lastAppearance = !isPov
@@ -7502,9 +7495,15 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     const canonCarryLine = (comicOpts?.chapterCanonByGender && (comicOpts.chapterCanonByGender.boy || comicOpts.chapterCanonByGender.girl))
         ? `\n⚠️ КАНОНИЧНЫЕ ТЕГИ DANBOORU ЭТОЙ СЦЕНЫ (ОБЯЗАТЕЛЬНО пиши их в КАЖДОМ фрейме и в слоте CHAR с этим героем!): ${[comicOpts.chapterCanonByGender.boy ? `мужчина: "${comicOpts.chapterCanonByGender.boy}"` : '', comicOpts.chapterCanonByGender.girl ? `женщина: "${comicOpts.chapterCanonByGender.girl}"` : ''].filter(Boolean).join('; ')}`
         : '';
-    const passportLine = (comicOpts?.chapterCharPassport && String(comicOpts.chapterCharPassport).trim())
-        ? `[👗 СКВОЗНОЙ ПАСПОРТ ОДЕЖДЫ И ВНЕШНОСТИ ТЕКУЩЕЙ ГЛАВЫ (СТРОГО СОХРАНЯЙ КАНОНИЧНЫЕ ТЕГИ DANBOORU, ОДЕЖДУ, ЦВЕТ ВОЛОС, ОЧКИ И ЗВЕРИНЫЕ УШКИ/ХВОСТЫ ВО ВСЕХ ФРЕЙМАХ И CHAR-СЛОТАХ ЭТОЙ СТРАНИЦЫ; но если паспорт противоречит «Справке по внешности NPC» (канон-тег или цвет волос героя) — права справка, ЕСЛИ ГЕРОИ НЕ ПЕРЕОДЕВАЛИСЬ В ТЕКСТЕ!)]:\n${String(comicOpts.chapterCharPassport).trim()}${canonCarryLine}`
+    const outfitLockEntries = (comicOpts?.chapterOutfitLock && typeof comicOpts.chapterOutfitLock === 'object')
+        ? Object.entries(comicOpts.chapterOutfitLock).filter(([, v]) => v).map(([k, v]) => `• ${k}: ${v}`)
+        : [];
+    const outfitLockLine = outfitLockEntries.length
+        ? `\n[🔒 ЗАМОК ОДЕЖДЫ ГЛАВЫ (зафиксировано с 1-й страницы — СТРОГО сохраняй эту одежду 1-в-1, пока в тексте прямо не сказано, что герой переоделся):\n${outfitLockEntries.join('\n')}]`
         : '';
+    const passportLine = (comicOpts?.chapterCharPassport && String(comicOpts.chapterCharPassport).trim())
+        ? `[👗 СКВОЗНОЙ ПАСПОРТ ОДЕЖДЫ И ВНЕШНОСТИ ТЕКУЩЕЙ ГЛАВЫ (СТРОГО СОХРАНЯЙ КАНОНИЧНЫЕ ТЕГИ DANBOORU, ОДЕЖДУ, ЦВЕТ ВОЛОС, ОЧКИ И ЗВЕРИНЫЕ УШКИ/ХВОСТЫ ВО ВСЕХ ФРЕЙМАХ И CHAR-СЛОТАХ ЭТОЙ СТРАНИЦЫ; но если паспорт противоречит «Справке по внешности NPC» (канон-тег или цвет волос героя) — права справка, ЕСЛИ ГЕРОИ НЕ ПЕРЕОДЕВАЛИСЬ В ТЕКСТЕ!)]:\n${String(comicOpts.chapterCharPassport).trim()}${outfitLockLine}${canonCarryLine}`
+        : (outfitLockLine ? outfitLockLine.trim() : '');
     const isNaiSource = settings().imageSource === 'novelai';
     let comicInstruction = '';
     if (comicOpts && comicOpts.enabled) {
@@ -7543,7 +7542,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
 3) БЕЗ БУКВАЛЬНЫХ МЕТАФОР: никогда не переводи «львиная грива волос» у человека как \`lion mane\` (пиши \`thick voluminous wild hair\`) и не переводи «позеленевший» как \`greenish-pale\` (пиши \`pale skin, unwell, sweatdrop\`).
 — PANEL1 (Кадр 1 — Завязка отрывка / Момент QUOTE1, \`medium shot\` или \`cowboy shot\`): 1–2 персонажа этого момента, их внешность, одежда, действие и обстановка. Если в кадре 1 два персонажа — добавь в конце строки: \`|| CHAR1: пол (1boy/1girl), внешность, одежда и поза 1-го || CHAR2: пол, внешность, одежда и поза 2-го\`.
 — PANEL2 (Кадр 2 — КРУПНЫЙ ФРЕЙМ ДЕТАЛИ по контексту: животное/змея, важный предмет, тактильный жест рук, ИЛИ в 18+ сцене — крупный план гениталий/интимного контакта \`head out of frame, close-up\`; а если в отрывке нет таких деталей — смена ракурса и действия 1–2 героев \`dynamic angle, medium close-up\`).
-— PANEL3 (Кадр 3 — СОЛЬНЫЙ крупный план лица и эмоции говорящего QUOTE3 \`1girl, solo, close-up, portrait, upper body\` или \`1boy, solo, close-up, portrait, upper body\`, ЛИБО крупный фрейм детали/интима, если во 2-м кадре был средний план диалога! В сольном и детальном кадре ЗАПРЕЩЕНО писать \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\`!).${panel4Line}
+— PANEL3 (Кадр 3 — ОБЯЗАТЕЛЬНО указывай фон/локацию и освещение сцены, чтобы не было пустого белого фона! СОЛЬНЫЙ крупный план лица и эмоции говорящего QUOTE3 \`1girl, solo, close-up, portrait, upper body\` или \`1boy, solo, close-up, portrait, upper body\`, ЛИБО крупный фрейм детали/интима, если во 2-м кадре был средний план диалога! В сольном и детальном кадре ЗАПРЕЩЕНО писать \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\`!).${panel4Line}
 ${wantLines ? `Также выпиши ${framesN} ДОСЛОВНЫЕ законченные реплики на русском языке из целевого отрывка поста (строго полными предложениями без обрыва фразы!) в строках QUOTE1..QUOTE${framesN}.` : ''}${quoteSpeakerRule}${monoRule}`;
         } else {
             comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ КОМИКСА / МАНГИ («${cStyle.name}»):
@@ -7585,13 +7584,13 @@ QUOTE2: Имя говорящего из CAST | полная законченн�
             ? `[ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ АВТОРА ПО ПРОМПТУ]:\n${adaptWriterNoteForTask(settings().imgPromptWriterNote.trim(), !!(comicOpts && comicOpts.enabled && comicOpts.stripMode))}`
             : (!hasCustomWriter && settings().imageSource === 'novelai' ? adaptWriterNoteForTask(DEFAULT_NAI_WRITER_PROMPT, !!(comicOpts && comicOpts.enabled && comicOpts.stripMode)) : ''),
         lastAppearance,
-        outfit,
         st.time?.date ? `Время и место: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; локация: ${placeLine(st)}` : ''}.` : '',
         npcBlock,
         oldBlock,
         prevContext,
         moment,
         passportLine,
+        outfit,
         forcedCastLine,
         whisperLine,
         'Ответь строго по шаблону без пояснений:',
@@ -7599,7 +7598,7 @@ QUOTE2: Имя говорящего из CAST | полная законченн�
         ...(comicOpts && comicOpts.enabled && comicOpts.stripMode
             ? [
                 'PANEL1: полный английский промпт 1-го кадра (момент QUOTE1, medium/cowboy shot, 1–2 персонажа + внешность + одежда + обстановка; если двоих — добавь в конце: || CHAR1: теги 1-го || CHAR2: теги 2-го)',
-                'PANEL2: полный английский промпт 2-го кадра (ЕСЛИ в отрывке есть животное/змея/питомец, важный предмет, выразительное касание рук ИЛИ 18+ интим/гениталии — сделай этот фрейм КРУПНЫМ ПЛАНОМ ДЕТАЛИ: no humans, animal focus / object focus, close-up ИЛИ nsfw, explicit, close-up, head out of frame, intimate focus; иначе — другое действие 1–2 героев, medium close-up)',
+                'PANEL2: НАЧНИ СТРОГО С ОДНОГО ИЗ 4 ТИПОВ: [OBJECT] (чистый предмет/еда/документ/животное: no humans, still life, object focus, close-up — БЕЗ рук и людей), [HANDS] (простой жест одной/двух рук с предметом: 1girl/1boy, solo, hand focus — БЕЗ no humans и БЕЗ сплетения пальцев), [DETAIL] (шея/ключицы/синяк/украшение: 1girl/1boy, solo, close-up, upper body, jawline, chin, collarbone — НИКОГДА head out of frame!), или [REACTION] (чистый средний план реакции/эмоции 1–2 героев). ОБЯЗАТЕЛЬНО дописывай в конце фон/локацию и освещение сцены (например: indoors, bathhouse steam, warm lighting), чтобы фон не пропадал! БЕЗ sfx/звуков/текста на картинке!',
                 'PANEL3: полный английский промпт 3-го кадра (СОЛЬНЫЙ крупный план лица/эмоции одного героя: 1girl, solo, close-up, portrait, upper body ИЛИ 1boy, solo, close-up, portrait, upper body — либо крупный фрейм детали/интима, если в PANEL2 был диалог; БЕЗ wide shot и БЕЗ толпы!)',
                 ...(Number(comicOpts.framesPerPage) === 4 ? ['PANEL4: полный английский промпт 4-го кадра (финальный момент отрывка под QUOTE4, 1–2 персонажа, выразительная эмоция или жест)'] : []),
             ]
@@ -8038,154 +8037,49 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
     return false;
 }
 
-function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCaptions = []) {
-    let p = String(rawFrameDesc || '').trim();
-    if (!p) return p;
-    const sourcePool = [ ...(Array.isArray(charCaptions) ? charCaptions : []), String(panel1Desc || '') ].join(' | ');
-    if (isDetailOrMacroPanelPrompt(p)) {
-        // Если это крупный план губ/вейпа/щеки/уха (lips/mouth/vape/cheek/ear), обязательно сохраняем цвет волос героя из 1-го кадра, чтобы у темноволосой Этель не вырастали рыжие волосы!
-        if (/\b(lips|mouth|vape|biting|cheek|ear)\b/i.test(p) && !/\b(black|brown|dark|blonde|red|ginger|orange|silver|grey|white)\s+hair\b/i.test(p)) {
-            const p1Hair = sourcePool.match(/\b((?:dark\s+brown|black|brown|dark|blonde|silver|grey|white|red|ginger|orange)\s+(?:long\s+|short\s+|wavy\s+|messy\s+)?hair)\b/i);
-            if (p1Hair && p1Hair[1]) {
-                p += `, ${p1Hair[1]}`;
-            }
-        }
-        return p;
-    }
-    const isSoloGirl = /\b1girl\b/i.test(p) && !/\b([2-6]girls|[1-6]boys)\b/i.test(p);
-    const isSoloBoy = /\b1boy\b/i.test(p) && !/\b([2-6]boys|[1-6]girls)\b/i.test(p);
-    if (!isSoloGirl && !isSoloBoy) return p;
-    const hairMatch = p.match(/\b(black|brown|dark|blonde|red|ginger|orange|copper|caramel|auburn|chestnut|ashy|ash|golden|platinum|pink|white|silver|grey|gray)\s+(?:wavy\s+|curly\s+|long\s+|short\s+|straight\s+|messy\s+|leonine\s+)?(?:hair|mane)\b/i);
-    const hairColor = hairMatch ? hairMatch[1].toLowerCase() : '';
-    const eyeMatch = p.match(/\b(green|emerald|hazel|amber|brown|blue|grey-blue|red|dark red|crimson|purple|violet|yellow|gold|golden|caramel|grey|gray|black)\s+eyes\b/i);
-    const eyeColor = eyeMatch ? eyeMatch[1].toLowerCase() : '';
-    const pAlreadyHasOutfit = /\b(jacket|coat|vest|waistcoat|shirt|blouse|dress|hospital gown|gown|sweater|turtleneck|cardigan|hoodie|suit|blazer|inner top|tank top|t-shirt)\b/i.test(p);
-
-    const candidateSegments = sourcePool.split(/\|\||\|/).map(s => s.trim()).filter(Boolean);
-    const sameGenderSegCount = candidateSegments.filter(seg =>
-        (isSoloGirl && /\b1girl\b/i.test(seg) && !/\b1boy\b/i.test(seg))
-        || (isSoloBoy && /\b1boy\b/i.test(seg) && !/\b1girl\b/i.test(seg))
-    ).length;
-    for (const seg of candidateSegments) {
-        if (isSoloGirl && /\b1boy\b/i.test(seg) && !/\b1girl\b/i.test(seg)) continue;
-        if (isSoloBoy && /\b1girl\b/i.test(seg) && !/\b1boy\b/i.test(seg)) continue;
-        if (isSoloBoy && /\b(shirtless|bare chest|bare torso|topless|naked torso)\b/i.test(seg)) {
-            p = p.replace(/\b(?:black\s+|white\s+|grey\s+|dark\s+|open\s+|unbuttoned\s+)?(?:t-shirt|shirt|coat|leather coat|trench coat|jacket|suit jacket|blazer|sweater|hoodie)\b\s*,?/gi, '');
-            if (!/\b(shirtless|bare chest)\b/i.test(p)) {
-                p += ', shirtless, bare chest, bare shoulders';
-            }
-            break;
-        }
-        // Если на странице 2+ персонажа одного пола и не определились ни цвет волос, ни цвет глаз — не копируем чужую одежду!
-        if (!hairColor && !eyeColor && sameGenderSegCount >= 2) continue;
-        if (hairColor && !new RegExp(`\\b${hairColor}\\b`, 'i').test(seg)) continue;
-        // Если у сольного героя указан цвет глаз, а в слоте — другой цвет глаз (например, зелёные у Кайлара vs ореховые у Яна), пропускаем чужой слот!
-        if (eyeColor && /\beyes\b/i.test(seg) && !new RegExp(`\\b${eyeColor}\\s+eyes\\b`, 'i').test(seg)) continue;
-        // Если у сольного портрета уже описан верх одежды, не доклеиваем чужие пиджаки/галстуки поверх
-        if (pAlreadyHasOutfit) continue;
-
-        const outfitRe = /\b((?:black|dark|brown|beige|cream|white|grey|gray|green|emerald|burgundy|cherry|crimson|maroon|blue|navy|fitted|woolen|fur|knitted|stretched|oversized|ruffled|silk|formal|three-piece)?\s*(?:three-piece suit|suit jacket|suit|waistcoat|vest|coat|fur coat|jacket|blazer|cardigan|trench coat|sweater|turtleneck|blouse|shirt|dress|knitted dress|robe|hoodie|oversized hoodie|cargo pants))\b/gi;
-        const matches = [];
-        let om;
-        while ((om = outfitRe.exec(seg)) !== null) {
-            const item = om[1].trim();
-            if (item.length >= 4) matches.push(item);
-        }
-        if (matches.length) {
-            const toAdd = [];
-            for (const mItem of matches.slice(0, 2)) {
-                const noun = mItem.split(/\s+/).pop();
-                if (!new RegExp(`\\b${noun}\\b`, 'i').test(p)) {
-                    toAdd.push(mItem);
-                }
-            }
-            if (/\b(necktie|tie)\b/i.test(seg) && !/\b(necktie|tie)\b/i.test(p)) {
-                toAdd.push('necktie');
-            }
-            if (toAdd.length) {
-                // Если в сольном кадре по ошибке вылез чужой "white lab coat", а в 1-м кадре на герое костюм (suit) или кардиган (cardigan) — заменяем!
-                if (toAdd.some(x => /\b(suit|cardigan)\b/i.test(x))) {
-                    p = p.replace(/\b(?:white\s+)?lab\s+coat\b\s*,?/gi, '');
-                }
-                p += `, wearing ${toAdd.join(', ')}`;
-                break;
-            }
-        }
-    }
-    return p;
+function enforceSoloFrameOutfitFromPage(rawFrameDesc) {
+    // Отключено копирование одежды между кадрами: теперь за стабильность одежды отвечает «Замок одежды» и наряд из Гардероба на входе.
+    return String(rawFrameDesc || '').trim();
 }
 
-function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0, pageContextPrompt = '') {
+function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     let p = sanitizeLiteralMetaphorTags(String(rawPrompt || '').trim());
     if (!p) return '';
 
-    // 0) Убираем любые текстовые звуковые эффекты ("Purrrrr", "PURR", "BOOM", sfx, sound effect), чтобы NovelAI не писал буквы поверх волос героев!
+    // 0) Убираем текстовые звуки и облачка из позитива, чтобы текст не плыл в картинку
     p = p
-        .replace(/["'«»“”]?\b(?:purr+|grrr+|boom+|knock+|tap+|clink+|sigh+|mumm+|huff+|pant+|gulp+)\b["'«»“”]?/gi, '')
-        .replace(/\b(?:sound effect|sfx|onomatopoeia|text overlay|floating text|written text)\b\s*,?/gi, '')
-        .replace(/\b(?:crimson|raspberry|red)\s+(?:spots|blotches|patches|stains)\s+on\s+neck\b/gi, 'deeply blushing neck and ears, flushed red skin on neck')
-        .replace(/\b(?:plasters?|bandages?|band-aids?)\s+on\s+fingers\b/gi, 'a single small band-aid on one index finger')
-        .replace(/\bbandaged\s+fingers\b/gi, 'one small band-aid on index finger');
+        .replace(/["'«»“”]?(?:purr+|grrr+|boom+|knock+|tap+|clink+|sigh+|mumm+|huff+|pant+|gulp+)["'«»“”]?/gi, '')
+        .replace(/(?:sound effects?|sfx|onomatopoeia|speech bubbles?|thought bubbles?|text overlay|floating text|written text|english text|japanese text|korean text|comic text|caption)\s*,?/gi, '');
 
-    // Если в кадре есть человек (1boy/1girl), убираем буквальное "under glass / behind glass" (возникающее из фразы «спрятала рисунок кота под стекло рамки»), чтобы NovelAI не заворачивал самого человека в битое стекло или плёнку!
-    if (/\b([1-4]boys?|[1-4]girls?|man|woman|male|female)\b/i.test(p) && !/\b(window|aquarium|terrarium|paludarium)\b/i.test(p)) {
-        p = p.replace(/\b(?:hidden\s+)?(?:under|behind|beneath)\s+glass\b/gi, 'framed picture on desk');
+    // 1) Жёсткие 4 типа макро-кадра PANEL2 ([OBJECT] / [HANDS] / [DETAIL] / [REACTION])
+    const p2ModeMatch = p.match(/^\[(OBJECT|HANDS|DETAIL|REACTION)\]\s*/i);
+    const p2Mode = p2ModeMatch ? p2ModeMatch[1].toUpperCase() : '';
+    if (p2ModeMatch) {
+        p = p.slice(p2ModeMatch[0].length).trim();
+    }
+    if (p2Mode === 'OBJECT') {
+        p = p.replace(/\b(?:1girl|1boy|solo|bare hands|male hands|female hands|two hands only|head out of frame|face out of frame|cropped head)\b\s*,?/gi, '')
+             .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
+        if (!/\bno humans\b/i.test(p)) p = `no humans, still life, object focus, ${p}`;
+        return p;
+    }
+    if (p2Mode === 'HANDS') {
+        p = p.replace(/\b(?:no humans|still life|intertwined fingers|interlaced fingers|clasped hands)\b\s*,?/gi, '')
+             .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
+        if (!/\bhand focus\b/i.test(p)) p = `hand focus, ${p}`;
+    } else if (p2Mode === 'DETAIL') {
+        p = p.replace(/\b(?:head out of frame|face out of frame|cropped head|headless|no humans|bare hands|two hands only)\b\s*,?/gi, '')
+             .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
+        if (!/\b(jawline|chin|upper body|portrait)\b/i.test(p)) p = `close-up, upper body, jawline, chin, collarbone, ${p}`;
+    } else if (p2Mode === 'REACTION') {
+        p = p.replace(/\b(?:no humans|head out of frame|face out of frame|cropped head|hand focus|object focus|still life|two hands only)\b\s*,?/gi, '')
+             .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
+        if (!/\b(upper body|medium close-up|close-up|portrait)\b/i.test(p)) p = `medium close-up, upper body, ${p}`;
     }
 
-    // Если герои чокаются чашками или держат чашку у губ — жёстко фиксируем "holding one teacup only", чтобы NovelAI не рисовал Софии по чашке в каждой руке одновременно!
-    if (/\b(teacups?|cups?|porcelain cup|drinking tea)\b/i.test(p) && /\b([1-4]girls?|[1-4]boys?)\b/i.test(p)) {
-        p = p.replace(/\bclinking\s+(?:tea)?cups\b/gi, 'holding one teacup only, clinking teacup with another');
-        if (!/\bone teacup\b/i.test(p)) {
-            p += ', holding one teacup only';
-        }
-    }
-
-    // 1) Если персонаж потягивается, зевает ИЛИ смеётся/ухмыляется — вырезаем ложные триггеры плача и пижамных футболок!
-    if (/\b(yawn|yawning|stretch|stretching|arms overhead|arms raised|tired|exhausted|sigh|sighing|sleepy|drowsy|laugh|laughing|grin|grinning|cackling|pointing|amused|teasing)\b/i.test(p) && !/\b(sad|grief|weeping|heartbroken|funeral|tragedy)\b/i.test(p)) {
-        p = p.replace(/\b(?:crying|tears|tearing up|teardrops|watery eyes|tears of laughter|streaming tears|tears streaming[^,]*|sobbing|weeping|pajamas|nightgown|sleepwear|oversized white t-shirt|oversized t-shirt|oversized shirt|bed|bedroom|waking up)\b\s*,?/gi, '');
-    }
-
-    // 2) Если в кадре есть змея — заменяем "hook" на "long smooth metal snake-handling rod"
-    if (/\b(snake|python|viper|serpent|reptile|paludarium|terrarium)\b/i.test(p)) {
-        p = p
-            .replace(/\b(?:chrome|metal|steel|iron|snake)?\s*hook\b/gi, 'long smooth metal snake-handling rod')
-            .replace(/\b(?:hanging|suspended|dangling)\s+(?:from|on)\b/gi, 'resting across');
-        if (!/\bsingle snake\b/i.test(p) && /\b(snake|viper|python|serpent)\b/i.test(p)) {
-            p = `single snake, one snake head only, ${p}`;
-        }
-    }
-
-    // 2а) Если в кадре упоминаются усики-антенны на макушке (ant antennae / insect antennae / antennae on head) — запрещаем NovelAI рисовать настоящего жука/муравья/таракана!
-    if (/\b(ant antennae|insect antennae|antennae|feelers)\b/i.test(p)) {
-        p = p
-            .replace(/\b(?:ant|insect)\s+antennae\b/gi, 'two thin dark head antennae on silver-black hair')
-            .replace(/\banimal focus\b\s*,?/gi, '');
-        if (!/\b1boy\b/i.test(p) && !/\b1girl\b/i.test(p)) {
-            p = `1boy, solo, close-up of head and messy silver-black hair with two thin dark antennae on head, purple skin, pointed elf ears, ${p}`;
-        }
-    }
-
-    // 2б) Если в кадре описан хвост деми-человека (black cat tail hitting safe door / tail under skirt) или рисунок акварельного кота в рамке — запрещаем NovelAI рисовать живого четвероногого домашнего кота!
-    if (/\b(cat tail|fluffy black tail|tail hitting|tail under|watercolor cat|painting of a cat|framed cat)\b/i.test(p)) {
-        p = p.replace(/\banimal focus\b\s*,?/gi, 'object focus, ');
-        if (/\b(tail hitting|safe door)\b/i.test(p)) {
-            p = `close-up of a long fluffy black tail against a dark cast-iron safe door, kemonomimi tail only, no animal head, no cat face, ${p.replace(/\bcat\s+tail\b/gi, 'black fluffy tail')}`;
-        }
-    }
-
-    // 3) Если в кадре есть варенье/повидло/джем — уточняем "sweet strawberry jam", чтобы NovelAI не рисовал кровь на пальцах!
-    if (/\b(jam|jelly|preserve|marmalade|strawberry|berry)\b/i.test(p) && !/\b(blood|injury|wound|horror)\b/i.test(p)) {
-        p = p.replace(/\bred\s+(?:liquid|smear|stain|dab|drop)\b/gi, 'sweet glossy strawberry jam');
-    }
-
-    // 3б) Если в кадре тасуют карты Таро — заменяем "shuffling" на удержание карт двумя руками
-    if (/\b(tarot|cards|deck|shuffling)\b/i.test(p)) {
-        p = p.replace(/\bshuffling\s+(?:worn\s+|tarot\s+|playing\s+)?(?:cards|deck)\b/gi, 'holding tarot cards in two hands, two hands only')
-             .replace(/\bshuffling\b/gi, 'holding cards in two hands');
-    }
-
-    // 3b) Если это крупный план шеи / ключиц / синяка / следа укуса — ЗАПРЕЩАЕМ head out of frame / headless / no humans, иначе NovelAI рисует обезглавленный пень шеи!
-    const isNeckOrCollarboneDetail = /\b(neck focus|bruise on neck|hickey|bite mark|collarbone|clavicle|throat|\bneck\b)\b/i.test(p) && !/\b(hand focus|hands focus|focus on hands|holding|gripping|fingers|palm|wrist|knuckles)\b/i.test(p);
+    // 2) Защита шеи/ключиц от обезглавливания (никогда не оставляем head out of frame на шее)
+    const isNeckOrCollarboneDetail = /\b(neck focus|bruise on neck|hickey|bite mark|collarbone|clavicle|throat|neck)\b/i.test(p)
+        && !/\b(hand focus|hands focus|focus on hands|holding|gripping|fingers|palm|wrist|knuckles)\b/i.test(p);
     if (isNeckOrCollarboneDetail && isDetailOrMacroPanelPrompt(p)) {
         p = p
             .replace(/\b(?:head out of frame|face out of frame|cropped head|headless|no humans)\b\s*,?/gi, '')
@@ -8197,66 +8091,20 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0, pageContextPrompt 
         }
     }
 
-    // 4) Если это кадр фокуса на руках / сумочке / пуговице / чайнике / пластыре — определяем ПОЛ рук (мужские 1boy или женские 1girl по самому промпту и по контексту страницы pageContextPrompt!), чтобы мужские или когтистые лапы (Кайлара/Лайоса/Яна) никогда не превращались в женские руки с маникюром!
-    const isActualHandDetail = !isNeckOrCollarboneDetail && (/\b(hand focus|hands focus|focus on hands|head out of frame|face out of frame|cropped head)\b/i.test(p) || (isDetailOrMacroPanelPrompt(p) && /\b(unbuttoning|inside bag|inside handbag|rummaging|holding keys|keys|thumb|finger|fingernail|jam|band-aid|plaster|teapot|kettle|pouring|knocking|fist|knuckles)\b/i.test(p)));
-    if (isActualHandDetail) {
-        p = p
-            .replace(/\b(?:no humans|multiple girls|multiple boys|[2-9]girls|[2-9]boys|four hands|multiple hands)\b\s*,?/gi, '')
-            .replace(/,\s*,+/g, ', ')
-            .replace(/^,\s*|,\s*$/g, '')
-            .trim();
-        const combinedCtx = `${p} ${pageContextPrompt || ''}`;
-        const hasGloves = /\b(?:gloves?|gloved)\b/i.test(p);
-        const isMaleHand = /\b(1boy|male|man|his|masculine|clawed|furry hand|lion|band-aid|bandaged|knuckles|fist|tattooed|purple skin|cargo pants|crate|canister|nose ring|lip piercing|four arms|upper hands|lower hands)\b/i.test(p) || (!/\b(1girl|female|woman|her|manicure|handbag|purse|skirt|pen)\b/i.test(p) && /\b1boy\b/i.test(combinedCtx) && !/\b1girl\b/i.test(combinedCtx));
-        const hasFourArms = /\b(four arms|four hands|lower pair of|upper hands|lower hands)\b/i.test(p);
-        if (!/\btwo hands only\b/i.test(p) && !hasFourArms) {
-            const gPrefix = isMaleHand ? '1boy, male hands' : (hasGloves ? '1girl' : '1girl, bare hands');
-            p = p.replace(/^\s*(?:1girl|1boy)\s*,\s*(?:solo\s*,\s*)?/i, '');
-            p = `${gPrefix}, solo, two hands only, ${p}`;
-        } else if (hasFourArms && isMaleHand && !/\b1boy\b/i.test(p)) {
-            p = `1boy, solo, male hands, ${p}`;
-        }
-        if (!hasGloves && !/\bbare hands\b/i.test(p)) {
-            p += ', bare hands';
-        }
-    }
-
-    // Если в макро-кадре показаны мужские треники / бугор в паху / голый мужской торс со шрамами (sweatpants / bulge / erection / abs / pectoral / chest scars) — жёстко фиксируем мужскую анатомию (1boy, solo, male body, masculine physique), чтобы NovelAI никогда не рисовал женские бёдра в белых трусиках!
-    if (/\b(sweatpants|bulge|erection|groin|crotch|abs|pectorals?|muscular chest|scars on chest|claw marks on chest)\b/i.test(p)) {
-        p = p.replace(/\b(1girl|female|woman|panties|underwear)\b\s*,?/gi, '');
-        if (!/\b1boy\b/i.test(p)) {
-            p = `1boy, solo, male body, masculine physique, ${p}`;
-        }
-    }
-
+    // 3) Базовая гигиена макро-кадров и сольного 3-го кадра (без додумывания одежды и сюжетных костылей)
     if (isDetailOrMacroPanelPrompt(p)) {
         const hasHandsOrBody = /\b(hand focus|hands|fingers|thumb|neck|collarbone|clavicle|lips|mouth|cheek|ear|thighs|hips|legs|calves|feet|tail|sweatpants|bulge|groin|crotch|abs|chest|nsfw|explicit|intimate|genitals|penis|pussy|breasts)\b/i.test(p);
-        const hasAnimal = /\b(animal focus|snake|viper|python|dog|bird|horse)\b/i.test(p) || (/\bcat\b/i.test(p) && !/\b(cat ears|cat tail|watercolor cat|framed cat|painting|felt|plush)\b/i.test(p));
-        // 5) Если это чисто предметный кадр без людей и без живых животных (лобовое стекло с дворниками, окно, рамка с рисунком на столе, скомканная бумага в корзине, шпингалет двери) — жёстко ставим no humans!
-        if (!hasHandsOrBody && !hasAnimal) {
-            p = p.replace(/\b(?:reflection|face|eyes|watching|staring|silhouette|shadow of[^,]*)\b\s*,?/gi, '');
-            if (!/\bno humans\b/i.test(p)) p = `no humans, still life, object focus, ${p}`;
-        }
+        const hasAnimal = /\b(animal focus|snake|viper|python|dog|bird|horse)\b/i.test(p) || (/\bcat\b/i.test(p) && !/\b(cat ears|cat tail)\b/i.test(p));
         p = p
             .replace(/1\.3::tall lean adult man[^:]*::\s*,?/gi, '')
             .replace(/-1\.5::otoko no ko[^:]*::\s*,?/gi, '')
-            .replace(/\b(tall lean adult man|adult male proportions|broad masculine shoulders|wider male shoulders|long male legs|mature adult face|wide shot|full body|cowboy shot|medium shot|establishing shot|[2-6]boys|[2-6]girls|multiple boys|multiple girls)\b\s*,?/gi, '');
-        if (!hasHandsOrBody && !/\bno humans\b/i.test(p)) {
+            .replace(/\b(wide shot|full body|cowboy shot|medium shot|establishing shot|[2-6]boys|[2-6]girls|multiple boys|multiple girls)\b\s*,?/gi, '');
+        if (!hasHandsOrBody && !hasAnimal && !/\bno humans\b/i.test(p)) {
             p = p.replace(/\b(1boy|1girl|solo)\b\s*,?/gi, '');
-            p = `no humans, ${p}`;
-        } else if (hasHandsOrBody && !/\b(no humans|head out of frame|face out of frame|cropped)\b/i.test(p) && !/\b(cheek|ear|lips|mouth|neck|collarbone|clavicle|throat|hickey|bruise)\b/i.test(p)) {
-            p = `head out of frame, cropped, ${p}`;
+            p = `no humans, still life, object focus, ${p}`;
         }
-    } else {
-        if (!/\b([1-4]boys?|[1-4]girls?)\b/i.test(p) && /\b(nose ring|lip piercing|labret|purple skin|four eyes|multiple eyes|silver-black hair|shaggy bangs|ant antennae|antennae)\b/i.test(p)) {
-            p = `1boy, solo, ${p}`;
-        }
-        if (/\b(plum|burgundy|crimson)\s+blush\b/i.test(p)) {
-            p = p.replace(/\b(?:plum|burgundy|crimson)\s+blush\b/gi, 'deep blush on cheeks');
-        }
-        if (panelIdx === 2 && !/\b(close-up|portrait|upper body)\b/i.test(p)) {
-            p = `close-up, portrait, upper body, ${p}`;
-        }
+    } else if (panelIdx === 2 && !/\b(close-up|portrait|upper body)\b/i.test(p)) {
+        p = `close-up, portrait, upper body, ${p}`;
     }
 
     return p.replace(/,\s*,+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/\s{2,}/g, ' ').trim();
@@ -8767,6 +8615,84 @@ function buildDistinctComicPanelsFallback(baseDesc, charCaptions, isNai = true) 
         ? `${/\b(woman|girl|female|1girl)\b/i.test(char1Identity) ? '1girl, solo' : '1boy, solo'}, medium close-up, dynamic angle, upper body, ${stripActionAndPropTagsFromCharCaption(char1Identity).replace(/\b([1-9]girls?|[1-9]boys?|multiple boys|multiple girls|wide shot|full body)\b\s*,?/gi, '').trim()}, expressive reaction, detailed background, dramatic lighting`
         : panel2;
     return [panel1, panel2, panel3, panel4];
+}
+
+
+function validateComicFrameBeforeNai(framePrompt, frameRefs, fIdx = 0) {
+    let p = String(framePrompt || '');
+    const fixes = [];
+    if (/\b(1girl|1boy)\s*:/i.test(p)) {
+        p = p.replace(/\b(?:1girl|1boy)\s*:\s*/gi, '');
+        fixes.push('убрано лишнее двоеточие после 1girl/1boy');
+    }
+    if (/\b(1girl|1boy|2girls|2boys)\b/i.test(p) && /\bno humans\b/i.test(p)) {
+        const isPureObj = /\b(still life|food focus|object focus)\b/i.test(p) && !/\b(hand focus|hands|fingers|portrait|upper body|collarbone|neck)\b/i.test(p);
+        if (isPureObj) {
+            p = p.replace(/\b(?:1girl|1boy|solo|bare hands|male hands|two hands only)\b\s*,?/gi, '');
+            fixes.push('убраны теги человека из чисто предметного кадра');
+        } else {
+            p = p.replace(/\bno humans\b\s*,?/gi, '');
+            fixes.push('убран конфликт 1girl/1boy + no humans');
+        }
+    }
+    if (/\bbare hands\b/i.test(p) && /\b(?:gloves?|gloved)\b/i.test(p)) {
+        p = p.replace(/\bbare hands\b\s*,?/gi, '');
+        fixes.push('убран конфликт bare hands + gloved');
+    }
+    if (/\b([2-6]girls|[2-6]boys|multiple girls|multiple boys)\b/i.test(p) && /\bsolo\b/i.test(p)) {
+        p = p.replace(/\bsolo\b\s*,?/gi, '');
+        fixes.push('убран конфликт 2+ персонажей + solo');
+    }
+    const caps = Array.isArray(frameRefs?.charCaptions) ? frameRefs.charCaptions.filter(Boolean) : [];
+    if (caps.length >= 2) {
+        const gCount = caps.filter(c => /\b1girl\b/i.test(c) && !/\b1boy\b/i.test(c)).length;
+        const bCount = caps.filter(c => /\b1boy\b/i.test(c) && !/\b1girl\b/i.test(c)).length;
+        if (/\bsolo\b/i.test(p)) {
+            p = p.replace(/\bsolo\b\s*,?/gi, '');
+            fixes.push('убран solo при 2+ слотах CHAR');
+        }
+        if (gCount === 2 && bCount === 0 && /\b1girl\b/i.test(p) && !/\b2girls\b/i.test(p)) {
+            p = p.replace(/\b1girl\b/i, '2girls');
+            fixes.push('исправлено 1girl -> 2girls по 2 слотам CHAR');
+        } else if (bCount === 2 && gCount === 0 && /\b1boy\b/i.test(p) && !/\b2boys\b/i.test(p)) {
+            p = p.replace(/\b1boy\b/i, '2boys');
+            fixes.push('исправлено 1boy -> 2boys по 2 слотам CHAR');
+        }
+    } else if (caps.length === 0 && fIdx === 2 && /\bsolo\b/i.test(p) && /\b([2-6]girls|[2-6]boys|multiple girls|multiple boys)\b/i.test(p)) {
+        p = p.replace(/\b(?:[2-6]girls|[2-6]boys|multiple girls|multiple boys)\b\s*,?/gi, '');
+        fixes.push('убраны групповые теги из сольного портрета PANEL3');
+    }
+    p = p.replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
+    if (fixes.length) {
+        logImageDiag(`Валидатор промпта (кадр ${fIdx + 1}): ${fixes.join('; ')}`);
+    }
+    return p;
+}
+
+function extractPerHeroOutfitMap(charCaps, panel1, castNames = []) {
+    const out = {};
+    const outfitTokRe = /\b(?:swimsuit|one-piece swimsuit|bikini|monokini|swimwear|beachwear|pareo|sarong|lingerie|bodysuit|pajamas|nightgown|bathrobe|tank top|camisole|crop top|hospital gown|button-up shirt|t-shirt|shirt|blouse|vest|waistcoat|necktie|tie|jacket|coat|trench coat|cardigan|sweater|turtleneck|hoodie|dress|skirt|mini skirt|trousers|pants|jeans|shorts|robe|uniform|suit|blazer|scarf|choker|apron|bandages?|garter|boots|tights|stockings|glasses|eyewear)\b/i;
+    const slots = Array.isArray(charCaps) && charCaps.length ? charCaps : (panel1 ? [panel1] : []);
+    slots.forEach((slot, idx) => {
+        const toks = String(slot || '').split(',').map(t => t.trim()).filter(Boolean);
+        const outfitToks = toks.filter(t => outfitTokRe.test(t) && t.length <= 60).slice(0, 7);
+        if (!outfitToks.length) return;
+        let label = '';
+        for (const nm of (castNames || [])) {
+            const vars = transliterateRuNameVariants(nm).map(v => v.toLowerCase());
+            const lowSlot = String(slot || '').toLowerCase();
+            if (vars.some(v => v.length >= 3 && lowSlot.includes(v))) {
+                label = nm;
+                break;
+            }
+        }
+        if (!label) {
+            const g = /\b1boy\b/i.test(slot) && !/\b1girl\b/i.test(slot) ? 'Парень' : 'Девушка';
+            label = castNames?.[idx] || `${g} ${idx + 1}`;
+        }
+        out[label] = outfitToks.join(', ');
+    });
+    return out;
 }
 
 function buildRefsForSingleComicFrame(baseRefs, frameDesc, frameCharCaps, fIdx, whoNames = []) {
@@ -9476,13 +9402,14 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     ? (parsedPanel.charCaptions || []).map(c => enforceMonochromeMangaPrompt(c, false))
                     : parsedPanel.charCaptions;
                 const frameRefs = buildRefsForSingleComicFrame(refs, cleanRawFrame, cleanPanelCaps, fIdx, who);
+                const validatedFramePrompt = isNai ? validateComicFrameBeforeNai(framePrompt, frameRefs, fIdx) : framePrompt;
                 // Для 3 кадров: 1-й landscape + 2-й и 3-й portrait; для 4 кадров (манхва 1+2+1): 1-й и 4-й landscape, 2-й и 3-й portrait
                 const isWideRowFrame = (framesToDraw.length === 3 && fIdx === 0) || (framesToDraw.length === 4 && (fIdx === 0 || fIdx === 3));
                 const frameOrient = isWebtoonStrip ? 'square' : (isWideRowFrame ? 'landscape' : 'portrait');
-                logImageDiag(`Комикс-полоса: рисуем кадр ${fIdx + 1} из ${framesToDraw.length} (${frameOrient}, слотов CHAR: ${frameRefs?.charCaptions?.length || 0})`, framePrompt);
+                logImageDiag(`Комикс-полоса: рисуем кадр ${fIdx + 1} из ${framesToDraw.length} (${frameOrient}, слотов CHAR: ${frameRefs?.charCaptions?.length || 0})`, validatedFramePrompt);
                 say(`🎨 Рисую кадр манхвы ${fIdx + 1} из ${framesToDraw.length}…`);
                 const fUrl = await withSharedKeyRetry(async () => {
-                    const outUrl = await withTimeout(drawPicture(framePrompt, frameRefs, frameOrient), 120000, `кадр манхвы ${fIdx + 1}`);
+                    const outUrl = await withTimeout(drawPicture(validatedFramePrompt, frameRefs, frameOrient), 120000, `кадр манхвы ${fIdx + 1}`);
                     if (!outUrl) throw new Error(`Пустой ответ на кадре ${fIdx + 1}`);
                     return outUrl;
                 }, `кадр ${fIdx + 1}/${framesToDraw.length}`, 4, 5500);
@@ -9839,7 +9766,13 @@ async function openSceneImageViewer(mesId, fallbackSceneObj = null) {
 
         const botRow = $('<div class="nnb-pop-row nnb-pop-links" style="margin-top:8px; justify-content:space-between; flex-wrap:wrap; gap:8px;"></div>');
         botRow.append($('<div class="menu_button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i> Открыть в полном размере</div>').on('click', () => window.open(curUrl, '_blank')));
-        botRow.append($('<div class="menu_button"><i class="fa-solid fa-camera-rotate"></i> Выбрать другой ракурс / новый промпт</div>').on('click', async () => {
+        if (meta?.comicOpts?.enabled || (Array.isArray(meta?.history) && meta.history.length > 1)) {
+            botRow.append($('<div class="menu_button nnb-btn-primary"><i class="fa-solid fa-rotate"></i> Новый промпт только для этой страницы</div>').on('click', async () => {
+                closePopupOf(el);
+                await rerollSpecificManhwaPageInPlace(targetIdx, meta, curUrl, true);
+            }));
+        }
+        botRow.append($('<div class="menu_button"><i class="fa-solid fa-camera-rotate"></i> Перерисовать всю сцену / сменить ракурс</div>').on('click', async () => {
             closePopupOf(el);
             await showScenePopup(targetIdx, true);
         }));
@@ -10229,7 +10162,7 @@ async function showAlbum() {
 
 async function redrawSceneBySamePrompt(mesId, customMeta = null) {
     if (!Number.isInteger(mesId)) mesId = undefined;
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится под постом сама', '🎬 Сцена');
+    if (sceneDrawing || multiPageKeepAliveActive) return toastr.info(`⏳ Сцена/комикс уже рисуется${_chapterDrawStatus ? ` (${_chapterDrawStatus})` : ''} — картинка появится под постом сама`, '🎬 Модель уже занята');
     const meta = customMeta || findSavedSceneMeta(mesId);
     if (!hasValidSceneMeta(meta)) {
         return showScenePopup(mesId);
@@ -10250,12 +10183,21 @@ async function redrawSceneBySamePrompt(mesId, customMeta = null) {
 }
 
 // 🎬: рисуем в фоне и ставим картинку отдельным блоком под постом (с поддержкой многостраничной главы манхвы по кусочкам поста!)
+let _chapterDrawStatus = '';
+
 async function showScenePopup(mesId, forceAsk = false) {
     if (!Number.isInteger(mesId)) mesId = undefined;
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется — картинка появится под постом сама', '🎬 Сцена');
+    if (sceneDrawing || multiPageKeepAliveActive) {
+        const prog = _chapterDrawStatus ? ` (${_chapterDrawStatus})` : '';
+        return toastr.info(`⏳ Комикс/сцена уже рисуется${prog} — подожди завершения, картинки появятся под постом сами`, '🎬 Модель уже занята');
+    }
     const existingMeta = findSavedSceneMeta(mesId);
     const choice = await askSceneCameraMode(existingMeta, forceAsk, mesId);
     if (!choice) return;
+    if (sceneDrawing || multiPageKeepAliveActive) {
+        const prog = _chapterDrawStatus ? ` (${_chapterDrawStatus})` : '';
+        return toastr.info(`⏳ Комикс/сцена уже рисуется${prog} — новый запуск отменён`, '🎬 Модель уже занята');
+    }
     const camMode = choice.mode || 'third';
     const reuseMeta = choice.reuseMeta || null;
     const forcedCast = choice.forcedCast || null;
@@ -10270,10 +10212,12 @@ async function showScenePopup(mesId, forceAsk = false) {
             while (tIdxInit >= 0 && (!cInit.chat[tIdxInit] || cInit.chat[tIdxInit].is_system)) tIdxInit--;
         }
         multiPageKeepAliveActive = true;
+        _chapterDrawStatus = `страница 1 из ${chunks.length}`;
         startBackgroundGenerationKeepAlive();
         const note = toastr.info(`Рисуем главу манхвы (страница 1 из ${chunks.length})… Все страницы появятся под постом разом по готовности, чтобы текст не скакал!`, '📚 Глава манхвы', { timeOut: 300000, extendedTimeOut: 60000, tapToDismiss: true });
         const completedPages = [];
         let chapterPassport = '';
+        let chapterOutfitLock = {};
         let chapterCanonByGender = { boy: '', girl: '', boyCast: [], girlCast: [] };
         let lastSceneSegIdx = -1;
         const fullRawMesForPassport = String(cInit.chat?.[tIdxInit]?.mes || '');
@@ -10283,6 +10227,7 @@ async function showScenePopup(mesId, forceAsk = false) {
                 const curSeg = getActiveSceneSegmentFromFullPost(chObj.text, fullRawMesForPassport);
                 if (curSeg.sceneIndex !== lastSceneSegIdx) {
                     chapterPassport = '';
+                    chapterOutfitLock = {};
                     chapterCanonByGender = { boy: '', girl: '', boyCast: [], girlCast: [] };
                     lastSceneSegIdx = curSeg.sceneIndex;
                 }
@@ -10291,6 +10236,7 @@ async function showScenePopup(mesId, forceAsk = false) {
                         note.find('.toast-message').text(`Рисуем главу манхвы: страница ${i + 1} из ${chunks.length}… По готовности выложим всю главу разом!`);
                     }
                 } catch (e) { /* ignore */ }
+                _chapterDrawStatus = `страница ${i + 1} из ${chunks.length}`;
                 logImageDiag(`Глава манхвы: рисуем страницу ${i + 1} из ${chunks.length}`);
                 const chunkComicOpts = {
                     ...comicOpts,
@@ -10298,6 +10244,7 @@ async function showScenePopup(mesId, forceAsk = false) {
                     chunkTotal: chObj.total,
                     chunkText: chObj.text,
                     chapterCharPassport: chapterPassport,
+                    chapterOutfitLock: { ...chapterOutfitLock },
                     chapterCanonByGender: {
                         boy: chapterCanonByGender.boy,
                         girl: chapterCanonByGender.girl,
@@ -10320,6 +10267,18 @@ async function showScenePopup(mesId, forceAsk = false) {
                         pageRes.sceneMeta.inlineViewMode = 'vertical';
                         const caps = Array.isArray(pageRes.sceneMeta.charCaptions) ? pageRes.sceneMeta.charCaptions : [];
                         const p1 = pageRes.sceneMeta.panelPrompts?.[0] || pageRes.sceneMeta.desc || '';
+                        const chunkChangedClothes = /(?:переодел|снял[аи]?\s+(?:куртк|плащ|пиджак|халат|платье|рубашк|свитер)|надел[аи]?\s+(?:другую|новую|чистую|куртк|пальто|халат|платье))/i.test(chObj?.text || '');
+                        const pageOutfits = extractPerHeroOutfitMap(caps, p1, pageRes.sceneMeta.cast || []);
+                        const stCur = store();
+                        const wornUserLook = (stCur?.wardrobe?.active?.status === 'worn') ? (stCur.wardrobe.active.look?.en || stCur.wardrobe.active.look?.desc || '') : '';
+                        const uNameLow = String(storyNames()?.user || '').toLowerCase();
+                        for (const [hName, hOut] of Object.entries(pageOutfits)) {
+                            if (wornUserLook && uNameLow && hName.toLowerCase() === uNameLow) {
+                                chapterOutfitLock[hName] = wornUserLook;
+                            } else if (!chapterOutfitLock[hName] || chunkChangedClothes) {
+                                chapterOutfitLock[hName] = hOut;
+                            }
+                        }
                         const hasNewBoy = /\b1boy\b/i.test(p1) && !/\b1boy\b/i.test(chapterPassport);
                         const hasNewGirl = /\b1girl\b/i.test(p1) && !/\b1girl\b/i.test(chapterPassport);
                         const hasNewTail = /\b(?:puma|cougar|cat|dog|wolf|fox|lion|animal)_?\s*tail\b/i.test(p1) && !/\b(?:puma|cougar|cat|dog|wolf|fox|lion|animal)_?\s*tail\b/i.test(chapterPassport);
@@ -10397,6 +10356,7 @@ async function showScenePopup(mesId, forceAsk = false) {
         } finally {
             sceneDrawing = false;
             multiPageKeepAliveActive = false;
+            _chapterDrawStatus = '';
             stopBackgroundGenerationKeepAlive();
             try { toastr.clear(note); } catch (e) { /* ignore */ }
         }
@@ -10447,7 +10407,7 @@ function findNextUndrawnChunkIndex(sceneMeta, totalChunks) {
 }
 
 async function drawNextComicChunkPage(mesId, baseSceneMeta) {
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется — подожди завершения текущего кадра', '📖 Манхва');
+    if (sceneDrawing || multiPageKeepAliveActive) return toastr.info(`⏳ Комикс уже рисуется${_chapterDrawStatus ? ` (${_chapterDrawStatus})` : ''} — подожди завершения`, '📖 Модель уже занята');
     const c = ctx();
     let targetIdx = Number.isInteger(mesId) ? mesId : (c.chat.length - 1);
     if (!Number.isInteger(mesId)) {
@@ -10659,7 +10619,7 @@ async function editQuotesForSpecificPageUrl(mesId, sceneMeta, targetUrl) {
 }
 
 async function rerollSpecificManhwaPageInPlace(mesId, sceneMeta, targetUrl, regeneratePromptFromChunk = false) {
-    if (sceneDrawing) return toastr.info('Сцена уже рисуется — подожди завершения текущего кадра', '🔄 Перерисовка страницы');
+    if (sceneDrawing || multiPageKeepAliveActive) return toastr.info(`⏳ Комикс уже рисуется${_chapterDrawStatus ? ` (${_chapterDrawStatus})` : ''} — подожди завершения`, '🔄 Модель уже занята');
     const idxInHist = Array.isArray(sceneMeta?.history) ? sceneMeta.history.indexOf(targetUrl) : -1;
     const pMeta = sceneMeta?.pageMetaMap?.[targetUrl] || null;
     const cOpts = pMeta?.comicOpts || sceneMeta?.comicOpts || null;
