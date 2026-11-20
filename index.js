@@ -1287,7 +1287,7 @@ const defaults = {
     textApiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
     textApiKey: '',
     textApiModel: 'gemini-2.5-flash',
-    textContextMsgs: 14,
+    textContextMsgs: 25,
     imgPromptSource: '',
     imgPromptApiBase: 'https://open.bigmodel.cn/api/paas/v4',
     imgPromptApiKey: '',
@@ -2443,7 +2443,7 @@ function buildStandaloneContextPrompt(taskPrompt) {
     }
 
     // 2. Последние сообщения чата (для последних 6 постов сохраняем до 3600 символов и обязательно концовку поста, чтобы модель Блокнота видела финал сцены!)
-    const maxMsgs = Math.max(5, Math.min(80, Number(s.textContextMsgs) || 14));
+    const maxMsgs = Math.max(5, Math.min(80, Number(s.textContextMsgs) || 25));
     const chat = Array.isArray(c.chat) ? c.chat : [];
     const recent = chat.filter(m => m && !m.is_system && m.mes).slice(-maxMsgs);
     if (recent.length) {
@@ -2451,7 +2451,7 @@ function buildStandaloneContextPrompt(taskPrompt) {
             const speaker = m.is_user ? names.user : (m.name || names.char);
             const rawClean = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').trim();
             const isVeryRecent = idx >= recent.length - 6;
-            const limit = isVeryRecent ? 3600 : 1200;
+            const limit = isVeryRecent ? 3600 : 1800;
             const clean = rawClean.length <= limit
                 ? rawClean
                 : `${rawClean.slice(0, Math.floor(limit * 0.45))} … ${rawClean.slice(-Math.floor(limit * 0.55))}`;
@@ -2735,7 +2735,7 @@ ${writerNote}]
     }
 
     return await withSharedKeyRetry(
-        () => sendViaTavernProfile(src, writerNote ? userOnlyPrompt : fullPrompt, 1536, 'профиль модели для промптов картинок', writerNote, true),
+        () => sendViaTavernProfile(src, writerNote ? userOnlyPrompt : fullPrompt, 4096, 'профиль модели для промптов картинок', writerNote, true),
         'профиль промптов раскадровки',
         5,
         4000
@@ -4910,6 +4910,20 @@ function sanitizeNovelAiPositiveAndNegative(posPrompt, negPrompt) {
     if (split.negative) {
         neg = [neg, split.negative].filter(Boolean).join(', ');
     }
+
+    const isExplicitlyShirtless = /\b(shirtless|bare chest|bare torso|topless|naked torso|unbuttoned|open shirt|open cardigan showing chest)\b/i.test(pos);
+    const hasUpperClothes = /\b(cardigan|sweater|jacket|coat|hoodie|shirt|t-shirt|turtleneck|vest|blazer|suit|uniform)\b/i.test(pos);
+
+    if (!isExplicitlyShirtless && hasUpperClothes) {
+        // В Danbooru "flat male chest" / "male chest" = оголённая мужская грудь! Заменяем на безопасное описание мужской фигуры
+        pos = pos.replace(/\bflat\s+male\s+chest\b/gi, 'masculine upper body');
+        pos = pos.replace(/\bmale\s+chest\b/gi, 'masculine torso');
+        // Если на персонаже кардиган (cardigan), но не упомянута футболка/рубашка под ним — добавляем shirt under cardigan, чтобы кардиган не рисовался на голое тело
+        if (/\bcardigan\b/i.test(pos) && !/\b(shirt|t-shirt|tee|turtleneck|sweater|blouse|top|under\s+cardigan)\b/i.test(pos)) {
+            pos = pos.replace(/\b([a-z]+\s+cardigan|cardigan)\b/i, '$1 over plain shirt, closed front');
+        }
+    }
+
 
     // Убираем "no breasts" / "no female chest" из позитивного промпта (в позитиве NovelAI читает само слово после "no")
     if (/\bno\s+(?:breasts|female\s+chest|chest)\b/i.test(pos)) {
