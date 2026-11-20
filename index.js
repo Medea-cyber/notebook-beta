@@ -10252,7 +10252,8 @@ async function showScenePopup(mesId, forceAsk = false) {
                         const p1 = pageRes.sceneMeta.panelPrompts?.[0] || pageRes.sceneMeta.desc || '';
                         const chunkChangedClothes = /(?:переодел|снял[аи]?\s+(?:куртк|плащ|пиджак|халат|платье|рубашк|свитер)|надел[аи]?\s+(?:другую|новую|чистую|куртк|пальто|халат|платье))/i.test(chObj?.text || '');
                         const pageOutfits = extractPerHeroOutfitMap(caps, p1, pageRes.sceneMeta.cast || []);
-                        const wornUserLook = (st?.wardrobe?.active?.status === 'worn') ? (st.wardrobe.active.look?.en || st.wardrobe.active.look?.desc || '') : '';
+                        const stCur = store();
+                        const wornUserLook = (stCur?.wardrobe?.active?.status === 'worn') ? (stCur.wardrobe.active.look?.en || stCur.wardrobe.active.look?.desc || '') : '';
                         const uNameLow = String(storyNames()?.user || '').toLowerCase();
                         for (const [hName, hOut] of Object.entries(pageOutfits)) {
                             if (wornUserLook && uNameLow && hName.toLowerCase() === uNameLow) {
