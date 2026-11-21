@@ -3714,7 +3714,7 @@ async function withBusy(status, fn) {
 
 // Чистит промпт картинки от «мыслей вслух» модели (Wait…, The scene: …?, per rules…), если они протекли в ответ
 const NNB_REASONING_SEG_RE = /\?|\b(?:wait|hmm|rule|rules|earlier context|the scene|since they|avoid|per rules|let me|i'll|i will|i should|we should|should be|maybe|actually|okay|not explicit yet|counts?)\b|[=—]\s*\d|^\s*(?:so|but|now|then|also)\b/i;
-const NNB_REASONING_DETECT_RE = /\?|\bwait\b|\bhmm\b|\btags?\s*:|\bthe scene\s*:|\bper rules\b|\blet me\b|\bthe rule\b|\bearlier context\b|\bavoid [a-z/ -]+ tags\b/i;
+const NNB_REASONING_DETECT_RE = /\bQUOTE\d\b|→|\bI (?:can|could|will|would|'ll|think)\b|\bcould depict\b|\bessentially\b|\bmoment \d\b|\.\.\.\s*no\b|^\s*no\s*[—-]|\?|\bwait\b|\bhmm\b|\btags?\s*:|\bthe scene\s*:|\bper rules\b|\blet me\b|\bthe rule\b|\bearlier context\b|\bavoid [a-z/ -]+ tags\b/i;
 function stripLeakedReasoningFromTags(text) {
     let t = String(text || '');
     if (!t.trim()) return t;
@@ -5000,11 +5000,6 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
     // Пользовательский стиль вставляется 1-в-1 без изменений текстовой моделью!
     const prefix = String(s.naiPrefix ?? '').trim();
     let baseNeg = String(s.naiNegative ?? defaults.naiNegative).trim();
-    if (!baseNeg) {
-        // пустой негатив резко ухудшает анатомию — подставляем базовый (без nsfw, чтобы не мешать откровенным сценам)
-        baseNeg = String(defaults.naiNegative).replace(/^\s*nsfw\s*,\s*/i, '');
-        logImageDiag('⚠️ Негативный промпт в настройках пустой — подставлен базовый (без nsfw)');
-    }
     if (refs?.extraNeg) {
         baseNeg = [baseNeg, refs.extraNeg].filter(Boolean).join(', ');
     }
@@ -7511,7 +7506,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         rawMainChDesc ? `[Описание из карточки ${names.char}: ${rawMainChDesc}]` : '',
     ].filter(Boolean).join(' ');
     const mcSceneTxt = hasSpecificChunk ? String(comicOpts.chunkText) : fullTargetText;
-    const mcInScene = isNameMentionedInText(mcCardObj?.name || names.char, mcSceneTxt) || (Array.isArray(forcedCast) && forcedCast.some(fc => isNameMentionedInText(fc, mcCardObj?.name || names.char)));
+    const mcInScene = isNameMentionedInText(mcCardObj?.name || names.char, mcSceneTxt) || isNameMentionedInText(mcCardObj?.name || names.char, activeSceneSeg?.sceneText || '') || (Array.isArray(forcedCast) && forcedCast.some(fc => isNameMentionedInText(fc, mcCardObj?.name || names.char)));
     const mcAppLine = !mcAppParts ? '' : (mcInScene
         ? (parseCanonFromAppearance(mcCardObj?.appearanceEn)
             ? `— ${mcCardObj?.name || names.char} (главный персонаж — КАНОНИЧНЫЙ: в каждом кадре и CHAR-слоте с ним ОБЯЗАТЕЛЬНО пиши его каноничный тег Danbooru ТОЧНО как здесь: "${parseCanonFromAppearance(mcCardObj.appearanceEn).tag}" и дальше его теги "${mcCardObj.appearanceEn}"; НЕ заменяй канон описанием похожей внешности!): ${mcAppParts}`
@@ -8095,6 +8090,109 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
         }
     }
     return false;
+}
+
+// ===== Замок внешности: волосы/глаза/уши/хвост/очки героя берутся из поля «Внешность (англ.)» и не смешиваются с другими героями =====
+const NNB_IDENT_RE = /\b(hair|bangs|ponytail|braid|twintails|eyes|glasses|eyewear|ears|tail|skin|freckles|mole|scar|horns|beard|stubble|piercing|fangs)\b/i;
+const NNB_LOCK_HAIR_COLOR_RE = /\b(jet[- ]black|black|dark brown|light brown|brown|blonde|blond|golden|yellow|white|silver|grey|gray|platinum|red|crimson|orange|ginger|auburn|copper|caramel|chestnut|pink|blue|green|purple|violet|teal|ash)\b/i;
+function nnbIdentityTokens(appEn) {
+    return String(appEn || '').split(/\s*,\s*/).map(x => x.trim().replace(/^\d+(?:\.\d+)?::|::$/g, '').trim())
+        .filter(x => x && NNB_IDENT_RE.test(x) && x.split(/\s+/).length <= 6 && !/^no\s/i.test(x));
+}
+function nnbHeroesForLock(castNames) {
+    const st = store();
+    if (!st) return { boy: [], girl: [] };
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    const castLow = (Array.isArray(castNames) ? castNames : []).map(x => String(x || '').toLowerCase().replace(/ё/g, 'е'));
+    const out = { boy: [], girl: [] };
+    for (const n of cards) {
+        const appEn = String(n?.appearanceEn || '').trim();
+        if (!appEn || !n?.name) continue;
+        const nm = String(n.name).toLowerCase().replace(/ё/g, 'е');
+        if (castLow.length && !castLow.some(c => c && (c.includes(nm) || nm.includes(c)))) continue;
+        let g = '';
+        try { g = guessCardGender(n, parseCanonFromAppearance(appEn)); } catch (e) { /* ignore */ }
+        if (!g) g = /\b(1girl|girl|woman|female)\b/i.test(appEn) ? 'girl' : (/\b(1boy|boy|man|male)\b/i.test(appEn) ? 'boy' : '');
+        if (out[g]) out[g].push({ name: n.name, ident: nnbIdentityTokens(appEn) });
+    }
+    return out;
+}
+function nnbApplyIdentityLock(text, hero) {
+    if (!hero || !hero.ident.length) return text;
+    let parts = String(text || '').split(/\s*,\s*/).filter(Boolean);
+    const heroHair = (hero.ident.join(', ').match(new RegExp(NNB_LOCK_HAIR_COLOR_RE.source + '(?=[^,]*\\bhair\\b)', 'i')) || [])[0] || '';
+    const heroEyes = (hero.ident.join(', ').match(/\b([a-z-]+)\s+eyes\b/i) || [])[1] || '';
+    parts = parts.filter(t => {
+        // чужой цвет волос/глаз в слоте этого героя — убираем (иначе рыжие волосы героини «перетекают» на него)
+        if (heroHair && /\bhair\b/i.test(t) && NNB_LOCK_HAIR_COLOR_RE.test(t) && !new RegExp(`\\b${heroHair}\\b`, 'i').test(t)) return false;
+        if (heroHair && /^(red|copper|ginger|blonde|black|brown|silver|white|pink|blue)\s+hair$/i.test(t) && !new RegExp(`\\b${heroHair}\\b`, 'i').test(t)) return false;
+        if (heroEyes && /\beyes\b/i.test(t) && /\b(green|blue|red|brown|amber|yellow|golden|grey|gray|purple|violet|black|hazel|pink)\b/i.test(t) && !new RegExp(`\\b${heroEyes}\\b`, 'i').test(t)) return false;
+        return true;
+    });
+    const low = parts.join(', ').toLowerCase();
+    const add = hero.ident.filter(x => !low.includes(x.toLowerCase()));
+    return [...parts, ...add].join(', ');
+}
+function nnbSlotGender(cap) {
+    const c = String(cap || '');
+    if (/\b1girl\b/i.test(c) || (/\b(woman|girl|female)\b/i.test(c) && !/\b(1boy|man|male)\b/i.test(c.replace(/\bwoman\b/gi, '')))) return 'girl';
+    if (/\b1boy\b/i.test(c) || /\b(man|boy|male)\b/i.test(c.replace(/\bwoman\b/gi, ''))) return 'boy';
+    return '';
+}
+// «glasses removed», «cardigan taken off» — NovelAI читает это как «очки/кардиган есть», убираем такие теги целиком
+function nnbDropRemovedItemTags(text) {
+    return String(text || '').split(/\s*,\s*/).filter(t => t && !/\b(removed|taken off|took off|no longer worn)\b/i.test(t)).join(', ');
+}
+
+function buildHeroAppearancePrompt(n) {
+    const cObj = ctx();
+    const rawDesc = n.isMainChar && cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]?.description
+        ? cObj.substituteParams(String(cObj.characters[cObj.characterId].description)).slice(0, 900)
+        : '';
+    return `[OOC: Определи точные теги внешности персонажа «${n.name}» для генератора аниме-артов NovelAI (база Danbooru).
+Справка о персонаже: ${n.card || ''} ${rawDesc}
+ВАЖНЫЕ ПРАВИЛА:
+1) Если «${n.name}» — каноничный персонаж из известного аниме, манги или игры (например, Наоя Дзэнин / Naoya Zenin из Jujutsu Kaisen, Годжо Сатору, Тоджи Фушигуро, Сугуру Гето и т.д.), ОБЯЗАТЕЛЬНО поставь ПЕРВЫМИ два точных тега в формате Danbooru: \`фамилия_имя_по-японски, название_тайтла_по-английски\` со строчной буквы (например: \`zen'in naoya, jujutsu kaisen\` или \`fushiguro toji, jujutsu kaisen\`). Просто одного имени без фамилии и тайтла NovelAI не понимает!
+2) Сразу после каноничного тега (или с самого начала, если персонаж оригинальный) напиши через запятую 8–12 коротких точных тегов Danbooru его физической внешности: цвет и длина волос, причёска, цвет и форма глаз (например, slit pupils, upturned eyes), пирсинг/шрамы/уши/хвост, телосложение.
+Выдай ТОЛЬКО одну строку английских тегов через запятую без пояснений.]`;
+}
+
+// Автоматически (один раз на героя) заполняет «Внешность (англ.)» из карточки, если поле пустое —
+// чтобы замок внешности работал без ручного заполнения (особенно для главного персонажа {{char}})
+async function nnbAutoFillCastAppearance(st, mesId, comicOpts) {
+    if (!st) return;
+    try {
+        const c = ctx();
+        const idx = Number.isInteger(mesId) ? mesId : (c.chat?.length ?? 1) - 1;
+        const sceneTxt = `${comicOpts?.chunkText || ''}\n${c.chat?.[idx]?.mes || ''}`;
+        const heroes = [];
+        const mc = ensureMainCharCard(st);
+        if (mc) heroes.push(mc);
+        (st.npcs || []).forEach(n => { if (n?.name && isNameMentionedInText(n.name, sceneTxt)) heroes.push(n); });
+        let changed = false;
+        for (const n of heroes) {
+            if (String(n.appearanceEn || '').trim() || n._autoAppearTried) continue;
+            n._autoAppearTried = true;
+            logImageDiag(`🧬 У героя «${n.name}» не заполнена внешность (англ.) — составляю один раз по карточке`);
+            const res = await quietGenerateImagePrompt(buildHeroAppearancePrompt(n));
+            const tags = String(res || '').replace(/^(?:TAGS|APPEARANCE)\s*[:：—–-]\s*/i, '').replace(/[\r\n]+/g, ', ').trim();
+            if (tags && !NNB_REASONING_DETECT_RE.test(tags) && tags.length < 600) {
+                n.appearanceEn = tags;
+                changed = true;
+                logImageDiag(`🧬 Внешность «${n.name}» сохранена в карточку героя (можно поправить во вкладке «Герои»)`, tags);
+            }
+        }
+        if (changed) await c.saveMetadata();
+    } catch (e) { console.warn('[npc_notebook] auto appearance', e); }
+}
+
+// Есть ли в ответе модели промптов рассуждения вместо тегов (в строках PANEL/SCENE или вообще без строк PANEL)
+function nnbPromptAnswerHasReasoning(raw, isComicMode) {
+    const lines = String(raw || '').split(/\r?\n/).map(l => l.replace(/^[\s>*_#-]+/, '').trim()).filter(Boolean);
+    const tagLines = lines.filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ|SCENE|СЦЕНА)\s*[_#№]?\s*\d?\s*[:：—–.-]/i.test(l));
+    if (isComicMode && tagLines.filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ)/i.test(l)).length < 2) return true;
+    return tagLines.some(l => NNB_REASONING_DETECT_RE.test(l.replace(/^[^:：—–]*[:：—–]\s*/, '').split(/\s*\|\|\s*CHAR/i)[0]));
 }
 
 function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCaptions = []) {
@@ -9102,7 +9200,16 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             const isComicMode = !!(comicOpts && comicOpts.enabled);
             const cStyleObj = isComicMode ? getComicStyleById(comicOpts.styleId) : null;
             logImageDiag(`Шаг 1/2: запрос промпта ${isComicMode ? `комикса (${cStyleObj?.name || ''})` : 'сцены'} (источник: ${promptSrcLabel}, ракурс: ${camMode})`);
-            const raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(scenePromptRequest(st, mesId, camMode, forcedCast, directorWhisper, comicOpts)));
+            await nnbAutoFillCastAppearance(st, mesId, comicOpts);
+            const basePromptReq = scenePromptRequest(st, mesId, camMode, forcedCast, directorWhisper, comicOpts);
+            let raw = '';
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                const req = attempt === 1 ? basePromptReq
+                    : `${basePromptReq}\n\n[ВАЖНО: в прошлый раз в ответ попали рассуждения. Не рассуждай и не объясняй — выдай СРАЗУ готовые строки в нужном формате, в строках PANEL/SCENE только английские теги через запятую.]`;
+                raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(req));
+                if (!nnbPromptAnswerHasReasoning(raw, isComicMode) || attempt === 3) break;
+                logImageDiag(`🔁 В ответе модели промптов рассуждения вместо тегов — автоматически запрашиваю заново (попытка ${attempt + 1}/3)`, String(raw || '').slice(0, 300));
+            }
             logImageDiag('Ответ модели промптов получен', raw ? String(raw).slice(0, 500) : '(пусто)');
             // Поддержка ответа в формате <nai_imagen> (если пользователь вставил промпт из ext-blocks-custom) и многострочного SCENE:
             const rawCleaned = cleanAnswer(raw || '');
@@ -9460,6 +9567,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             const cStyle = getComicStyleById(activeComicOpts.styleId);
             const isWebtoonStrip = cStyle?.id === 'webtoon' || cStyle?.id === 'yonkoma';
             const framesCount = Number(activeComicOpts.framesPerPage) === 4 ? 4 : 3;
+            if (!reuseMeta && Array.isArray(panelPrompts) && panelPrompts.some(pp => NNB_REASONING_DETECT_RE.test(String(pp || '').split(/\s*\|\|\s*CHAR/i)[0]))) {
+                logImageDiag('⛔ В строках PANEL остались рассуждения модели — страница не рисуется', panelPrompts.join('\n').slice(0, 600));
+                throw new Error('модель промптов смешала рассуждения с тегами — нажми ещё раз (новый промпт)');
+            }
             if ((!Array.isArray(panelPrompts) || panelPrompts.length < 2) && !reuseMeta) {
                 const srcTxt = String(desc || prompt || '');
                 const cyr = (srcTxt.match(/[А-Яа-яЁё]/g) || []).length;
@@ -9496,6 +9607,25 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 if (fIdx > 0) {
                     rawFrameDesc = enforceSoloFrameOutfitFromPage(rawFrameDesc, framesToDraw[0], charCaptions);
                 }
+                rawFrameDesc = nnbDropRemovedItemTags(rawFrameDesc);
+                try {
+                    const lockHeroes = nnbHeroesForLock(cast);
+                    const pickHero = g => (lockHeroes[g] && lockHeroes[g].length === 1) ? lockHeroes[g][0] : null;
+                    if (Array.isArray(parsedPanel.charCaptions) && parsedPanel.charCaptions.length) {
+                        parsedPanel.charCaptions = parsedPanel.charCaptions.map(cap => {
+                            const h = pickHero(nnbSlotGender(cap));
+                            return nnbDropRemovedItemTags(h ? nnbApplyIdentityLock(cap, h) : cap);
+                        });
+                    } else {
+                        const hasGirl = /\b(1girl|woman|female)\b/i.test(rawFrameDesc);
+                        const hasBoy = /\b(1boy|man|male)\b/i.test(rawFrameDesc.replace(/\bwoman\b/gi, ''));
+                        const isHeadless = /\b(head out of frame|face out of frame|no humans|object focus)\b/i.test(rawFrameDesc);
+                        if (hasGirl !== hasBoy && !isHeadless) {
+                            const h = pickHero(hasGirl ? 'girl' : 'boy');
+                            if (h) rawFrameDesc = nnbApplyIdentityLock(rawFrameDesc, h);
+                        }
+                    }
+                } catch (lockErr) { console.warn('[npc_notebook] identity lock', lockErr); }
                 if (/\b[2-6]boys\b/i.test(rawFrameDesc)) {
                     rawFrameDesc = rawFrameDesc.replace(/\b1boy\s*:/gi, 'male:').replace(/,\s*1boy\b/gi, ', male');
                 }
@@ -10376,7 +10506,7 @@ async function showScenePopup(mesId, forceAsk = false) {
                         pageRes.sceneMeta.inlineViewMode = 'vertical';
                         const caps = Array.isArray(pageRes.sceneMeta.charCaptions) ? pageRes.sceneMeta.charCaptions : [];
                         const p1 = pageRes.sceneMeta.panelPrompts?.[0] || pageRes.sceneMeta.desc || '';
-                        const chunkChangedClothes = /(?:переодел|снял[аи]?\s+(?:куртк|плащ|пиджак|халат|платье|рубашк|свитер)|надел[аи]?\s+(?:другую|новую|чистую|куртк|пальто|халат|платье))/i.test(chObj?.text || '');
+                        const chunkChangedClothes = /(?:переодел|раздел|разде[лв]а|снял|сняла|стянул|сбросил|скинул|сдёрнул|сдернул|спустил|расстегнул|распахнул|обнаж|голы[йме]|нагишом|без одежды|купальник|плавк|надел[аи]?\s+(?:другую|новую|чистую|куртк|пальто|халат|платье))/i.test(chObj?.text || '');
                         const pageOutfits = extractPerHeroOutfitMap(caps, p1, pageRes.sceneMeta.cast || []);
                         const stCur = store();
                         const wornUserLook = (stCur?.wardrobe?.active?.status === 'worn') ? (stCur.wardrobe.active.look?.en || stCur.wardrobe.active.look?.desc || '') : '';
@@ -18287,16 +18417,7 @@ async function openNpcCardPopup(n) {
         detectCanonBtn.on('click', async () => {
             detectCanonBtn.css({ opacity: 0.6, pointerEvents: 'none' }).html('<i class="fa-solid fa-spinner fa-spin"></i> Ищу теги…');
             try {
-                const cObj = ctx();
-                const rawDesc = n.isMainChar && cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]?.description
-                    ? cObj.substituteParams(String(cObj.characters[cObj.characterId].description)).slice(0, 900)
-                    : '';
-                const pText = `[OOC: Определи точные теги внешности персонажа «${n.name}» для генератора аниме-артов NovelAI (база Danbooru).
-Справка о персонаже: ${n.card || ''} ${rawDesc}
-ВАЖНЫЕ ПРАВИЛА:
-1) Если «${n.name}» — каноничный персонаж из известного аниме, манги или игры (например, Наоя Дзэнин / Naoya Zenin из Jujutsu Kaisen, Годжо Сатору, Тоджи Фушигуро, Сугуру Гето и т.д.), ОБЯЗАТЕЛЬНО поставь ПЕРВЫМИ два точных тега в формате Danbooru: \`фамилия_имя_по-японски, название_тайтла_по-английски\` со строчной буквы (например: \`zen'in naoya, jujutsu kaisen\` или \`fushiguro toji, jujutsu kaisen\`). Просто одного имени без фамилии и тайтла NovelAI не понимает!
-2) Сразу после каноничного тега (или с самого начала, если персонаж оригинальный) напиши через запятую 8–12 коротких точных тегов Danbooru его физической внешности: цвет и длина волос, причёска, цвет и форма глаз (например, slit pupils, upturned eyes), пирсинг/шрамы/уши/хвост, телосложение.
-Выдай ТОЛЬКО одну строку английских тегов через запятую без пояснений.]`;
+                const pText = buildHeroAppearancePrompt(n);
                 const resTags = await quietGenerateImagePrompt(pText);
                 const cleanTags = String(resTags || '').replace(/^(?:TAGS|APPEARANCE)\s*[:：—–-]\s*/i, '').replace(/[\r\n]+/g, ', ').trim();
                 if (cleanTags) {
