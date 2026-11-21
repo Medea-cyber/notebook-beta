@@ -8187,9 +8187,36 @@ async function nnbAutoFillCastAppearance(st, mesId, comicOpts) {
     } catch (e) { console.warn('[npc_notebook] auto appearance', e); }
 }
 
+// Канон-тег героя X не должен стоять в слоте, где описан другой герой (чужие уши/антенны/руки и ни одной приметы X)
+function nnbStripForeignCanonFromSlot(cap, st) {
+    let out = String(cap || '');
+    if (!out || !st) return out;
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    const featRe = /\b(?:[a-z-]+\s+)?(?:ears?|tails?|horns?|wings?|antennae|four arms|scales)\b/gi;
+    const slotFeats = (out.match(featRe) || []).map(x => x.toLowerCase());
+    if (!slotFeats.length) return out;
+    for (const n of cards) {
+        const canon = parseCanonFromAppearance(n?.appearanceEn);
+        if (!canon?.tag) continue;
+        const coreRe = new RegExp(`\\b${canon.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        if (!coreRe.test(out)) continue;
+        const ownFeats = (String(n.appearanceEn).match(featRe) || []).map(x => x.toLowerCase().replace(/^(?:black|white|grey|gray|brown|blonde)\s+/, ''));
+        if (!ownFeats.length) continue;
+        const hasOwn = slotFeats.some(f => ownFeats.some(o => f.includes(o) || o.includes(f)));
+        if (hasOwn) continue;
+        const escS = canon.series ? canon.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+        out = out.replace(new RegExp(`(^|,)\\s*${canon.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(?:\\([^)]*\\))?\\s*(?=,|$)`, 'gi'), '$1');
+        if (escS) out = out.replace(new RegExp(`(^|,)\\s*${escS}\\s*(?=,|$)`, 'gi'), '$1');
+        out = out.replace(/,\s*,+/g, ',').replace(/^\s*,\s*/, '').trim();
+        logImageDiag(`🧬 Убран чужой канон-тег «${canon.tag}» из слота другого героя`, out.slice(0, 200));
+    }
+    return out;
+}
+
 // Есть ли в ответе модели промптов рассуждения вместо тегов (в строках PANEL/SCENE или вообще без строк PANEL)
 function nnbPromptAnswerHasReasoning(raw, isComicMode) {
-    const lines = String(raw || '').split(/\r?\n/).map(l => l.replace(/^[\s>*_#-]+/, '').trim()).filter(Boolean);
+    const lines = String(raw || '').split(/\r?\n/).map(l => l.replace(/^[\s>*_#-]+/, '').replace(/[*_]+(?=\s*[:：—–-])/g, '').trim()).filter(Boolean);
     const tagLines = lines.filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ|SCENE|СЦЕНА)\s*[_#№]?\s*\d?\s*[:：—–.-]/i.test(l));
     if (isComicMode && tagLines.filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ)/i.test(l)).length < 2) return true;
     return tagLines.some(l => NNB_REASONING_DETECT_RE.test(l.replace(/^[^:：—–]*[:：—–]\s*/, '').split(/\s*\|\|\s*CHAR/i)[0]));
@@ -8211,8 +8238,18 @@ function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCapti
     const hasGirl = /\b(1girl|woman|female)\b/i.test(p);
     const hasBoy = /\b(1boy|man|male)\b/i.test(p.replace(/\bwoman\b/gi, ''));
     if (hasGirl === hasBoy) return p; // двое разного пола без слотов (или пол неясен) — внешность не смешиваем
-    const cap = caps.find(c => hasGirl ? isFem(c) : isMasc(c));
-    if (!cap) return p;
+    const sameGender = caps.filter(c => hasGirl ? isFem(c) : isMasc(c));
+    if (!sameGender.length) return p;
+    let cap = sameGender[0];
+    if (sameGender.length > 1) {
+        // несколько героев этого пола: берём того, чьи приметы (уши, антенны, кожа, волосы) уже есть в кадре; если не понять — ничего не добавляем
+        const featWords = c => (String(c).toLowerCase().match(/\b(?:cat|dog|fox|wolf|rabbit|ant|insect|demi-\w+|antennae|horns?|wings?|four arms|scales|gray-violet|purple|black|blonde|white|silver|red|copper|brown|green|blue)\b/g) || []);
+        const pl0 = p.toLowerCase();
+        const scored = sameGender.map(c => ({ c, score: [...new Set(featWords(c))].filter(w => new RegExp(`\\b${w}\\b`).test(pl0)).length }))
+            .sort((a, b) => b.score - a.score);
+        if (!scored[0].score || (scored[1] && scored[1].score === scored[0].score)) return p;
+        cap = scored[0].c;
+    }
     const identRe = /\b(hair|bangs|ponytail|braid|eyes|glasses|eyewear|ears|tail|skin|freckles|mole|scar|horns|beard|stubble|piercing)\b/i;
     const actionRe = /\b(pressed|pinned|flattened|flat against|curled|coiled|wrapped|clinging|stuck|tears|teary|crying|wet|damp|dripping|looking|closed|half-closed|wide)\b/i;
     const pl = p.toLowerCase();
@@ -9187,6 +9224,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         let charCaptions = Array.isArray(reuseMeta?.charCaptions) ? [...reuseMeta.charCaptions] : [];
         const panelPrompts = Array.isArray(reuseMeta?.panelPrompts) ? [...reuseMeta.panelPrompts] : [];
         const rawLlmQuotes = [];
+        let lastPromptRaw = '';
 
         if (reuseMeta && hasValidSceneMeta(reuseMeta)) {
             const splitReuse = splitPositiveAndNegativePrompt(reuseMeta.desc || reuseMeta.prompt);
@@ -9207,6 +9245,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 const req = attempt === 1 ? basePromptReq
                     : `${basePromptReq}\n\n[ВАЖНО: в прошлый раз в ответ попали рассуждения. Не рассуждай и не объясняй — выдай СРАЗУ готовые строки в нужном формате, в строках PANEL/SCENE только английские теги через запятую.]`;
                 raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(req));
+                lastPromptRaw = raw;
                 if (!nnbPromptAnswerHasReasoning(raw, isComicMode) || attempt === 3) break;
                 logImageDiag(`🔁 В ответе модели промптов рассуждения вместо тегов — автоматически запрашиваю заново (попытка ${attempt + 1}/3)`, String(raw || '').slice(0, 300));
             }
@@ -9227,6 +9266,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 if (mp) {
                     inSceneBlock = false;
                     const pTxt = stripLeakedReasoningFromTags(mp[2].trim().replace(/\]$/, ''));
+                    if (!pTxt) logImageDiag(`⚠️ Строка PANEL${mp[1]} целиком состояла из рассуждений и отброшена`, mp[2].slice(0, 300));
                     if (pTxt) {
                         const pNum = Number(mp[1]);
                         const existing = panelNums.indexOf(pNum);
@@ -9580,9 +9620,18 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 }
             }
             if (!Array.isArray(panelPrompts) || panelPrompts.length < 2) {
-                const generatedFallbackPanels = buildDistinctComicPanelsFallback(desc || prompt, charCaptions, isNai);
+                logImageDiag('⚠️ Полный ответ модели промптов (для разбора, почему не хватило строк PANEL)', String(lastPromptRaw || '').slice(0, 2500));
+                let fbBase = desc || prompt;
+                let fbCaps = charCaptions;
+                const keepFirst = panelPrompts.length === 1 ? panelPrompts[0] : '';
+                if (keepFirst) {
+                    const p1Parsed = parsePanelTextAndCharSlots(keepFirst);
+                    if (p1Parsed.charCaptions.length) { fbBase = p1Parsed.prompt || fbBase; fbCaps = p1Parsed.charCaptions; }
+                }
+                const generatedFallbackPanels = buildDistinctComicPanelsFallback(fbBase, fbCaps, isNai);
                 panelPrompts.length = 0;
                 panelPrompts.push(...generatedFallbackPanels.slice(0, framesCount));
+                if (keepFirst) panelPrompts[0] = keepFirst; // первый кадр модели оставляем как есть — он с правильными слотами
                 logImageDiag(`Модель промптов не вернула отдельные строки PANEL1..PANEL${framesCount} — автоматически построены ${framesCount} разных кадра`, panelPrompts.join('\n'));
             } else {
                 const p0 = String(panelPrompts[0] || '').toLowerCase();
@@ -9614,7 +9663,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     if (Array.isArray(parsedPanel.charCaptions) && parsedPanel.charCaptions.length) {
                         parsedPanel.charCaptions = parsedPanel.charCaptions.map(cap => {
                             const h = pickHero(nnbSlotGender(cap));
-                            return nnbDropRemovedItemTags(h ? nnbApplyIdentityLock(cap, h) : cap);
+                            return nnbStripForeignCanonFromSlot(nnbDropRemovedItemTags(h ? nnbApplyIdentityLock(cap, h) : cap), store());
                         });
                     } else {
                         const hasGirl = /\b(1girl|woman|female)\b/i.test(rawFrameDesc);
