@@ -2008,7 +2008,7 @@ ${formatRelationships(st, true)}
 
 Команды для них (с новой строки, вместе с остальными):
 NPC [Имя]: развёрнутое, подробное описание для НОВЫХ персонажей, которых ещё нет в списке выше (впиши ВСЕ важные детали внешности, биографии, характера, профессии и фактов, которые дал игрок, в одну строку без лимита по числу предложений).
-NPCFACT [Имя]: новый важный факт для УЖЕ СУЩЕСТВУЮЩЕГО персонажа (1–4 предложения в одну строку). Используй ТОЛЬКО когда в последних сообщениях игрок или сюжет раскрыл существенную деталь биографии, внешности, прошлого, характера или важный поворот в отношениях, которых ещё нет в его карточке. Старое описание при этом НЕ стирается — новый факт аккуратно добавится к нему в конец (мелкую бытовую ерунду на одну сцену НЕ записывай!).
+NPCFACT [Имя]: новый важный факт для УЖЕ СУЩЕСТВУЮЩЕГО персонажа (1–4 предложения в одну строку). Используй ТОЛЬКО когда в последних сообщениях игрок или сюжет раскрыл существенную деталь биографии, внешности, прошлого, характера или важный поворот в отношениях, которых ещё нет в его карточке. Сюда же — то, что выяснилось о нём лично: что его по-настоящему цепляет или, наоборот, охлаждает и отталкивает, чего он боится, о чём мечтает, что любит и не выносит (пиши как живой факт о герое, а не как список). Старое описание при этом НЕ стирается — новый факт аккуратно добавится к нему в конец (мелкую бытовую ерунду на одну сцену НЕ записывай!).
 NPCSTATE [Имя]: что персонаж делает ПРЯМО СЕЙЧАС в последних 1–2 сообщениях чата (обязательно обновляй для ${charName} и присутствующих в сцене NPC! Если прежняя сцена — например, близость, спор или поездка — уже закончилась несколько постов назад, замени старый статус на то, чем персонаж занят прямо сейчас).
 SCALE [Имя]: дружба=число_или_сдвиг | романтика=число_или_сдвиг — обнови шкалы, если отношения заметно изменились (для обычных NPC — только «дружба=...»).
 REL [Имя1 ↔ Имя2]: тип | как относятся друг к другу (или REL [Имя1 → Имя2]).
@@ -2346,7 +2346,7 @@ function extractTextFromApiResult(raw) {
         if (typeof msg?.content === 'string' && msg.content.trim()) return msg.content;
         if (Array.isArray(msg?.content)) return msg.content.map(p => (typeof p === 'string' ? p : (p?.text || ''))).join('');
         if (typeof raw.choices[0]?.text === 'string' && raw.choices[0].text.trim()) return raw.choices[0].text;
-        if (typeof msg?.reasoning_content === 'string' && msg.reasoning_content.trim()) return msg.reasoning_content;
+        // reasoning_content (мысли модели) НЕ используем как ответ — иначе рассуждения попадают в промпт картинки
     }
     if (Array.isArray(raw?.results) && raw.results[0]) {
         if (typeof raw.results[0]?.text === 'string') return raw.results[0].text;
@@ -3712,6 +3712,36 @@ async function withBusy(status, fn) {
     }
 }
 
+// Чистит промпт картинки от «мыслей вслух» модели (Wait…, The scene: …?, per rules…), если они протекли в ответ
+const NNB_REASONING_SEG_RE = /\?|\b(?:wait|hmm|rule|rules|earlier context|the scene|since they|avoid|per rules|let me|i'll|i will|i should|we should|should be|maybe|actually|okay|not explicit yet|counts?)\b|[=—]\s*\d|^\s*(?:so|but|now|then|also)\b/i;
+const NNB_REASONING_DETECT_RE = /\?|\bwait\b|\bhmm\b|\btags?\s*:|\bthe scene\s*:|\bper rules\b|\blet me\b|\bthe rule\b|\bearlier context\b|\bavoid [a-z/ -]+ tags\b/i;
+function stripLeakedReasoningFromTags(text) {
+    let t = String(text || '');
+    if (!t.trim()) return t;
+    const charTailIdx = t.search(/\s*\|\|\s*CHAR\s*\d/i);
+    const charTail = charTailIdx >= 0 ? t.slice(charTailIdx) : '';
+    if (charTailIdx >= 0) t = t.slice(0, charTailIdx);
+    // обычный чистый промпт не трогаем вообще — чистим только если в нём явно есть «мысли вслух»
+    if (!NNB_REASONING_DETECT_RE.test(t)) return t + charTail;
+    const tagsIdx = t.search(/\bTags?\s*:/i);
+    if (tagsIdx >= 0) {
+        const all = [...t.matchAll(/\bTags?\s*:\s*/gi)];
+        const last = all[all.length - 1];
+        t = t.slice(last.index + last[0].length);
+    }
+    const parts = t.split(/\s*,\s*|(?<=[.!?])\s+/).map(x => x.trim().replace(/[.:;]+$/, '').trim()).filter(Boolean);
+    const seen = new Set();
+    const kept = parts
+        .map(x => (/::/.test(x) ? x : x.replace(/^(?!(?:artist|character|copyright|year|rating|location|source|style|fanart)\s*:)[^:]{1,40}:\s*/i, '')).trim())
+        .filter(x => x && !NNB_REASONING_SEG_RE.test(x) && !/\bis fine\b|\bfine\b$/i.test(x) && x.split(/\s+/).length <= 14)
+        .filter(x => { const k = x.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    const out = kept.join(', ') + charTail;
+    if (out !== String(text || '').trim() && typeof logImageDiag === 'function' && parts.length !== kept.length) {
+        logImageDiag(`🧹 Из промпта убраны рассуждения модели (${parts.length - kept.length} фрагм.)`);
+    }
+    return out;
+}
+
 function cleanAnswer(raw) {
     return normalizeSpaces(raw).replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '').replace(/\*\*/g, '');
 }
@@ -3880,7 +3910,7 @@ async function fastForward() {
             st.time.date = addDays(st.time.date, ff.skip);
             st.time.dayStartedAtMsg = len;
             moved = ff.skip;
-            // Праздники переведены на ручной вызов (экономия фоновых токенов)
+            // holidayStep отключён в фоне — запускается вручную из вкладки «События»
         }
         const scene = ff.scene || 'самое органичное следующее событие: задумка из твоего блокнота, тайна, заявленная линия или приближающаяся дата';
         const when = moved ? ` Между сценами прошло ${daysWord(moved)} — сейчас ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` : (ff.skip > 0 ? ` Между сценами прошло ${daysWord(ff.skip)}.` : '');
@@ -3982,7 +4012,7 @@ function formatMoney(amount, st) {
 function parsePriceNumber(priceStr) {
     if (typeof priceStr === 'number') return Math.max(0, priceStr);
     const s = String(priceStr || '').trim();
-    if (!s || /бесплат|даром|подарок|0/i.test(s)) return 0;
+    if (!s || /бесплат|даром|подарок|^\D*0+(?:[.,]0+)?\D*$/i.test(s)) return 0; // «0», «0 ₸», «£0.00» — бесплатно; «100», «50» — нет
     const cleaned = s.replace(/\s+/g, '').replace(',', '.');
     const m = cleaned.match(/(\d+(?:\.\d+)?)/);
     return m ? Math.max(0, Math.round(Number(m[1]))) : 0;
@@ -4048,7 +4078,17 @@ function buildWardrobeSection(st) {
     if (!st?.wardrobe) return '';
     const w = st.wardrobe;
     const parts = [];
-    // Фоновая проверка OUTFIT/OUTFITDONE в think() отключена для экономии токенов (ручной гардероб по кнопке работает полностью)
+    // Возвращено: без OUTFITDONE наряд остаётся «надетым» навсегда и подсказывается модели в каждом посте
+    if (st.direction?.wardrobe) {
+        if (w.active?.status === 'worn') {
+            const look = w.active.look;
+            parts.push(`Гардероб. Наряд {{user}}: «${look.title}»${w.active.accent ? ` + ${w.active.accent.title}` : ''}${w.active.occasion ? ` (для: ${w.active.occasion})` : ''}.
+OUTFITDONE — если сцена, ради которой выбирался наряд, уже прошла или {{user}} уже переоделся(-ась).`);
+        } else if (!w.active) {
+            const recent = w.history.slice(-3).map(h => h.occasion).filter(Boolean).join('; ');
+            parts.push(`Гардероб. Если в ближайшей сцене или скоро по сюжету важен наряд {{user}} (свидание, вечеринка, праздник, ужин с родными, важная встреча, собеседование) и образ для неё ещё не выбирали — OUTFIT: повод (коротко, например «ужин у родителей на День благодарения»). Только когда наряд действительно имеет значение.${recent ? ` Недавно уже выбирали образы для: ${recent}.` : ''}`);
+        }
+    }
     if ((st.direction?.wardrobe || st.direction?.gacha || accentsOn(st)) && st.direction?.autoBoxItems === true) {
         parts.push(`Шкатулка {{user}}: ${w.box.length ? boxList(st, true) : '(пусто)'}.
 Правила: записывай в ITEM ТОЛЬКО долговечные значимые вещи, оставшиеся у {{user}} (украшения, духи, аксессуары, книги, ключи, письма, артефакты). ЗАПРЕЩЕНО писать еду/напитки/мусор и вещи, которые уже съели, отдали или потеряли (для них пиши DROP_ITEM: точное название).
@@ -4094,8 +4134,9 @@ function wardrobeInjection(st, mode = 'all') {
                 out.push(text + ']');
             }
         } else if (mode !== 'dynamic') {
-            const acNames = acList.map(ac => `«${ac.title}»`).join(', ');
-            out.push(`[Наряд ${user}: «${look.title}» (${String(look.desc || '').replace(/[.\s]+$/, '')})${acNames ? `; штрихи: ${acNames}` : ''}. Учитывай как факт внешности без повторов.]`);
+            // Название наряда из гардероба — служебное: если его давать в постоянной подсказке, модель вставляет «Название» в каждый пост
+            const acDescs = acList.map(ac => String(ac.desc || ac.title || '').replace(/[.\s]+$/, '')).filter(Boolean).join('; ');
+            out.push(`[Во что сейчас одет(а) ${user} (для справки, все это уже видели): ${String(look.desc || '').replace(/[.\s]+$/, '')}${acDescs ? `; детали: ${acDescs}` : ''}. Не описывай одежду ${user} заново и не упоминай её без прямого повода в сцене; у наряда нет названия — никаких названий в кавычках.]`);
         }
     }
     if (mode === 'static') {
@@ -4959,6 +5000,11 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
     // Пользовательский стиль вставляется 1-в-1 без изменений текстовой моделью!
     const prefix = String(s.naiPrefix ?? '').trim();
     let baseNeg = String(s.naiNegative ?? defaults.naiNegative).trim();
+    if (!baseNeg) {
+        // пустой негатив резко ухудшает анатомию — подставляем базовый (без nsfw, чтобы не мешать откровенным сценам)
+        baseNeg = String(defaults.naiNegative).replace(/^\s*nsfw\s*,\s*/i, '');
+        logImageDiag('⚠️ Негативный промпт в настройках пустой — подставлен базовый (без nsfw)');
+    }
     if (refs?.extraNeg) {
         baseNeg = [baseNeg, refs.extraNeg].filter(Boolean).join(', ');
     }
@@ -7447,7 +7493,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
             : '');
     const moment = chunkHeaderNote;
     const a = st.wardrobe?.active;
-    const outfit = (!isPov && a?.status === 'worn') ? `[👗 АКТИВНЫЙ НАРЯД ${names.user} ИЗ ГАРДЕРОБА (ВЫСШИЙ ПРИОРИТЕТ — ОБЯЗАТЕЛЬНО рисуй ${names.user} ИМЕННО В ЭТОМ НАРЯДЕ, ИГНОРИРУЯ любую старую одежду вроде майки/кардигана из OLDBlock и прошлых кадров!): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}]` : '';
+    const outfit = (!isPov && a?.status === 'worn') ? `[👗 АКТИВНЫЙ НАРЯД ${names.user} ИЗ ГАРДЕРОБА (рисуй ${names.user} в этом наряде вместо старой одежды из прошлых кадров — НО если в рисуемом отрывке сказано, что ${names.user} частично или полностью раздета, переоделась или сняла вещь, следуй тексту отрывка): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}]` : '';
     const rawPersonaDesc = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
     const cleanPersonaAppearance = rawPersonaDesc ? ctx().substituteParams(String(rawPersonaDesc)).slice(0, 600) : '';
     const lastAppearance = !isPov
@@ -8051,9 +8097,32 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
     return false;
 }
 
-function enforceSoloFrameOutfitFromPage(rawFrameDesc) {
-    // Отключено копирование одежды между кадрами: теперь за стабильность одежды отвечает «Замок одежды» и наряд из Гардероба на входе.
-    return String(rawFrameDesc || '').trim();
+function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCaptions = []) {
+    // Одежду между кадрами не копируем (за неё отвечает «Замок одежды»), но ВНЕШНОСТЬ героя (волосы, глаза, очки, уши, хвост, кожа)
+    // переносим из CHAR-слотов 1-го кадра — иначе во 2-м/3-м кадре без слотов NovelAI рисует случайного человека.
+    let p = String(rawFrameDesc || '').trim();
+    if (!p) return p;
+    if (/\|\|\s*CHAR\s*\d/i.test(p)) return p; // у кадра свои слоты — не трогаем
+    if (/\b(no humans|object focus|still life|head out of frame|face out of frame|cropped head|headless)\b/i.test(p)) return p;
+    const caps = [];
+    String(panel1Desc || '').split(/\|\|\s*CHAR\s*\d+\s*[:：]\s*/i).slice(1).forEach(c => caps.push(c.trim()));
+    (Array.isArray(charCaptions) ? charCaptions : []).forEach(c => { if (c && !caps.includes(String(c).trim())) caps.push(String(c).trim()); });
+    if (!caps.length) return p;
+    const isFem = c => /\b(1girl|girl|woman|female|she)\b/i.test(c) && !/\b(1boy|man|male)\b/i.test(c.replace(/\bwoman\b/gi, ''));
+    const isMasc = c => /\b(1boy|boy|man|male)\b/i.test(c.replace(/\bwoman\b/gi, ''));
+    const hasGirl = /\b(1girl|woman|female)\b/i.test(p);
+    const hasBoy = /\b(1boy|man|male)\b/i.test(p.replace(/\bwoman\b/gi, ''));
+    if (hasGirl === hasBoy) return p; // двое разного пола без слотов (или пол неясен) — внешность не смешиваем
+    const cap = caps.find(c => hasGirl ? isFem(c) : isMasc(c));
+    if (!cap) return p;
+    const identRe = /\b(hair|bangs|ponytail|braid|eyes|glasses|eyewear|ears|tail|skin|freckles|mole|scar|horns|beard|stubble|piercing)\b/i;
+    const actionRe = /\b(pressed|pinned|flattened|flat against|curled|coiled|wrapped|clinging|stuck|tears|teary|crying|wet|damp|dripping|looking|closed|half-closed|wide)\b/i;
+    const pl = p.toLowerCase();
+    const add = cap.split(/\s*,\s*/).map(x => x.trim()).filter(x => x && identRe.test(x) && !actionRe.test(x) && !/^no\s/i.test(x))
+        .filter(x => !pl.includes(x.toLowerCase()));
+    if (!add.length) return p;
+    logImageDiag(`🧬 Внешность героя перенесена в кадр без слотов: ${add.join(', ')}`);
+    return `${p}, ${add.join(', ')}`;
 }
 
 function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
@@ -8062,8 +8131,8 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
 
     // 0) Убираем текстовые звуки и облачка из позитива, чтобы текст не плыл в картинку
     p = p
-        .replace(/["'«»“”]?(?:purr+|grrr+|boom+|knock+|tap+|clink+|sigh+|mumm+|huff+|pant+|gulp+)["'«»“”]?/gi, '')
-        .replace(/(?:sound effects?|sfx|onomatopoeia|speech bubbles?|thought bubbles?|text overlay|floating text|written text|english text|japanese text|korean text|comic text|caption)\s*,?/gi, '');
+        .replace(/["'«»“”]?\b(?:purr+|grrr+|boom+|knock+|tap+|clink+|sigh+|mumm+|huff+|pant+|gulp+)\b["'«»“”]?/gi, '')
+        .replace(/\b(?:sound effects?|sfx|onomatopoeia|speech bubbles?|thought bubbles?|text overlay|floating text|written text|english text|japanese text|korean text|comic text|caption)\b\s*,?/gi, '');
 
     // 1) Жёсткие 4 типа макро-кадра PANEL2 ([OBJECT] / [HANDS] / [DETAIL] / [REACTION])
     const p2ModeMatch = p.match(/^\[(OBJECT|HANDS|DETAIL|REACTION)\]\s*/i);
@@ -8084,7 +8153,15 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     } else if (p2Mode === 'DETAIL') {
         p = p.replace(/\b(?:head out of frame|face out of frame|cropped head|headless|no humans|bare hands|two hands only)\b\s*,?/gi, '')
              .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
-        if (!/\b(jawline|chin|upper body|portrait)\b/i.test(p)) p = `close-up, upper body, jawline, chin, collarbone, ${p}`;
+        const isLowerDetail = /\b(groin|crotch|bulge|erection|penis|hips?|hip bones?|thighs?|legs?|knees?|feet|foot|ankles?|tail|stomach|belly|navel|waist|lower body|lower belly|happy trail|swim trunks|buttocks?|ass)\b/i.test(p);
+        const isFaceNeckDetail = /\b(neck|throat|collarbone|clavicle|lips|mouth|jawline|chin|cheek|ear|earlobe|face)\b/i.test(p);
+        if (isLowerDetail && !isFaceNeckDetail) {
+            // деталь ниже пояса: не добавляем лицо/подбородок, иначе NovelAI пытается уместить в кадр и лицо, и низ — выходит криво
+            p = p.replace(/\b(?:upper body|portrait|jawline|chin|collarbone)\b\s*,?/gi, '').replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
+            if (!/\blower body\b/i.test(p)) p = `close-up, lower body, ${p}`;
+        } else if (!/\b(jawline|chin|upper body|portrait)\b/i.test(p)) {
+            p = `close-up, upper body, jawline, chin, collarbone, ${p}`;
+        }
     } else if (p2Mode === 'REACTION') {
         p = p.replace(/\b(?:no humans|head out of frame|face out of frame|cropped head|hand focus|object focus|still life|two hands only)\b\s*,?/gi, '')
              .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
@@ -9036,15 +9113,25 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             const sceneLines = [];
             let inSceneBlock = false;
             let lastPanelIndex = -1;
+            const panelNums = [];
             for (const rawLine of answerLines(raw || '')) {
                 const line = rawLine.replace(/^[\s>*_#-]+/, '').replace(/[*_]+(?=\s*[:：—–-])/g, '').trim();
                 let mp = line.match(/^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ)\s*[_#№]?\s*([1-4])\s*[:：—–.-]\s*(.+)$/i);
                 if (mp) {
                     inSceneBlock = false;
-                    const pTxt = mp[2].trim().replace(/\]$/, '');
+                    const pTxt = stripLeakedReasoningFromTags(mp[2].trim().replace(/\]$/, ''));
                     if (pTxt) {
-                        panelPrompts.push(pTxt);
-                        lastPanelIndex = panelPrompts.length - 1;
+                        const pNum = Number(mp[1]);
+                        const existing = panelNums.indexOf(pNum);
+                        if (existing >= 0) {
+                            // модель «передумала» и выдала этот кадр ещё раз — берём последнюю версию
+                            panelPrompts[existing] = pTxt;
+                            lastPanelIndex = existing;
+                        } else {
+                            panelPrompts.push(pTxt);
+                            panelNums.push(pNum);
+                            lastPanelIndex = panelPrompts.length - 1;
+                        }
                     }
                     continue;
                 }
@@ -9109,7 +9196,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 if (fallbackLines.length) desc = fallbackLines.join(', ').trim();
             }
             const splitDesc = splitPositiveAndNegativePrompt(desc);
-            desc = sanitizeLiteralMetaphorTags(splitDesc.positive);
+            desc = sanitizeLiteralMetaphorTags(stripLeakedReasoningFromTags(splitDesc.positive));
             if (splitDesc.negative) {
                 extraNeg = [extraNeg, splitDesc.negative].filter(Boolean).join(', ');
                 logImageDiag('Из строки SCENE автоматически вырезан блок | NEGATIVE и перенесён в негативный промпт', splitDesc.negative);
@@ -9373,6 +9460,14 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             const cStyle = getComicStyleById(activeComicOpts.styleId);
             const isWebtoonStrip = cStyle?.id === 'webtoon' || cStyle?.id === 'yonkoma';
             const framesCount = Number(activeComicOpts.framesPerPage) === 4 ? 4 : 3;
+            if ((!Array.isArray(panelPrompts) || panelPrompts.length < 2) && !reuseMeta) {
+                const srcTxt = String(desc || prompt || '');
+                const cyr = (srcTxt.match(/[А-Яа-яЁё]/g) || []).length;
+                if (cyr > 40 || NNB_REASONING_DETECT_RE.test(srcTxt)) {
+                    logImageDiag('⛔ Модель промптов вернула рассуждения/текст вместо тегов — страница не рисуется, чтобы не тратить генерацию на мусор', srcTxt.slice(0, 400));
+                    throw new Error('модель промптов вернула рассуждения вместо промпта — попробуй ещё раз или выбери модель без reasoning');
+                }
+            }
             if (!Array.isArray(panelPrompts) || panelPrompts.length < 2) {
                 const generatedFallbackPanels = buildDistinctComicPanelsFallback(desc || prompt, charCaptions, isNai);
                 panelPrompts.length = 0;
