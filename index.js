@@ -8171,6 +8171,12 @@ function sanitizeLiteralMetaphorTags(promptStr) {
 function isDetailOrMacroPanelPrompt(rawPrompt) {
     const p = String(rawPrompt || '').toLowerCase();
     if (!p) return false;
+    // Кадр с людьми в среднем/общем плане («2girls, medium shot, car interior, windshield…») — НЕ деталь, даже если в нём упомянут предмет.
+    // Деталью его делают только явные пометки: hand focus, head out of frame, close-up, no humans и т.п.
+    const hasPeopleCount = /\b([2-6](?:boys|girls)|multiple (?:boys|girls)|1boy\b[^|]*\b1girl|1girl\b[^|]*\b1boy)\b/.test(p);
+    const hasWideFraming = /\b(medium shot|cowboy shot|full body|wide shot|establishing shot)\b/.test(p);
+    const hasExplicitDetail = /\b(no humans|object focus|still life|head out of frame|face out of frame|cropped head|headless|hand focus|hands focus|focus on hands|foot focus|feet focus|lower body focus|close-up|extreme close-up|macro)\b/.test(p);
+    if ((hasPeopleCount || hasWideFraming) && !hasExplicitDetail) return false;
     if (/\b(no humans|animal focus|object focus|food focus|vehicle focus|scenery|weapon focus|still life|flower focus|head out of frame|face out of frame|cropped head|headless|hand focus|hands focus|focus on hands|foot focus|feet focus|lower body focus|pelvic focus|groin focus|intimate close-up|penetration close-up|sex close-up|macro shot|windshield|wipers|windshield wipers)\b/i.test(p)) {
         return true;
     }
@@ -8243,7 +8249,7 @@ function buildHeroAppearancePrompt(n) {
 
 // Автоматически (один раз на героя) заполняет «Внешность (англ.)» из карточки, если поле пустое —
 // чтобы замок внешности работал без ручного заполнения (особенно для главного персонажа {{char}})
-async function nnbAutoFillCastAppearance(st, mesId, comicOpts) {
+async function nnbAutoFillCastAppearance(st, mesId, comicOpts, castNames = []) {
     if (!st) return;
     try {
         const c = ctx();
@@ -8252,7 +8258,12 @@ async function nnbAutoFillCastAppearance(st, mesId, comicOpts) {
         const heroes = [];
         const mc = ensureMainCharCard(st);
         if (mc) heroes.push(mc);
-        (st.npcs || []).forEach(n => { if (n?.name && isNameMentionedInText(n.name, sceneTxt)) heroes.push(n); });
+        const castLow = (Array.isArray(castNames) ? castNames : []).map(x => String(typeof x === 'string' ? x : (x?.name || '')).toLowerCase().replace(/ё/g, 'е'));
+        (st.npcs || []).forEach(n => {
+            if (!n?.name) return;
+            const nm = String(n.name).toLowerCase().replace(/ё/g, 'е');
+            if (isNameMentionedInText(n.name, sceneTxt) || castLow.some(cn => cn && (cn === nm || cn.includes(nm) || nm.includes(cn)))) heroes.push(n);
+        });
         let changed = false;
         for (const n of heroes) {
             if (String(n.appearanceEn || '').trim() || n._autoAppearTried) continue;
@@ -8417,7 +8428,13 @@ function nnbClothCat(tok) {
 function nnbOutfitTokens(text) {
     return String(text || '').split(/\s*,\s*/).map(x => x.trim()).filter(x => x && nnbClothCat(x) && x.split(/\s+/).length <= 7);
 }
-const NNB_CLOTHES_CHANGE_RU_RE = /(?:переодел|раздел|разде[лв]а|снял|сняла|стянул|сбросил|скинул|сдёрнул|сдернул|спустил|расстегнул|распахнул|обнаж|голы[йме]|нагишом|без одежды|надел|натянул|накинул|набросил|влез в|облачил)/i;
+const NNB_CLOTH_WORDS_RU = '(?:одежд|куртк|пальто|плащ|шуб|пуховик|рубашк|рубах|блузк|юбк|брюк|штан|джинс|плать|свитер|кофт|футболк|майк|топ|халат|туфл|ботин|сапог|кед|кроссовк|шлеп|тапоч|шорт|купальн|плавк|бель|лифчик|бюстгальтер|трус|носк|чулк|колготк|шарф|галстук|пиджак|жакет|кардиган|толстовк|худи|форм|костюм|пижам|ночнушк|сорочк|парео|бикини|перчатк|шапк|капюшон)';
+const NNB_CLOTHES_CHANGE_RU_RE = new RegExp(
+    // явное переодевание/раздевание само по себе
+    '(?:переодел|переоделась|разделся|разделась|раздевал|обнажен|обнажён|голая|голый|нагишом|без одежды)'
+    // или глагол + предмет одежды в пределах нескольких слов («сняла куртку», «натянул свитер»)
+    + '|(?:снял|сняла|стянул|сбросил|скинул|сдернул|сдёрнул|спустил|расстегнул|распахнул|надел|натянул|накинул|набросил|облачил|переобул|разул)[а-яё]*(?:\\s+[а-яё]+){0,3}?\\s+' + NNB_CLOTH_WORDS_RU,
+    'i');
 // Приводит одежду героя в тексте кадра/слота к запомненной. Видимость по кадру: в портрете не добавляем брюки и обувь
 function nnbApplyOutfitLock(text, outfit) {
     let parts = String(text || '').split(/\s*,\s*/).filter(Boolean);
@@ -8485,14 +8502,21 @@ function nnbStripCharacterDescFromBase(base, slots) {
         const tl = t.trim().toLowerCase();
         if (!tl) return false;
         if (/^(?:\d(?:boys?|girls?)|multiple (?:boys|girls))$/.test(tl)) return true;
-        if (slotToks.has(tl)) return false;
         if (nnbClothCat(tl)) return false; // одежда — только в слотах героев
+        if (slotToks.has(tl) && charWordRe.test(tl)) return false; // приметы героя, продублированные в слоте
         if (charWordRe.test(tl)) {
             const w = tl.match(/[a-z][a-z-]{3,}/g) || [];
             if (w.filter(x => slotWords.has(x)).length >= Math.min(2, w.length)) return false;
         }
         return true;
     });
+    // Слоты есть, а счётчика людей в общей строке нет — без него кадр примут за сольный и слоты выбросят
+    if (!kept.some(t => /^(?:\d(?:boys?|girls?)|multiple (?:boys|girls))$/i.test(t.trim()))) {
+        const g = slots.map(nnbSlotGender);
+        const nb = g.filter(x => x === 'boy').length, ng = g.filter(x => x === 'girl').length;
+        const cnt = [nb ? (nb === 1 ? '1boy' : `${nb}boys`) : '', ng ? (ng === 1 ? '1girl' : `${ng}girls`) : ''].filter(Boolean);
+        if (cnt.length) kept.unshift(...cnt);
+    }
     return kept.join(', ');
 }
 
@@ -9972,6 +9996,8 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 let rawFrameDesc = cleanSingleComicPanelPrompt(parsedPanel.prompt || framesToDraw[fIdx], fIdx, framesToDraw[0] || desc);
                 try {
                     if (!pageCastReg) {
+                        // У героя из CAST нет «Внешности (англ.)» → без неё двух героинь одного пола не различить. Составляем один раз
+                        await nnbAutoFillCastAppearance(st, mesId, comicOpts, cast);
                         const chapterLock = (comicOpts?.chapterOutfitLock && typeof comicOpts.chapterOutfitLock === 'object') ? comicOpts.chapterOutfitLock : {};
                         const outfitMap = { ...nnbHeroOutfitMemory(st), ...chapterLock };
                         pageCastReg = nnbBuildPageCast(st, cast, framesToDraw[0] || '', outfitMap);
@@ -9985,15 +10011,17 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     rawFrameDesc = enforced.desc;
                     parsedPanel.charCaptions = enforced.caps;
                     // Первый кадр страницы (средний план) — источник памяти одежды: запоминаем, у кого её ещё нет или кто переоделся
-                    if (fIdx === 0) {
+                    {
                         const usedH = new Set();
-                        (enforced.caps || []).forEach(cap => {
+                        const frameSources = (enforced.caps && enforced.caps.length) ? enforced.caps
+                            : (nnbFramePeople(rawFrameDesc).length === 1 && !/\b(head out of frame|hand focus|no humans)\b/i.test(rawFrameDesc) ? [rawFrameDesc] : []);
+                        frameSources.forEach(cap => {
                             const h = nnbMatchHero(pageCastReg.filter(x => !usedH.has(x)), cap, nnbSlotGender(cap));
                             if (!h) return;
                             usedH.add(h);
                             const mem = nnbHeroOutfitMemory(st);
                             const has = Object.keys(mem).some(k => k.toLowerCase().replace(/ё/g, 'е') === String(h.name).toLowerCase().replace(/ё/g, 'е'));
-                            if (!has || pageClothesChange) {
+                            if (!has || (pageClothesChange && fIdx === 0)) {
                                 nnbRememberHeroOutfit(st, h.name, cap);
                                 try { ctx().saveMetadata(); } catch (e) { /* ignore */ }
                                 if (nnbOutfitTokens(cap).length) logImageDiag(`👔 Одежда «${h.name}» запомнена`, nnbOutfitTokens(cap).join(', '));
