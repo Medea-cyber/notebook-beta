@@ -2465,7 +2465,7 @@ function buildStandaloneContextPrompt(taskPrompt) {
     return parts.join('\n\n');
 }
 
-async function generateViaStandaloneTextSource(taskPrompt) {
+async function generateViaStandaloneTextSource(taskPrompt, maxTokens = 4096) {
     const s = settings();
     const src = String(s.textSource || '').trim();
     if (!src) return null;
@@ -2493,10 +2493,10 @@ async function generateViaStandaloneTextSource(taskPrompt) {
             body: JSON.stringify({
                 model,
                 messages: [{ role: 'user', content: fullPrompt }],
-                max_tokens: 4096,
+                max_tokens: maxTokens,
                 temperature: 0.7,
             }),
-        }), (isSelfContained || fullPrompt.length > 20000 ? 110000 : 75000), `быстрое подключение блокнота (${model})`);
+        }), (maxTokens > 4096 ? 240000 : (isSelfContained || fullPrompt.length > 20000 ? 110000 : 75000)), `быстрое подключение блокнота (${model})`);
         const text = await res.text();
         let json = null;
         try { json = JSON.parse(text); } catch (e) { /* ignore */ }
@@ -2508,11 +2508,11 @@ async function generateViaStandaloneTextSource(taskPrompt) {
 
     // Профиль подключения Таверны (ConnectionManagerRequestService)
     // Для самодостаточных задач (саммари переезда, дневники и т.д.) отключаем пресет чата, чтобы не раздувать промпт и не ловить таймауты
-    return await sendViaTavernProfile(src, fullPrompt, 4096, 'профиль подключения блокнота', '', isSelfContained);
+    return await sendViaTavernProfile(src, fullPrompt, maxTokens, 'профиль подключения блокнота', '', isSelfContained);
 }
 
 let ownPromptIsSelfContained = false;
-async function quietGenerateOnce(prompt) {
+async function quietGenerateOnce(prompt, maxTokens = 0) {
     const c = ctx();
     const s = settings();
     const fn = c.generateQuietPrompt;
@@ -2527,7 +2527,7 @@ async function quietGenerateOnce(prompt) {
     try {
         if (s.textSource) {
             try {
-                const standaloneRes = await generateViaStandaloneTextSource(prompt);
+                const standaloneRes = await generateViaStandaloneTextSource(prompt, maxTokens || 4096);
                 if (standaloneRes && String(standaloneRes).trim()) {
                     return standaloneRes;
                 }
@@ -2536,9 +2536,10 @@ async function quietGenerateOnce(prompt) {
                 toastr.warning(`Отдельное подключение блокнота не ответило (${escapeHtml(standaloneErr?.message || standaloneErr)}) — использую основное подключение чата.`, '⚡ Подключение блокнота', { escapeHtml: false, timeOut: 7000 });
             }
         }
-        const mainChatTimeoutMs = cleanPromptForChat.length > 20000 ? 150000 : 120000;
+        const mainChatTimeoutMs = maxTokens > 4096 ? 300000 : (cleanPromptForChat.length > 20000 ? 150000 : 120000);
         if (fn.length === 0) {
-            return await withTimeout(fn({ quietPrompt: cleanPromptForChat }), mainChatTimeoutMs, 'основное подключение чата');
+            // responseLength — собственный лимит длины для этого запроса (иначе берётся «Длина ответа» из пресета, обычно 300–1000 токенов)
+            return await withTimeout(fn(maxTokens ? { quietPrompt: cleanPromptForChat, responseLength: maxTokens } : { quietPrompt: cleanPromptForChat }), mainChatTimeoutMs, 'основное подключение чата');
         }
         return await withTimeout(fn(cleanPromptForChat, false, false), mainChatTimeoutMs, 'основное подключение чата');
     } finally {
@@ -2656,8 +2657,8 @@ function normalizeSpaces(t) {
     return String(t ?? '').replace(ODD_SPACES, ' ');
 }
 
-async function quietGenerate(prompt) {
-    return stripActionTags(normalizeSpaces(await quietGenerateRetry(prompt)));
+async function quietGenerate(prompt, maxTokens = 0) {
+    return stripActionTags(normalizeSpaces(await quietGenerateRetry(prompt, maxTokens)));
 }
 
 function adaptWriterNoteForTask(rawWriterNote, isComicStripTask) {
@@ -2768,16 +2769,16 @@ ${writerNote}]
 }
 
 // При ошибке лимита (429) ждём и пробуем ещё раз
-async function quietGenerateRetry(prompt) {
+async function quietGenerateRetry(prompt, maxTokens = 0) {
     try {
-        return await quietGenerateOnce(prompt);
+        return await quietGenerateOnce(prompt, maxTokens);
     } catch (err) {
         const msg = String(err?.message || err);
         if (!/429|too many|rate|exhausted|quota/i.test(msg)) throw err;
         setStatus('Лимит запросов — жду 30 секунд и пробую ещё раз…');
         toastr.info('Лимит запросов у провайдера. Повторю через 30 секунд.', 'Блокнот рассказчика');
         await new Promise(r => setTimeout(r, 30000));
-        return await quietGenerateOnce(prompt);
+        return await quietGenerateOnce(prompt, maxTokens);
     }
 }
 
@@ -19064,8 +19065,43 @@ ${lastPostFull}` : ''}
 
     startBackgroundGenerationKeepAlive();
     try {
-        const res = await withBusy(`📝 Модель составляет полную летопись всех ${total} сообщений (включая последний день)…`, () => quietGenerate(prompt));
-        return stripActionTags(cleanAnswer(res || '')).trim();
+        // Летопись должна быть подробной: даём большой лимит. Если провайдер его не принимает — пробуем меньше
+        let sumBudget = 32000;
+        const genSum = async (pr, label) => {
+            for (const budget of [sumBudget, 16000, 8192]) {
+                if (budget > sumBudget) continue;
+                try {
+                    const r = await withBusy(label, () => quietGenerate(pr, budget));
+                    sumBudget = budget;
+                    return r;
+                } catch (e) {
+                    const msg = String(e?.message || e);
+                    if (budget > 8192 && /max[_ ]?tokens|maxOutputTokens|max_completion|too large|exceeds|out of range|400/i.test(msg)) {
+                        console.warn('[npc_notebook] summary budget', budget, 'rejected, retrying smaller:', msg);
+                        continue;
+                    }
+                    throw e;
+                }
+            }
+            return '';
+        };
+        let out = stripActionTags(cleanAnswer(await genSum(prompt, `📝 Модель составляет полную летопись всех ${total} сообщений (включая последний день)…`) || '')).trim();
+        // Если ответ оборвался (нет раздела 4 или текст кончается на полуслове) — просим продолжить с места обрыва, до 3 раз
+        const looksCut = t => {
+            const tt = String(t || '').trim();
+            if (!tt) return false;
+            const hasSection4 = /(?:^|\n)\s*(?:\*\*|#+\s*)?4[.)]/.test(tt) || /ТОЧКА ОСТАНОВКИ/i.test(tt);
+            const endsClean = /[.!?…»")\]]\s*$/.test(tt);
+            return !hasSection4 || !endsClean;
+        };
+        for (let part = 1; part <= 3 && looksCut(out); part++) {
+            const tail = out.slice(-1500);
+            const contPrompt = `${prompt}\n\n[ТВОЙ ОТВЕТ ОБОРВАЛСЯ НА ПОЛУСЛОВЕ. Вот его конец:\n«…${tail}»\nПРОДОЛЖИ ровно с места обрыва (с того же слова/предложения) и допиши саммари до конца, включая все оставшиеся разделы до 4-го. Не повторяй уже написанное, не начинай заново, без вступлений.]`;
+            const more = stripActionTags(cleanAnswer(await genSum(contPrompt, `📝 Саммари оборвалось — дописываю (часть ${part + 1})…`) || '')).trim();
+            if (!more) break;
+            out = `${out}${/[\s\n]$/.test(out) || /^[,.;:!?…)]/.test(more) ? '' : ' '}${more}`;
+        }
+        return out;
     } finally {
         stopBackgroundGenerationKeepAlive();
     }
@@ -19180,6 +19216,13 @@ async function openChatMigrationModal() {
         try {
             const generated = await generateMigrationStorySummary(st);
             if (generated) {
+                // Прежнее саммари не теряем: кладём в историю (последние 5), его можно вернуть кнопкой «↩️»
+                const prevSumTxt = String(st.storySummary || '').trim();
+                if (prevSumTxt && prevSumTxt !== generated.trim()) {
+                    if (!Array.isArray(st.storySummaryHistory)) st.storySummaryHistory = [];
+                    st.storySummaryHistory.unshift({ text: prevSumTxt, at: Date.now() });
+                    st.storySummaryHistory = st.storySummaryHistory.slice(0, 5);
+                }
                 st.storySummary = generated;
                 if (ctx().chatId === curChatId) {
                     await commit();
@@ -19212,6 +19255,33 @@ async function openChatMigrationModal() {
         }
     });
     sumSec.append(sumArea, genSumBtn);
+    // ↩️ Вернуть одно из прошлых саммари (сохраняются автоматически перед каждой новой генерацией)
+    {
+        const hist = Array.isArray(st.storySummaryHistory) ? st.storySummaryHistory : [];
+        if (hist.length) {
+            const histBox = $('<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:0.86em; opacity:0.85;">↩️ Прошлые версии саммари (' + hist.length + ')</summary></details>');
+            hist.forEach((h, hi) => {
+                const when = new Date(h.at || Date.now()).toLocaleString();
+                const row = $('<div class="nnb-note" style="margin:6px 0; padding:6px 8px; font-size:0.82em;"></div>');
+                row.append($('<div class="nnb-meta"></div>').text(`${when} · ${String(h.text).length} символов`));
+                row.append($('<div class="nnb-text" style="max-height:120px; overflow:auto; opacity:0.85;"></div>').text(String(h.text).slice(0, 1200) + (String(h.text).length > 1200 ? '…' : '')));
+                const back = $('<div class="menu_button" style="width:auto; display:inline-flex; margin-top:4px;">↩️ Вернуть эту версию</div>');
+                back.on('click', async () => {
+                    const cur = String(st.storySummary || '').trim();
+                    st.storySummary = String(h.text);
+                    st.storySummaryHistory.splice(hi, 1);
+                    if (cur) st.storySummaryHistory.unshift({ text: cur, at: Date.now() });
+                    st.storySummaryHistory = st.storySummaryHistory.slice(0, 5);
+                    sumArea.val(st.storySummary);
+                    await commit();
+                    toastr.success('Прежнее саммари возвращено (текущее сохранено в прошлые версии).', '📝 Саммари');
+                });
+                row.append(back);
+                histBox.append(row);
+            });
+            sumSec.append(histBox);
+        }
+    }
     el.append(sumSec);
 
     // Шаг 2: Последний пост сцены (с которого продолжится новый чат)
