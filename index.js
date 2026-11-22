@@ -6514,6 +6514,40 @@ function findDominantPovThinkerInPost(fullPostText, candidates = []) {
     return bestScore >= 2 ? bestName : '';
 }
 
+// Род ремарки сразу после реплики/мысли: «— простонал он», «— произнесла она» → 'boy' / 'girl'
+function nnbAttributionGender(afterText) {
+    const raw = String(afterText || '').toLowerCase().replace(/ё/g, 'е');
+    // только настоящая ремарка: сразу после фразы идёт тире («…*, — простонал он»), а не новое предложение
+    if (!/^[\s*»"”.,!?…]*[—–-]/.test(raw)) return '';
+    const t = raw.replace(/^[\s,—–\-*»"”.!?…]+/, '').slice(0, 70);
+    const words = t.split(/[^а-я]+/).filter(Boolean).slice(0, 5);
+    for (const w of words) {
+        if (w === 'она') return 'girl';
+        if (w === 'он') return 'boy';
+        if (w.length >= 4 && /(?:ла|лась)$/.test(w)) return 'girl';
+        if (w.length >= 4 && /(?:[^л]л|лся)$/.test(w)) return 'boy';
+    }
+    return '';
+}
+function windowBeforeForAttr(txt, idx) { return String(txt || '').slice(Math.max(0, idx - 260), idx); }
+function nnbGenderOfName(name, st) {
+    const nm = String(name || '').toLowerCase().replace(/ё/g, 'е');
+    if (!nm) return '';
+    const cards = [...(st?.npcs || [])];
+    if (st?.mainCharCard) cards.push(st.mainCharCard);
+    let card = cards.find(n => String(n?.name || '').toLowerCase().replace(/ё/g, 'е') === nm);
+    if (!card) {
+        try {
+            const c = ctx();
+            if (String(c.name1 || '').toLowerCase().replace(/ё/g, 'е') === nm) {
+                card = { name: c.name1, card: String(c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || ''), appearanceEn: '' };
+            }
+        } catch (e) { /* ignore */ }
+    }
+    if (!card) return '';
+    try { return guessCardGender(card, parseCanonFromAppearance(card.appearanceEn)) || ''; } catch (e) { return ''; }
+}
+
 function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, kindHint = '', fullStoryText = '') {
     if (!postText || !quoteText) return '';
     const names = storyNames() || {};
@@ -6571,6 +6605,18 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
     const beforeParts = rawBefore.split(/[.!?…\n]/);
     const immediateBefore = beforeParts[beforeParts.length - 1] || '';
     const immediateContext = `${immediateBefore} ${immediateAfter}`;
+    // Ремарка «— простонал / — произнесла» сразу после фразы однозначно говорит о роде говорящего: если такой герой в сцене один — это он
+    {
+        const attrG = nnbAttributionGender(cleanPost.slice(firstQuoteEndIdx, firstQuoteEndIdx + 90));
+        if (attrG) {
+            const sameG = validCandidates.filter(cName => nnbGenderOfName(cName, st) === attrG);
+            if (sameG.length === 1) return sameG[0];
+            if (sameG.length > 1) {
+                const near = sameG.filter(cName => isNameMentionedInText(cName, `${immediateContext} ${windowBeforeForAttr(narrativeOnlyPost, idx)}`));
+                if (near.length === 1) return near[0];
+            }
+        }
+    }
     const windowBefore = narrativeOnlyPost.slice(Math.max(0, idx - 260), idx);
     const windowAfter = immediateAfter;
     const nearContext = `${windowBefore} ${windowAfter}`;
@@ -8091,33 +8137,15 @@ function isDetailOrMacroPanelPrompt(rawPrompt) {
     }
     return false;
 }
-
-// ===== Замок внешности: волосы/глаза/уши/хвост/очки героя берутся из поля «Внешность (англ.)» и не смешиваются с другими героями =====
-const NNB_IDENT_RE = /\b(hair|bangs|ponytail|braid|twintails|eyes|glasses|eyewear|ears|tail|skin|freckles|mole|scar|horns|beard|stubble|piercing|fangs)\b/i;
-const NNB_LOCK_HAIR_COLOR_RE = /\b(jet[- ]black|black|dark brown|light brown|brown|blonde|blond|golden|yellow|white|silver|grey|gray|platinum|red|crimson|orange|ginger|auburn|copper|caramel|chestnut|pink|blue|green|purple|violet|teal|ash)\b/i;
+// ===== Замок внешности: волосы/глаза/уши/хвост/очки героя берутся из его «Внешности (англ.)» и не смешиваются с другими героями =====
+const NNB_IDENT_RE = /\b(hair|bangs|ponytail|braid|twintails|bun|eyes|sclera|glasses|eyewear|ears|tail|skin|freckles|mole|scar|horns|antennae?|beard|stubble|piercing|fangs|tattoos?)\b/i;
+const NNB_LOCK_HAIR_COLOR_RE = /\b(jet[- ]black|black|dark brown|light brown|brown|blonde|blond|golden|yellow|white|silver|grey|gray|platinum|red|crimson|orange|ginger|auburn|copper|caramel|chestnut|pink|blue|green|purple|violet|teal|ash|dark)\b/i;
 function nnbIdentityTokens(appEn) {
     return String(appEn || '').split(/\s*,\s*/).map(x => x.trim().replace(/^\d+(?:\.\d+)?::|::$/g, '').trim())
-        .filter(x => x && NNB_IDENT_RE.test(x) && x.split(/\s+/).length <= 6 && !/^no\s/i.test(x));
+        .filter(x => x && NNB_IDENT_RE.test(x) && x.split(/\s+/).length <= 8 && !/^no\s/i.test(x)
+            && !/\b(pressed|pinned back|flattened|flat against|drooping|twitching|curled|coiled|wrapped|clinging|stuck|tears|teary|crying|wet|damp|dripping|looking|closed|half-closed|wide|darting|blush)\b/i.test(x));
 }
-function nnbHeroesForLock(castNames) {
-    const st = store();
-    if (!st) return { boy: [], girl: [] };
-    const cards = [...(st.npcs || [])];
-    if (st.mainCharCard) cards.push(st.mainCharCard);
-    const castLow = (Array.isArray(castNames) ? castNames : []).map(x => String(x || '').toLowerCase().replace(/ё/g, 'е'));
-    const out = { boy: [], girl: [] };
-    for (const n of cards) {
-        const appEn = String(n?.appearanceEn || '').trim();
-        if (!appEn || !n?.name) continue;
-        const nm = String(n.name).toLowerCase().replace(/ё/g, 'е');
-        if (castLow.length && !castLow.some(c => c && (c.includes(nm) || nm.includes(c)))) continue;
-        let g = '';
-        try { g = guessCardGender(n, parseCanonFromAppearance(appEn)); } catch (e) { /* ignore */ }
-        if (!g) g = /\b(1girl|girl|woman|female)\b/i.test(appEn) ? 'girl' : (/\b(1boy|boy|man|male)\b/i.test(appEn) ? 'boy' : '');
-        if (out[g]) out[g].push({ name: n.name, ident: nnbIdentityTokens(appEn) });
-    }
-    return out;
-}
+
 function nnbApplyIdentityLock(text, hero) {
     if (!hero || !hero.ident.length) return text;
     let parts = String(text || '').split(/\s*,\s*/).filter(Boolean);
@@ -8187,6 +8215,129 @@ async function nnbAutoFillCastAppearance(st, mesId, comicOpts) {
     } catch (e) { console.warn('[npc_notebook] auto appearance', e); }
 }
 
+// ================= Состав страницы: кто из героев на ней, их пол и внешность, и раздача внешности по кадрам =================
+function nnbFeatWords(text) {
+    return [...new Set((String(text || '').toLowerCase().match(/\b(?:cat|dog|fox|wolf|rabbit|bunny|ant|insect|demi-\w+|antennae?|horns?|wings?|four arms|four eyes|black sclera|scales|tail|gr[ae]y-purple|gr[ae]y-violet|purple|pale|tan|dark|black|blonde|blond|white|silver|grey|gray|red|copper|ginger|brown|green|blue|pink|glasses|piercing|tattoos?|freckles|mole|scar|bun|ponytail|wolf cut|braid)\b/g) || []))];
+}
+function nnbBuildPageCast(st, cast, firstPanelRaw) {
+    const out = [];
+    if (!st) return out;
+    const cards = [...(st.npcs || [])];
+    if (st.mainCharCard) cards.push(st.mainCharCard);
+    try {
+        const c = ctx();
+        const userName = c.name1 || '';
+        if (userName && !cards.some(n => String(n?.name || '').toLowerCase() === String(userName).toLowerCase())) {
+            const pd = c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || '';
+            cards.push({ name: userName, card: String(pd), appearanceEn: '', __persona: true });
+        }
+    } catch (e) { /* ignore */ }
+    const castLow = (Array.isArray(cast) ? cast : []).map(x => String(typeof x === 'string' ? x : (x?.name || '')).toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
+    const seen = new Set();
+    for (const n of cards) {
+        const nm = String(n?.name || '').toLowerCase().replace(/ё/g, 'е');
+        if (!nm || seen.has(nm)) continue;
+        if (castLow.length && !castLow.some(cn => cn === nm || (cn.length >= 3 && nm.length >= 3 && (cn.includes(nm) || nm.includes(cn))))) continue;
+        seen.add(nm);
+        let canon = null;
+        try { canon = parseCanonFromAppearance(n.appearanceEn); } catch (e) { /* ignore */ }
+        let gender = '';
+        try { gender = guessCardGender(n, canon); } catch (e) { /* ignore */ }
+        const ident = nnbIdentityTokens(n.appearanceEn);
+        out.push({ name: n.name, gender, ident, feats: nnbFeatWords(n.appearanceEn), learned: false });
+    }
+    // Слоты 1-го кадра: кому из героев какой слот. Для героя без «Внешности (англ.)» запоминаем его внешность из этого слота
+    const p1 = parsePanelTextAndCharSlots(firstPanelRaw || '');
+    for (const cap of (p1.charCaptions || [])) {
+        const h = nnbMatchHero(out, cap, nnbSlotGender(cap));
+        if (h && !h.ident.length) {
+            h.ident = nnbIdentityTokens(stripActionAndPropTagsFromCharCaption(cap));
+            h.feats = nnbFeatWords(h.ident.join(', '));
+            h.learned = true;
+        }
+        if (h && !h.gender) h.gender = nnbSlotGender(cap);
+    }
+    return out;
+}
+function nnbMatchHero(pageCast, text, gender, speakerHint = '') {
+    const pool = (pageCast || []).filter(h => !gender || !h.gender || h.gender === gender);
+    if (!pool.length) return null;
+    if (speakerHint) {
+        const sp = String(speakerHint).toLowerCase().replace(/ё/g, 'е');
+        const bySp = pool.find(h => { const hn = String(h.name).toLowerCase().replace(/ё/g, 'е'); return hn === sp || (sp.length >= 3 && (hn.includes(sp) || sp.includes(hn))); });
+        if (bySp) return bySp;
+    }
+    const strict = pool.filter(h => h.gender === gender);
+    const cand = strict.length ? strict : pool;
+    if (cand.length === 1) return cand[0];
+    const tf = nnbFeatWords(text);
+    const scored = cand.map(h => ({ h, score: h.feats.filter(f => tf.includes(f)).length })).sort((a, b) => b.score - a.score);
+    if (scored[0].score > 0 && (!scored[1] || scored[1].score < scored[0].score)) return scored[0].h;
+    return null;
+}
+// Сколько людей и какого пола в кадре без слотов
+function nnbFramePeople(desc) {
+    const d = String(desc || '');
+    if (/\b(no humans|object focus|still life|scenery)\b/i.test(d)) return [];
+    const boys = (d.match(/\b([2-6])boys\b/i) || [])[1];
+    const girls = (d.match(/\b([2-6])girls\b/i) || [])[1];
+    const out = [];
+    if (boys) for (let i = 0; i < Number(boys); i++) out.push('boy');
+    else if (/\b1boy\b/i.test(d)) out.push('boy');
+    if (girls) for (let i = 0; i < Number(girls); i++) out.push('girl');
+    else if (/\b1girl\b/i.test(d)) out.push('girl');
+    if (!out.length) {
+        if (/\b(woman|female)\b/i.test(d)) out.push('girl');
+        else if (/\b(man|male)\b/i.test(d.replace(/\bwoman\b/gi, ''))) out.push('boy');
+    }
+    return out;
+}
+// Главная функция: приводит кадр к составу страницы. Возвращает { desc, caps }
+function nnbEnforcePageCastOnFrame(desc, caps, pageCast, panelSpeakers = [], st = null) {
+    let d = nnbDropRemovedItemTags(desc);
+    let slots = Array.isArray(caps) ? caps.filter(Boolean).map(c => nnbDropRemovedItemTags(c)) : [];
+    if (!pageCast || !pageCast.length) return { desc: d, caps: slots };
+    const headless = /\b(head out of frame|face out of frame|cropped head|headless)\b/i.test(d);
+    if (slots.length) {
+        const used = new Set();
+        slots = slots.map(cap => {
+            const g = nnbSlotGender(cap);
+            const h = nnbMatchHero(pageCast.filter(x => !used.has(x)), cap, g);
+            if (h) used.add(h);
+            let out = h && h.ident.length ? nnbApplyIdentityLock(cap, h) : cap;
+            return st ? nnbStripForeignCanonFromSlot(out, st) : out;
+        });
+        return { desc: d, caps: slots };
+    }
+    const people = nnbFramePeople(d);
+    if (!people.length || headless) return { desc: d, caps: slots };
+    if (people.length === 1) {
+        const h = nnbMatchHero(pageCast, d, people[0], panelSpeakers[0] || '');
+        if (h && h.ident.length) {
+            const before = d;
+            d = nnbApplyIdentityLock(d, h);
+            if (d !== before) logImageDiag(`🧬 Кадр с одним героем → «${h.name}»: внешность сверена`, d.slice(-220));
+        }
+        return { desc: d, caps: slots };
+    }
+    // Двое и больше без слотов: NovelAI сам выдумает лица и смешает их. Даём каждому слот с его внешностью
+    const used = new Set();
+    const built = [];
+    for (const g of people.slice(0, 4)) {
+        const pool = pageCast.filter(x => !used.has(x));
+        const h = nnbMatchHero(pool, d, g, panelSpeakers.find(spk => pool.some(x => x.name === spk && x.gender === g)) || '')
+            || (pool.filter(x => x.gender === g).length === 1 ? pool.find(x => x.gender === g) : null);
+        if (!h) return { desc: d, caps: slots }; // не можем однозначно сопоставить — лучше не трогать, чем перепутать
+        used.add(h);
+        built.push(`${g === 'girl' ? '1girl' : '1boy'}, ${h.ident.join(', ')}`);
+    }
+    if (built.every(b => b.split(',').length > 1)) {
+        logImageDiag(`🧬 В кадре ${people.length} героя без слотов — добавлены слоты с их внешностью`, built.join(' | '));
+        return { desc: d, caps: built };
+    }
+    return { desc: d, caps: slots };
+}
+
 // Канон-тег героя X не должен стоять в слоте, где описан другой герой (чужие уши/антенны/руки и ни одной приметы X)
 function nnbStripForeignCanonFromSlot(cap, st) {
     let out = String(cap || '');
@@ -8220,44 +8371,6 @@ function nnbPromptAnswerHasReasoning(raw, isComicMode) {
     const tagLines = lines.filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ|SCENE|СЦЕНА)\s*[_#№]?\s*\d?\s*[:：—–.-]/i.test(l));
     if (isComicMode && tagLines.filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ)/i.test(l)).length < 2) return true;
     return tagLines.some(l => NNB_REASONING_DETECT_RE.test(l.replace(/^[^:：—–]*[:：—–]\s*/, '').split(/\s*\|\|\s*CHAR/i)[0]));
-}
-
-function enforceSoloFrameOutfitFromPage(rawFrameDesc, panel1Desc = '', charCaptions = []) {
-    // Одежду между кадрами не копируем (за неё отвечает «Замок одежды»), но ВНЕШНОСТЬ героя (волосы, глаза, очки, уши, хвост, кожа)
-    // переносим из CHAR-слотов 1-го кадра — иначе во 2-м/3-м кадре без слотов NovelAI рисует случайного человека.
-    let p = String(rawFrameDesc || '').trim();
-    if (!p) return p;
-    if (/\|\|\s*CHAR\s*\d/i.test(p)) return p; // у кадра свои слоты — не трогаем
-    if (/\b(no humans|object focus|still life|head out of frame|face out of frame|cropped head|headless)\b/i.test(p)) return p;
-    const caps = [];
-    String(panel1Desc || '').split(/\|\|\s*CHAR\s*\d+\s*[:：]\s*/i).slice(1).forEach(c => caps.push(c.trim()));
-    (Array.isArray(charCaptions) ? charCaptions : []).forEach(c => { if (c && !caps.includes(String(c).trim())) caps.push(String(c).trim()); });
-    if (!caps.length) return p;
-    const isFem = c => /\b(1girl|girl|woman|female|she)\b/i.test(c) && !/\b(1boy|man|male)\b/i.test(c.replace(/\bwoman\b/gi, ''));
-    const isMasc = c => /\b(1boy|boy|man|male)\b/i.test(c.replace(/\bwoman\b/gi, ''));
-    const hasGirl = /\b(1girl|woman|female)\b/i.test(p);
-    const hasBoy = /\b(1boy|man|male)\b/i.test(p.replace(/\bwoman\b/gi, ''));
-    if (hasGirl === hasBoy) return p; // двое разного пола без слотов (или пол неясен) — внешность не смешиваем
-    const sameGender = caps.filter(c => hasGirl ? isFem(c) : isMasc(c));
-    if (!sameGender.length) return p;
-    let cap = sameGender[0];
-    if (sameGender.length > 1) {
-        // несколько героев этого пола: берём того, чьи приметы (уши, антенны, кожа, волосы) уже есть в кадре; если не понять — ничего не добавляем
-        const featWords = c => (String(c).toLowerCase().match(/\b(?:cat|dog|fox|wolf|rabbit|ant|insect|demi-\w+|antennae|horns?|wings?|four arms|scales|gray-violet|purple|black|blonde|white|silver|red|copper|brown|green|blue)\b/g) || []);
-        const pl0 = p.toLowerCase();
-        const scored = sameGender.map(c => ({ c, score: [...new Set(featWords(c))].filter(w => new RegExp(`\\b${w}\\b`).test(pl0)).length }))
-            .sort((a, b) => b.score - a.score);
-        if (!scored[0].score || (scored[1] && scored[1].score === scored[0].score)) return p;
-        cap = scored[0].c;
-    }
-    const identRe = /\b(hair|bangs|ponytail|braid|eyes|glasses|eyewear|ears|tail|skin|freckles|mole|scar|horns|beard|stubble|piercing)\b/i;
-    const actionRe = /\b(pressed|pinned|flattened|flat against|curled|coiled|wrapped|clinging|stuck|tears|teary|crying|wet|damp|dripping|looking|closed|half-closed|wide)\b/i;
-    const pl = p.toLowerCase();
-    const add = cap.split(/\s*,\s*/).map(x => x.trim()).filter(x => x && identRe.test(x) && !actionRe.test(x) && !/^no\s/i.test(x))
-        .filter(x => !pl.includes(x.toLowerCase()));
-    if (!add.length) return p;
-    logImageDiag(`🧬 Внешность героя перенесена в кадр без слотов: ${add.join(', ')}`);
-    return `${p}, ${add.join(', ')}`;
 }
 
 function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
@@ -8451,8 +8564,36 @@ function parseCanonFromAppearance(appEn) {
     if (toks.length >= 2 && NNB_CANON_SERIES_RE.test(toks[1]) && !NNB_NON_CANON_NAME_RE.test(toks[0])) return { name: toks[0], series: toks[1], tag: `${toks[0]}, ${toks[1]}`, paren: false, gender };
     return null;
 }
+function nnbGenderFromNameGrammar(name, text) {
+    // «София произнесла», «Энджел издал» — род глагола прошедшего времени рядом с именем надёжнее, чем подсчёт «он/она» в описании отношений
+    const nm = String(name || '').trim();
+    if (!nm || !text) return '';
+    const stem = nm.toLowerCase().replace(/ё/g, 'е').slice(0, Math.max(3, nm.length - 1));
+    const t = String(text).toLowerCase().replace(/ё/g, 'е');
+    const re = new RegExp(`(?:^|[^а-яa-z])${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[а-яa-z]*[\\s,]+(?:[а-я]+[\\s,]+){0,2}?([а-я]{3,}(?:л|ла|ло|лся|лась))(?=[^а-я]|$)`, 'g');
+    let fem = 0, masc = 0, m;
+    while ((m = re.exec(t)) && (fem + masc) < 40) {
+        const v = m[1];
+        if (/(?:ла|лась)$/.test(v)) fem++;
+        else if (/(?:[^л]л|лся)$/.test(v) && !/ло$/.test(v)) masc++;
+    }
+    if (fem >= 2 && fem >= masc * 2) return 'girl';
+    if (masc >= 2 && masc >= fem * 2) return 'boy';
+    return '';
+}
 function guessCardGender(n, canon) {
     if (canon?.gender) return canon.gender;
+    // 1) явные теги во «Внешности (англ.)»
+    const appTx = String(n?.appearanceEn || '').toLowerCase();
+    if (/\b(1girl|female|woman)\b/.test(appTx) && !/\b(1boy|male|man)\b/.test(appTx.replace(/\bwoman\b/g, '').replace(/\bfemale\b/g, ''))) return 'girl';
+    if (/\b(1boy|male|man)\b/.test(appTx.replace(/\bwoman\b/g, '').replace(/\bfemale\b/g, '')) && !/\b(1girl|female|woman)\b/.test(appTx)) return 'boy';
+    // 2) грамматика рядом с именем: в карточке и в последних сообщениях чата
+    try {
+        const c = ctx();
+        const recent = (c.chat || []).slice(-6).map(m => String(m?.mes || '')).join('\n');
+        const g = nnbGenderFromNameGrammar(n?.name, `${n?.card || ''}\n${n?.status || ''}\n${recent}`);
+        if (g) return g;
+    } catch (e) { /* ignore */ }
     let t = `${n?.card || ''} ${n?.status || ''}`.toLowerCase();
     if (n?.isMainChar) {
         try {
@@ -9647,34 +9788,21 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 }
             }
             const framesToDraw = panelPrompts.slice(0, framesCount);
+            let pageCastReg = null;
             const singleFrameNaiStyle = stripMultiPanelTagsForSingleFrame(cStyle?.naiTags || '');
             const frameUrls = [];
             for (let fIdx = 0; fIdx < framesToDraw.length; fIdx++) {
                 sceneDrawingStartedAt = Date.now(); // обновляем таймер на каждом кадре полосы, чтобы 3–4 кадра не сбрасывались по таймауту!
                 const parsedPanel = parsePanelTextAndCharSlots(framesToDraw[fIdx]);
                 let rawFrameDesc = cleanSingleComicPanelPrompt(parsedPanel.prompt || framesToDraw[fIdx], fIdx, framesToDraw[0] || desc);
-                if (fIdx > 0) {
-                    rawFrameDesc = enforceSoloFrameOutfitFromPage(rawFrameDesc, framesToDraw[0], charCaptions);
-                }
-                rawFrameDesc = nnbDropRemovedItemTags(rawFrameDesc);
                 try {
-                    const lockHeroes = nnbHeroesForLock(cast);
-                    const pickHero = g => (lockHeroes[g] && lockHeroes[g].length === 1) ? lockHeroes[g][0] : null;
-                    if (Array.isArray(parsedPanel.charCaptions) && parsedPanel.charCaptions.length) {
-                        parsedPanel.charCaptions = parsedPanel.charCaptions.map(cap => {
-                            const h = pickHero(nnbSlotGender(cap));
-                            return nnbStripForeignCanonFromSlot(nnbDropRemovedItemTags(h ? nnbApplyIdentityLock(cap, h) : cap), store());
-                        });
-                    } else {
-                        const hasGirl = /\b(1girl|woman|female)\b/i.test(rawFrameDesc);
-                        const hasBoy = /\b(1boy|man|male)\b/i.test(rawFrameDesc.replace(/\bwoman\b/gi, ''));
-                        const isHeadless = /\b(head out of frame|face out of frame|no humans|object focus)\b/i.test(rawFrameDesc);
-                        if (hasGirl !== hasBoy && !isHeadless) {
-                            const h = pickHero(hasGirl ? 'girl' : 'boy');
-                            if (h) rawFrameDesc = nnbApplyIdentityLock(rawFrameDesc, h);
-                        }
-                    }
-                } catch (lockErr) { console.warn('[npc_notebook] identity lock', lockErr); }
+                    if (!pageCastReg) pageCastReg = nnbBuildPageCast(st, cast, framesToDraw[0] || '');
+                    const panelSpeakers = (Array.isArray(rawLlmQuotes) ? rawLlmQuotes : [])
+                        .filter(q => Number(q?.panel) === fIdx + 1 && q?.kind !== 'narration' && q?.speaker).map(q => String(q.speaker));
+                    const enforced = nnbEnforcePageCastOnFrame(rawFrameDesc, parsedPanel.charCaptions, pageCastReg, panelSpeakers, st);
+                    rawFrameDesc = enforced.desc;
+                    parsedPanel.charCaptions = enforced.caps;
+                } catch (castErr) { console.warn('[npc_notebook] page cast', castErr); }
                 if (/\b[2-6]boys\b/i.test(rawFrameDesc)) {
                     rawFrameDesc = rawFrameDesc.replace(/\b1boy\s*:/gi, 'male:').replace(/,\s*1boy\b/gi, ', male');
                 }
