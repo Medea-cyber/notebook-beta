@@ -6194,7 +6194,12 @@ function classifyCaptionKindAndSpeaker(rawQuoteObj, sourceText, defaultSpeaker =
         return false;
     };
 
-    const inThoughtSpan = explicitThought || matchesSpanList(thoughtSpans);
+    // «THOUGHT» от модели, но в посте это не мысль (не в *звёздочках*), а фраза без «я/ты» и с «он/она/ей» — это повествование
+    const tLowQ = ' ' + String(txt || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-я]+/g, ' ') + ' ';
+    const hasFirstSecondPerson = / (я|меня|мне|мной|мой|моя|мое|мои|моих|мы|нас|нам|нами|наш|наша|ты|тебя|тебе|тобой|твой|твоя|вы|вас|вам) /.test(tLowQ);
+    const hasThirdPerson = / (он|она|они|его|ее|ей|ему|их|им|него|нее|ней|нему|ним) /.test(tLowQ);
+    const fakeThought = explicitThought && !matchesSpanList(thoughtSpans) && !hasFirstSecondPerson && hasThirdPerson;
+    const inThoughtSpan = (explicitThought && !fakeThought) || matchesSpanList(thoughtSpans);
     const inSpeechSpan = matchesSpanList(speechSpans);
     const detectedKind = inThoughtSpan ? 'thought' : (inSpeechSpan ? 'speech' : 'narration');
     const validSpk = validateAndSanitizeQuoteSpeaker(rawSpk, txt, cleanSrc, cast, st, detectedKind, fullStoryText || cleanSrc);
@@ -6595,7 +6600,7 @@ function nnbGenderOfName(name, st) {
         try {
             const c = ctx();
             if (String(c.name1 || '').toLowerCase().replace(/ё/g, 'е') === nm) {
-                card = { name: c.name1, card: String(c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || ''), appearanceEn: '' };
+                card = nnbPersonaCard(st, c.name1, c);
             }
         } catch (e) { /* ignore */ }
     }
@@ -6726,6 +6731,302 @@ function inferSpeakerFromPostContext(postText, quoteText, cast = [], st = null, 
     return '';
 }
 
+// ================= Кто субъект в этом месте текста =================
+// Одна функция на всё: чья мысль (*…*), чья вещь («кожаной куртки»). Ищем подлежащее: имя в именительном падеже + глагол
+// прошедшего времени рядом («Кайлар за столом сузил», «вальяжно привалился Ян», «Ямико, заехавшая …, прижимала»),
+// или «он/она» + глагол → последний названный герой этого пола в абзаце. Падежные формы («к Ане», «на Энджела») — не подлежащее.
+const NNB_PAST_VERB_RE = /^[а-я]{2,}(?:л|ла|ли|лся|лась|лись)$/;
+const NNB_NOT_VERB_RE = /^(?:был[аи]?|стал[аи]?|мал|мала|бел|бела|цел|цела|смел|смела|тепл|тепла|кругл|кругла|светл|светла|пол|пила|сила|вилла|стол|угол|уголь|ангел|дятел|пепел|осел|котел|орел|узел|посол)$/;
+function nnbVerbFitsGender(v, g) {
+    if (!NNB_PAST_VERB_RE.test(v) || NNB_NOT_VERB_RE.test(v)) return false;
+    if (/(?:ли|лись)$/.test(v)) return false; // множественное число — не один герой
+    if (g === 'girl') return /(?:ла|лась)$/.test(v);
+    if (g === 'boy') return /(?:[^л]л|лся)$/.test(v) || /^[а-я]+лл$/.test(v);
+    return true;
+}
+function nnbSubjectsInSpan(low, from, to, names, st) {
+    // low — текст в нижнем регистре с «ё»→«е» и замаскированными репликами/мыслями
+    const out = [];
+    const span = low.slice(from, to);
+    const words = [];
+    const wre = /[а-яa-z][а-яa-z-]*/g;
+    let m;
+    while ((m = wre.exec(span))) words.push({ w: m[0], s: from + m.index, e: from + m.index + m[0].length });
+    const preps = /^(?:на|к|ко|у|от|для|с|со|о|об|обо|про|при|по|за|над|под|перед|без|до|из|в|во|через|мимо|вокруг|около|возле|между)$/;
+    const nameList = (names || []).map(n => ({ name: n, low: String(n).toLowerCase().replace(/ё/g, 'е'), g: nnbGenderOfName(n, st) }));
+    const between = (a, b) => low.slice(a, b);
+    for (let i = 0; i < words.length; i++) {
+        const w = words[i].w;
+        // местоимение-подлежащее
+        if (w === 'он' || w === 'она') {
+            const g = w === 'он' ? 'boy' : 'girl';
+            let found = false;
+            for (let j = i + 1; j <= Math.min(words.length - 1, i + 4); j++) {
+                if (/[.!?;:]/.test(between(words[j - 1].e, words[j].s))) break;
+                if (nnbVerbFitsGender(words[j].w, g)) { found = true; break; }
+            }
+            // «тихо отчитался он»
+            if (!found && i > 0 && !/[.!?;,]/.test(between(words[i - 1].e, words[i].s)) && nnbVerbFitsGender(words[i - 1].w, g)) found = true;
+            if (found) out.push({ pron: g, pos: words[i].s });
+            continue;
+        }
+        const hit = nameList.find(n => n.low === w || (n.low.includes(' ') && low.slice(words[i].s, words[i].s + n.low.length) === n.low));
+        if (!hit) continue;
+        if (i > 0 && preps.test(words[i - 1].w) && !/[,.;]/.test(between(words[i - 1].e, words[i].s))) continue;
+        let ok = false;
+        // «Имя [, оборот ,] … глагол» — до 4 слов после имени (обособленный оборот пропускаем)
+        let j = i + 1;
+        const after = between(words[i].e, words[i].e + 2);
+        if (/^\s*,/.test(after)) {
+            const close = low.indexOf(',', words[i].e + 1);
+            if (close > 0 && close - words[i].e < 160 && !/[.!?;]/.test(low.slice(words[i].e, close))) {
+                while (j < words.length && words[j].s < close) j++;
+            }
+        }
+        for (let k = j, n = 0; k < words.length && n < 4; k++, n++) {
+            if (/[.!?;]/.test(between(words[k - 1].e, words[k].s))) break;
+            if (nnbVerbFitsGender(words[k].w, hit.g)) { ok = true; break; }
+        }
+        // «вальяжно привалился Ян» — глагол перед именем
+        if (!ok) {
+            for (let k = i - 1, n = 0; k >= 0 && n < 2; k--, n++) {
+                if (/[.!?;,]/.test(between(words[k].e, words[k + 1].s))) break;
+                if (nnbVerbFitsGender(words[k].w, hit.g)) { ok = true; break; }
+            }
+        }
+        if (ok) out.push({ name: hit.name, g: hit.g, pos: words[i].s });
+    }
+    return out;
+}
+function nnbMaskSpeech(text) {
+    return String(text || '').replace(/(?:"[^"\n]*"|«[^«»\n]*»|“[^“”\n]*”|\*[^*\n]*\*)/g, x => ' '.repeat(x.length));
+}
+// pos — место в тексте; forward — можно искать подлежащее и дальше по этому же предложению (для вещей: «засунув руки в карманы джинсов … привалился Ян»)
+function nnbSubjectAt(text, pos, names, st, forward = false) {
+    const low = nnbMaskSpeech(text).toLowerCase().replace(/ё/g, 'е');
+    const paraStart = Math.max(low.lastIndexOf('\n\n', pos - 1), low.lastIndexOf('\n', pos - 1)) + 1;
+    const nextPara = low.indexOf('\n', pos);
+    const paraEnd = nextPara < 0 ? low.length : nextPara;
+    const resolvePron = (g, before) => {
+        const subs = nnbSubjectsInSpan(low, paraStart, before, names, st).filter(s => s.name && s.g === g);
+        if (subs.length) return subs[subs.length - 1].name;
+        // нет названного подлежащего этого пола — последний упомянутый в абзаце герой этого пола (в любом падеже)
+        const para = text.slice(paraStart, before);
+        const cand = (names || []).filter(n => nnbGenderOfName(n, st) === g && isNameMentionedInText(n, para));
+        return cand.length === 1 ? cand[0] : '';
+    };
+    const pick = (subs, before) => {
+        for (let i = subs.length - 1; i >= 0; i--) {
+            const s = subs[i];
+            if (s.name) return s.name;
+            const r = resolvePron(s.pron, s.pos);
+            if (r) return r;
+        }
+        return '';
+    };
+    // границы предложений внутри абзаца
+    const sentStart = p => { let k = p - 1; while (k >= paraStart && !/[.!?…]/.test(low[k])) k--; return k + 1; };
+    const sentEnd = p => { let k = p; while (k < paraEnd && !/[.!?…]/.test(low[k])) k++; return k; };
+    let sS = sentStart(pos);
+    let r = pick(nnbSubjectsInSpan(low, sS, pos, names, st), pos);
+    if (r) return r;
+    if (forward) {
+        const subs = nnbSubjectsInSpan(low, pos, sentEnd(pos), names, st);
+        for (const s of subs) { const x = s.name || resolvePron(s.pron, s.pos); if (x) return x; }
+    }
+    // предыдущие предложения абзаца
+    let end = sS - 1;
+    while (end > paraStart) {
+        const s0 = sentStart(end);
+        r = pick(nnbSubjectsInSpan(low, s0, end, names, st), end);
+        if (r) return r;
+        end = s0 - 1;
+    }
+    return '';
+}
+
+// ================= Одежда из текста поста против памяти =================
+const NNB_RU_CLOTH = [
+    // [основа, категория, англ. существительное]
+    ['пуховик', 'outer', 'puffy jacket'], ['куртк', 'outer', 'jacket'], ['пальт', 'outer', 'coat'], ['плащ', 'outer', 'trench coat'], ['шуб', 'outer', 'fur coat'],
+    ['пиджак', 'outer', 'blazer'], ['жакет', 'outer', 'blazer'], ['кардиган', 'outer', 'cardigan'], ['толстовк', 'outer', 'hoodie'], ['худи', 'outer', 'hoodie'], ['халат', 'outer', ''],
+    ['рубашк', 'top', 'shirt'], ['рубах', 'top', 'shirt'], ['сорочк', 'top', 'shirt'], ['блузк', 'top', 'blouse'], ['блуз', 'top', 'blouse'], ['свитер', 'top', 'sweater'], ['водолазк', 'top', 'turtleneck'],
+    ['кофт', 'top', 'sweater'], ['футболк', 'top', 't-shirt'], ['майк', 'top', 'tank top'],
+    ['юбк', 'bottom', 'skirt'], ['брюк', 'bottom', 'trousers'], ['штан', 'bottom', 'pants'], ['джинс', 'bottom', 'jeans'], ['шорт', 'bottom', 'shorts'],
+    ['сарафан', 'dress', 'pinafore dress'], ['плать', 'dress', 'dress'], ['пижам', 'dress', 'pajamas'], ['купальник', 'dress', 'swimsuit'],
+    ['туфл', 'shoes', 'shoes'], ['ботин', 'shoes', 'boots'], ['сапог', 'shoes', 'boots'], ['кед', 'shoes', 'sneakers'], ['кроссовк', 'shoes', 'sneakers'],
+    ['шарф', 'neck', 'scarf'], ['галстук', 'neck', 'necktie'],
+];
+const NNB_RU_CLOTH_ADJ = [
+    // цвет
+    ['бордов', 'burgundy', 'c'], ['черн', 'black', 'c'], ['бел', 'white', 'c'], ['сер', 'grey', 'c'], ['красн', 'red', 'c'], ['син', 'blue', 'c'], ['голуб', 'light blue', 'c'],
+    ['зелен', 'green', 'c'], ['желт', 'yellow', 'c'], ['розов', 'pink', 'c'], ['коричнев', 'brown', 'c'], ['бежев', 'beige', 'c'], ['терракот', 'terracotta', 'c'], ['фиолетов', 'purple', 'c'], ['кремов', 'cream', 'c'],
+    // материал / вид
+    ['кожан', 'leather', 'm'], ['джинсов', 'denim', 'm'], ['пухов', 'puffy', 'm'], ['шерстян', 'wool', 'm'], ['вельвет', 'corduroy', 'm'], ['шелков', 'silk', 'm'], ['льнян', 'linen', 'm'], ['больничн', 'hospital', 'm'], ['вязан', 'knit', 'm'],
+];
+const NNB_REMOVE_VERB_RE = /^(?:вернул[аи]?|вернуть|сдал[аи]?|сдать|отдал[аи]?|отдать|снял[аи]?|снять|сняв|сбросил[аи]?|скинул[аи]?|стянул[аи]?|выбросил[аи]?)$/;
+function nnbRuClothAt(word) {
+    const w = String(word || '').toLowerCase().replace(/ё/g, 'е');
+    for (const [stem, cat, en] of NNB_RU_CLOTH) if (w.startsWith(stem)) return { stem, cat, en };
+    return null;
+}
+// Все упоминания одежды в посте: [{ hero, cat, en, color, mat, remove, inSpeech }]
+function nnbPostClothes(postText, names, st) {
+    const raw = String(postText || '').replace(/\[[^\]\n]*\]/g, x => ' '.repeat(x.length));
+    const masked = nnbMaskSpeech(raw);
+    const low = raw.toLowerCase().replace(/ё/g, 'е');
+    const out = [];
+    const wre = /[а-я][а-я-]*/g;
+    const words = [];
+    let m;
+    while ((m = wre.exec(low))) words.push({ w: m[0], s: m.index });
+    for (let i = 0; i < words.length; i++) {
+        const c = nnbRuClothAt(words[i].w);
+        if (!c) continue;
+        if (c.stem === 'кед' && !/^кед(?:ы|ах|ам|ами|ов)?$/.test(words[i].w)) continue;
+        if (c.stem === 'блуз' && !/^блуз(?:а|е|у|ой|ы)?$/.test(words[i].w)) continue;
+        let color = '', mat = '';
+        for (let k = i - 1; k >= Math.max(0, i - 3); k--) {
+            if (/[.!?,;]/.test(low.slice(words[k].s + words[k].w.length, words[k + 1].s))) break;
+            const a = NNB_RU_CLOTH_ADJ.find(([st0]) => words[k].w.startsWith(st0));
+            if (!a) continue;
+            if (a[2] === 'c' && !color) color = a[1];
+            if (a[2] === 'm' && !mat) mat = a[1];
+        }
+        let remove = false;
+        for (let k = Math.max(0, i - 4); k <= Math.min(words.length - 1, i + 4); k++) if (k !== i && NNB_REMOVE_VERB_RE.test(words[k].w)) remove = true;
+        const inSpeech = masked[words[i].s] === ' ' && raw[words[i].s] !== ' ';
+        const hero = inSpeech ? '' : nnbSubjectAt(raw, words[i].s, names, st, true);
+        // «её сарафана» при подлежащем-парне: вещь не его, а последней упомянутой девушки
+        let owner = hero;
+        const prev = words.slice(Math.max(0, i - 3), i).map(x => x.w);
+        const poss = prev.includes('ее') ? 'girl' : (prev.includes('его') ? 'boy' : '');
+        if (!inSpeech && poss && hero && nnbGenderOfName(hero, st) && nnbGenderOfName(hero, st) !== poss) {
+            const para = raw.slice(Math.max(raw.lastIndexOf('\n', words[i].s) + 1, 0), words[i].s);
+            const cand = (names || []).filter(n => nnbGenderOfName(n, st) === poss && isNameMentionedInText(n, para));
+            owner = cand.length === 1 ? cand[0] : '';
+        }
+        out.push({ hero: owner, cat: c.cat, en: c.en, color, mat, remove, inSpeech, ru: words[i].w });
+    }
+    return out;
+}
+function nnbAllHeroNames(st) {
+    const out = [];
+    const add = n => { const x = String(n || '').trim(); if (x && !out.some(o => o.toLowerCase() === x.toLowerCase())) out.push(x); };
+    (st?.npcs || []).forEach(n => add(n?.name));
+    add(st?.mainCharCard?.name);
+    try { const c = ctx(); add(c.name1); add(c.name2); } catch (e) { /* ignore */ }
+    return out;
+}
+// Сверяем память одежды с постом: текст главнее памяти. Возвращает { cats: {герой: Set(категорий из текста)}, log: [] }
+function nnbSyncOutfitMemoryWithPost(st, postText, names) {
+    const res = { cats: {}, log: [] };
+    if (!st || !postText) return res;
+    const items = nnbPostClothes(postText, names, st);
+    const keyOf = n => String(n || '').toLowerCase().replace(/ё/g, 'е');
+    for (const it of items) if (it.hero && !it.remove && !it.inSpeech) (res.cats[keyOf(it.hero)] = res.cats[keyOf(it.hero)] || new Set()).add(it.cat);
+    if (!st.heroOutfits || typeof st.heroOutfits !== 'object') return res;
+    const syncKey = String(postText).length + ':' + String(postText).slice(0, 60);
+    if (st.heroOutfitsSyncedFor === syncKey) return res;
+    const today = st.time?.date || '';
+    const colorWordRe = /\b(white|black|grey|gray|beige|brown|red|blue|light blue|navy|green|olive|yellow|pink|purple|cream|ivory|khaki|tan|charcoal|burgundy|terracotta)\b/i;
+    const matWords = NNB_RU_CLOTH_ADJ.filter(a => a[2] === 'm').map(a => a[1]);
+    let changed = false;
+    // 1) вещь сдали/сняли («Больничную рубаху пришлось вернуть») — убираем у того, у кого она одна такая в памяти
+    for (const it of items.filter(x => x.remove)) {
+        const sig = it.mat || it.en;
+        if (!sig) continue;
+        const holders = Object.entries(st.heroOutfits).filter(([, v]) => v?.en && (!today || !v.date || v.date === today)
+            && nnbOutfitTokens(v.en).some(t => nnbClothCat(t) === it.cat && t.toLowerCase().includes(sig.split(' ').pop())));
+        if (holders.length !== 1) continue;
+        const [k, v] = holders[0];
+        const keep = nnbOutfitTokens(v.en).filter(t => !(nnbClothCat(t) === it.cat && t.toLowerCase().includes(sig.split(' ').pop())));
+        res.log.push(`${v.name || k}: снято «${nnbOutfitTokens(v.en).filter(t => !keep.includes(t)).join(', ')}» (в тексте: ${it.ru})`);
+        v.en = keep.join(', ');
+        // помним, что сняли, — чтобы срезать эту вещь и из кадров, где модель её всё равно написала
+        v.removed = [...(Array.isArray(v.removed) ? v.removed : []).filter(r => r.sig !== sig.split(' ').pop()), { cat: it.cat, sig: sig.split(' ').pop() }];
+        changed = true;
+    }
+    // 2) в повествовании у героя вещь другого цвета/материала, чем в памяти — права память текста
+    for (const it of items.filter(x => x.hero && !x.remove && !x.inSpeech && x.en && (x.color || x.mat))) {
+        const v = st.heroOutfits[keyOf(it.hero)];
+        if (!v?.en || (today && v.date && v.date !== today)) continue;
+        const toks = nnbOutfitTokens(v.en);
+        const noun = it.en.split(' ').pop();
+        const sameIdx = toks.findIndex(t => nnbClothCat(t) === it.cat && new RegExp(`\\b${noun}\\b`, 'i').test(t));
+        const catIdx = sameIdx >= 0 ? sameIdx : (['outer', 'bottom', 'dress'].includes(it.cat) ? toks.findIndex(t => nnbClothCat(t) === it.cat) : -1);
+        if (catIdx < 0) {
+            // шарф/галстук из текста, которого нет в памяти, — дописываем, иначе замок его срежет
+            if (it.cat === 'neck' && it.color) { toks.push(`${it.color} ${it.en}`); v.en = toks.join(', '); changed = true; res.log.push(`${v.name || it.hero}: + «${it.color} ${it.en}» (в тексте: ${it.ru})`); }
+            continue;
+        }
+        const cur = toks[catIdx];
+        const curColor = (cur.match(colorWordRe) || [])[0] || '';
+        const colorClash = it.color && curColor && curColor.toLowerCase() !== it.color && !(it.color === 'grey' && /gray/i.test(curColor));
+        const matClash = it.mat && !new RegExp(`\\b${it.mat}\\b`, 'i').test(cur) && (matWords.some(w => new RegExp(`\\b${w}\\b`, 'i').test(cur)) || sameIdx < 0 || it.mat === 'leather');
+        const nounClash = sameIdx < 0;
+        let next = cur;
+        if (colorClash || matClash || nounClash) next = [it.color || (nounClash || matClash ? '' : curColor), it.mat, it.en.replace(new RegExp(`^${it.mat}\\s+`), '')].filter(Boolean).join(' ');
+        else if (it.color && !curColor) next = `${it.color} ${cur}`;
+        if (next !== cur) {
+            toks[catIdx] = next;
+            res.log.push(`${v.name || it.hero}: «${cur}» → «${next}» (в тексте: ${it.ru})`);
+            v.en = toks.join(', ');
+            changed = true;
+        }
+    }
+    // 3) вещь без цвета — NovelAI каждый раз красит её по-новому; где цвет очевиден по материалу, ставим его
+    for (const v of Object.values(st.heroOutfits)) {
+        if (!v?.en) continue;
+        const toks = nnbOutfitTokens(v.en).map(t => {
+            if (colorWordRe.test(t)) return t;
+            if (/\bleather\b/i.test(t)) return `black ${t}`;
+            if (/\bhospital gown\b/i.test(t)) return `light blue ${t}`;
+            if (/\blab coat\b/i.test(t)) return `white ${t}`;
+            if (/\b(denim|jeans)\b/i.test(t)) return `blue ${t}`;
+            return t;
+        });
+        if (toks.join(', ') !== nnbOutfitTokens(v.en).join(', ')) { v.en = toks.join(', '); changed = true; }
+    }
+    st.heroOutfitsSyncedFor = syncKey;
+    if (changed) res.changed = true;
+    return res;
+}
+
+// Чья мысль: подлежащее перед мыслью. Если в самой мысли «он/она» того же пола, что и подлежащее, — думает не он, а тот,
+// на кого он смотрит («…София перехватила его запястья. *Она знает!*» — думает Энджел)
+function nnbThoughtOwner(postText, quoteText, names, st) {
+    const raw = String(postText || '');
+    const q = String(quoteText || '').toLowerCase().replace(/ё/g, 'е').replace(/^[«"„“*\s]+/, '').slice(0, 24).trim();
+    if (!raw || !q || !(names || []).length) return '';
+    const low = raw.toLowerCase().replace(/ё/g, 'е');
+    const pos = low.indexOf(q);
+    if (pos < 0) return '';
+    const subj = nnbSubjectAt(raw, pos, names, st, false);
+    if (!subj) return '';
+    const t = ' ' + String(quoteText).toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z]+/g, ' ') + ' ';
+    const g = nnbGenderOfName(subj, st);
+    const sameNom = (g === 'girl' && / она /.test(t) && !/ он /.test(t)) || (g === 'boy' && / он /.test(t) && !/ она /.test(t));
+    if (sameNom) return nnbThinkerByPronouns(quoteText, names, st) || subj;
+    return subj;
+}
+
+// Чья это мысль, по местоимениям: «ОНА впервые не смотрит на меня…» думает не она, а он (и наоборот).
+// Работает, когда в сцене ровно один парень и одна девушка.
+function nnbThinkerByPronouns(quoteText, activeCast, st) {
+    const t = ' ' + String(quoteText || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z]+/g, ' ') + ' ';
+    const fem = / (она|ее|ей|ней|нее|ею|нею) /.test(t);
+    const masc = / (он|его|ему|него|нему|ним|нем) /.test(t);
+    if (fem === masc) return '';
+    const boys = [], girls = [];
+    for (const nm of (activeCast || [])) {
+        const g = nnbGenderOfName(nm, st);
+        if (g === 'boy') boys.push(nm); else if (g === 'girl') girls.push(nm);
+    }
+    if (boys.length !== 1 || girls.length !== 1) return '';
+    return fem ? boys[0] : girls[0];
+}
+
 function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, cast = [], st = null, kindHint = '', fullStoryText = '') {
     const spk = String(rawSpeaker || '').trim();
     const names = storyNames() || {};
@@ -6733,6 +7034,15 @@ function validateAndSanitizeQuoteSpeaker(rawSpeaker, quoteText, lastPostText, ca
         ? cast.map(c => (typeof c === 'string' ? c : (c?.name || ''))).filter(c => c && c !== '__none__')
         : [];
     const inferred = inferSpeakerFromPostContext(lastPostText, quoteText, activeCast, st, kindHint, fullStoryText);
+    // Мысль, где про одного из двух героев сказано «он/она» в третьем лице, принадлежит другому — это надёжнее подписи модели
+    if (kindHint === 'thought') {
+        // 1) подлежащее перед мыслью (с поправкой на «он/она» того же пола в самой мысли); 2) только местоимения
+        const castForSubj = activeCast.length ? activeCast : [names.user, names.char, ...((st?.npcs || []).map(n => n?.name))].filter(Boolean);
+        const bySubj = nnbThoughtOwner(fullStoryText && String(fullStoryText).includes(String(quoteText || '').slice(0, 20)) ? fullStoryText : lastPostText, quoteText, castForSubj, st);
+        if (bySubj) return bySubj;
+        const byPron = nnbThinkerByPronouns(quoteText, activeCast, st);
+        if (byPron) return byPron;
+    }
 
     if (spk) {
         // Если это мысль (thought), а LLM приписал её персонажу, которого вообще нет как субъекта мысли (например приписал Яну мысль Этель при виде Яна на пороге), доверяем контекстному анализатору POV!
@@ -7655,8 +7965,8 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         ? comicOpts.chapterOutfitLock : nnbHeroOutfitMemory(st);
     const outfitLockEntries = Object.entries(outfitLockSrc || {}).filter(([, v]) => v).map(([k, v]) => `• ${k}: ${v}`);
     const outfitLockLine = outfitLockEntries.length
-        ? `\n[🔒 ЗАМОК ОДЕЖДЫ ГЛАВЫ (зафиксировано с 1-й страницы — СТРОГО сохраняй эту одежду 1-в-1, пока в тексте прямо не сказано, что герой переоделся):\n${outfitLockEntries.join('\n')}]`
-        : '';
+        ? `\n[🔒 ЗАМОК ОДЕЖДЫ ГЛАВЫ (зафиксировано с 1-й страницы — СТРОГО сохраняй эту одежду 1-в-1, пока в тексте прямо не сказано, что герой переоделся):\n${outfitLockEntries.join('\n')}\nЕсли у вещи здесь не указан цвет — выбери его по тексту поста (или нейтральный) и дальше пиши ТОТ ЖЕ цвет во всех кадрах.]`
+        : `\n[👕 ОДЕЖДА: у каждой вещи героя ВСЕГДА указывай цвет (white puffy jacket, light blue hospital gown, dark grey sweater) и повторяй его одинаково во всех кадрах — иначе NovelAI каждый раз красит вещь по-новому.]`;
     const passportLine = (comicOpts?.chapterCharPassport && String(comicOpts.chapterCharPassport).trim())
         ? `[👗 СКВОЗНОЙ ПАСПОРТ ОДЕЖДЫ И ВНЕШНОСТИ ТЕКУЩЕЙ ГЛАВЫ (СТРОГО СОХРАНЯЙ КАНОНИЧНЫЕ ТЕГИ DANBOORU, ОДЕЖДУ, ЦВЕТ ВОЛОС, ОЧКИ И ЗВЕРИНЫЕ УШКИ/ХВОСТЫ ВО ВСЕХ ФРЕЙМАХ И CHAR-СЛОТАХ ЭТОЙ СТРАНИЦЫ; но если паспорт противоречит «Справке по внешности NPC» (канон-тег или цвет волос героя) — права справка, ЕСЛИ ГЕРОИ НЕ ПЕРЕОДЕВАЛИСЬ В ТЕКСТЕ!)]:\n${String(comicOpts.chapterCharPassport).trim()}${outfitLockLine}${canonCarryLine}`
         : (outfitLockLine ? outfitLockLine.trim() : '');
@@ -8285,7 +8595,14 @@ async function nnbAutoFillCastAppearance(st, mesId, comicOpts, castNames = []) {
 function nnbFeatWords(text) {
     return [...new Set((String(text || '').toLowerCase().match(/\b(?:cat|dog|fox|wolf|rabbit|bunny|ant|insect|demi-\w+|antennae?|horns?|wings?|four arms|four eyes|black sclera|scales|tail|gr[ae]y-purple|gr[ae]y-violet|purple|pale|tan|dark|black|blonde|blond|white|silver|grey|gray|red|copper|ginger|brown|green|blue|pink|glasses|piercing|tattoos?|freckles|mole|scar|bun|ponytail|wolf cut|braid)\b/g) || []))];
 }
-function nnbBuildPageCast(st, cast, firstPanelRaw, outfitMap = {}) {
+// Карточка героини-персоны для стражей: внешность берём из гардероба (там она уже на английском),
+// иначе пол угадывался по описанию персоны и героиню записывало в парни
+function nnbPersonaCard(st, userName, c) {
+    const pd = c?.powerUserSettings?.persona_description || c?.extensionSettings?.persona?.description || '';
+    const appEn = String(st?.wardrobe?.customAppearanceEn || st?.wardrobe?.appearance || '').trim();
+    return { name: userName, card: String(pd), appearanceEn: appEn, __persona: true };
+}
+function nnbBuildPageCast(st, cast, firstPanelRaw, outfitMap = {}, postCatsMap = null) {
     const out = [];
     if (!st) return out;
     const cards = [...(st.npcs || [])];
@@ -8294,8 +8611,7 @@ function nnbBuildPageCast(st, cast, firstPanelRaw, outfitMap = {}) {
         const c = ctx();
         const userName = c.name1 || '';
         if (userName && !cards.some(n => String(n?.name || '').toLowerCase() === String(userName).toLowerCase())) {
-            const pd = c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || '';
-            cards.push({ name: userName, card: String(pd), appearanceEn: '', __persona: true });
+            cards.push(nnbPersonaCard(st, userName, c));
         }
     } catch (e) { /* ignore */ }
     const castLow = (Array.isArray(cast) ? cast : []).map(x => String(typeof x === 'string' ? x : (x?.name || '')).toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
@@ -8311,7 +8627,8 @@ function nnbBuildPageCast(st, cast, firstPanelRaw, outfitMap = {}) {
         try { gender = guessCardGender(n, canon); } catch (e) { /* ignore */ }
         const ident = nnbIdentityTokens(n.appearanceEn);
         const outfitKey = Object.keys(outfitMap || {}).find(k => String(k).toLowerCase().replace(/ё/g, 'е') === nm);
-        out.push({ name: n.name, gender, ident, feats: nnbFeatWords(ident.join(', ')), learned: false, outfit: outfitKey ? outfitMap[outfitKey] : '' });
+        out.push({ name: n.name, gender, ident, feats: nnbFeatWords(ident.join(', ')), learned: false, outfit: outfitKey ? outfitMap[outfitKey] : '', canon: canon?.name || '', postCats: postCatsMap ? (postCatsMap[nm] || new Set()) : null,
+            removed: (() => { const v = st.heroOutfits?.[nm]; return v && (!st.time?.date || !v.date || v.date === st.time.date) && Array.isArray(v.removed) ? v.removed : null; })() });
     }
     // Слоты 1-го кадра: кому из героев какой слот. Для героя без «Внешности (англ.)» запоминаем его внешность из этого слота
     const p1 = parsePanelTextAndCharSlots(firstPanelRaw || '');
@@ -8376,7 +8693,10 @@ function nnbEnforcePageCastOnFrame(desc, caps, pageCast, panelSpeakers = [], st 
             const h = nnbMatchHero(pageCast.filter(x => !used.has(x)), cap, g);
             if (h) used.add(h);
             let out = h && h.ident.length ? nnbApplyIdentityLock(cap, h) : cap;
-            if (h && h.outfit && lockClothes) out = nnbApplyOutfitLock(out, h.outfit);
+            if (h && h.outfit && lockClothes) {
+                out = nnbApplyOutfitLock(out, h.outfit, h.postCats || null, h.removed || null);
+                if (h.canon && new RegExp(`\\b${h.canon.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(out)) out = nnbWeightOutfitAgainstCanon(out, h.outfit);
+            }
             return st ? nnbStripForeignCanonFromSlot(out, st) : out;
         });
         return { desc: nnbStripCharacterDescFromBase(d, slots), caps: slots };
@@ -8388,7 +8708,10 @@ function nnbEnforcePageCastOnFrame(desc, caps, pageCast, panelSpeakers = [], st 
         if (h && (h.ident.length || h.outfit)) {
             const before = d;
             if (h.ident.length) d = nnbApplyIdentityLock(d, h);
-            if (h.outfit && lockClothes) d = nnbApplyOutfitLock(d, h.outfit);
+            if (h.outfit && lockClothes) {
+                d = nnbApplyOutfitLock(d, h.outfit, h.postCats || null, h.removed || null);
+                if (h.canon && new RegExp(`\\b${h.canon.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(d)) d = nnbWeightOutfitAgainstCanon(d, h.outfit);
+            }
             if (d !== before) logImageDiag(`🧬 Кадр с одним героем → «${h.name}»: внешность и одежда сверены`, d.slice(-220));
         }
         return { desc: d, caps: slots };
@@ -8402,7 +8725,9 @@ function nnbEnforcePageCastOnFrame(desc, caps, pageCast, panelSpeakers = [], st 
             || (pool.filter(x => x.gender === g).length === 1 ? pool.find(x => x.gender === g) : null);
         if (!h) return { desc: d, caps: slots }; // не можем однозначно сопоставить — лучше не трогать, чем перепутать
         used.add(h);
-        built.push(`${g === 'girl' ? '1girl' : '1boy'}, ${h.ident.join(', ')}${h.outfit && lockClothes ? `, ${nnbOutfitTokens(h.outfit).join(', ')}` : ''}`);
+        const indoorsNoOuter = h.postCats && /\bindoors\b/i.test(d) && !h.postCats.has('outer');
+        const outfitToks = h.outfit && lockClothes ? nnbOutfitTokens(h.outfit).filter(t => !(indoorsNoOuter && nnbClothCat(t) === 'outer')) : [];
+        built.push(`${g === 'girl' ? '1girl' : '1boy'}, ${h.ident.join(', ')}${outfitToks.length ? `, ${outfitToks.join(', ')}` : ''}`);
     }
     if (built.every(b => b.split(',').length > 1)) {
         logImageDiag(`🧬 В кадре ${people.length} героя без слотов — добавлены слоты с их внешностью`, built.join(' | '));
@@ -8436,8 +8761,41 @@ const NNB_CLOTHES_CHANGE_RU_RE = new RegExp(
     + '|(?:снял|сняла|стянул|сбросил|скинул|сдернул|сдёрнул|спустил|расстегнул|распахнул|надел|натянул|накинул|набросил|облачил|переобул|разул)[а-яё]*(?:\\s+[а-яё]+){0,3}?\\s+' + NNB_CLOTH_WORDS_RU,
     'i');
 // Приводит одежду героя в тексте кадра/слота к запомненной. Видимость по кадру: в портрете не добавляем брюки и обувь
-function nnbApplyOutfitLock(text, outfit) {
+// Канон-тег (zen'in naoya) тянет за собой каноничный костюм и перебивает одежду из сюжета — усиливаем вес сюжетной одежды
+function nnbWeightOutfitAgainstCanon(text, outfit) {
+    const lockLow = nnbOutfitTokens(outfit).map(x => x.toLowerCase());
+    if (!lockLow.length) return text;
+    return String(text || '').split(/\s*,\s*/).map(t => {
+        const tl = t.trim().toLowerCase();
+        if (!tl || /::/.test(tl)) return t;
+        return lockLow.some(l => l === tl || tl.includes(l) || l.includes(tl)) && nnbClothCat(tl) ? `1.3::${t.trim()}::` : t;
+    }).join(', ');
+}
+// Память одежды уточняется: в памяти «puffy jacket» без цвета, а в кадре появилось «white puffy jacket» — запоминаем с цветом
+function nnbUpgradeOutfitColors(st, name, text) {
+    if (!st?.heroOutfits) return false;
+    const key = String(name || '').toLowerCase().replace(/ё/g, 'е');
+    const mem = st.heroOutfits[key];
+    if (!mem?.en) return false;
+    const colorRe = /\b(white|black|grey|gray|beige|brown|red|blue|light blue|navy|green|olive|yellow|pink|purple|cream|ivory|khaki|tan|charcoal|dark|light)\b/i;
+    const seen = nnbOutfitTokens(text);
+    let changed = false;
+    const upd = nnbOutfitTokens(mem.en).map(item => {
+        if (colorRe.test(item)) return item;
+        // та же вещь = то же главное слово (jacket, gown, skirt…), но уже с цветом
+        const nounOf = x => { for (const re of Object.values(NNB_CLOTH_CATS)) { const m = String(x).match(re); if (m) return m[0].toLowerCase(); } return ''; };
+        const noun = nounOf(item);
+        const better = noun ? seen.find(sv => colorRe.test(sv) && nounOf(sv) === noun) : null;
+        if (better) { changed = true; return better; }
+        return item;
+    });
+    if (changed) mem.en = upd.join(', ');
+    return changed;
+}
+
+function nnbApplyOutfitLock(text, outfit, postCats = null, removed = null) {
     let parts = String(text || '').split(/\s*,\s*/).filter(Boolean);
+    if (Array.isArray(removed) && removed.length) parts = parts.filter(t => !removed.some(r => nnbClothCat(t) === r.cat && new RegExp(`\\b${r.sig}\\b`, 'i').test(t)));
     const lockToks = nnbOutfitTokens(outfit);
     if (!lockToks.length) return String(text || '');
     const joined = parts.join(', ');
@@ -8452,7 +8810,8 @@ function nnbApplyOutfitLock(text, outfit) {
         if (lockCats.has(cat)) return false;
         if (cat === 'dress' && (lockCats.has('top') || lockCats.has('bottom'))) return false;
         if ((cat === 'top' || cat === 'bottom') && lockCats.has('dress')) return false;
-        if (cat === 'neck' || cat === 'shoes') return false; // аксессуар/обувь, которых нет в памяти, — выдумка модели
+        // аксессуар/обувь, которых нет в памяти, — выдумка модели (канонный галстук и т.п.), если только их нет в тексте поста
+        if ((cat === 'neck' || cat === 'shoes') && !(postCats && postCats.has(cat))) return false;
         return true;
     });
     // 2) недостающие вещи добавляем — только те, что видны в этом кадре
@@ -8464,7 +8823,9 @@ function nnbApplyOutfitLock(text, outfit) {
         : isLower ? (cat === 'bottom' || cat === 'shoes' || cat === 'dress')
         : true;
     const cur = low(parts.join(', '));
-    const add = lockToks.filter(l => visible(nnbClothCat(l)) && !cur.includes(low(l)));
+    // верхнюю одежду (пальто с улицы) в помещении не надеваем, если в тексте про неё ничего нет
+    const indoorsNoOuter = postCats && /\bindoors\b/i.test(joined) && !postCats.has('outer');
+    const add = lockToks.filter(l => visible(nnbClothCat(l)) && !cur.includes(low(l)) && !(indoorsNoOuter && nnbClothCat(l) === 'outer'));
     return [...parts, ...add].join(', ');
 }
 // Память одежды в чате: { 'софия': { name, en, date } }
@@ -8486,7 +8847,11 @@ function nnbRememberHeroOutfit(st, name, en) {
     const key = String(name).toLowerCase().replace(/ё/g, 'е');
     const toks = nnbOutfitTokens(en);
     if (!toks.length) return;
-    st.heroOutfits[key] = { name, en: toks.join(', '), date: st.time?.date || '' };
+    const prevRemoved = st.heroOutfits[key]?.date === (st.time?.date || '') ? st.heroOutfits[key]?.removed : null;
+    const rm = Array.isArray(prevRemoved) ? prevRemoved : [];
+    const kept = toks.filter(t => !rm.some(r => nnbClothCat(t) === r.cat && new RegExp(`\\b${r.sig}\\b`, 'i').test(t)));
+    if (!kept.length) return;
+    st.heroOutfits[key] = { name, en: kept.join(', '), date: st.time?.date || '', ...(rm.length ? { removed: rm } : {}) };
 }
 // Если слоты героев есть, описание героев в общей строке только мешает (двоится и перетекает на соседа) — убираем его оттуда
 function nnbStripCharacterDescFromBase(base, slots) {
@@ -8951,8 +9316,7 @@ function presentPeopleByGender(st, cast, sceneText) {
         const c = ctx();
         const userName = c.name1 || '';
         if (userName && !cards.some(n => String(n?.name || '').toLowerCase() === String(userName).toLowerCase())) {
-            const pd = c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || '';
-            cards.push({ name: userName, card: String(pd), appearanceEn: '', __persona: true });
+            cards.push(nnbPersonaCard(st, userName, c));
         }
     } catch (e) { /* ignore */ }
     const seen = new Set();
@@ -9998,9 +10362,17 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     if (!pageCastReg) {
                         // У героя из CAST нет «Внешности (англ.)» → без неё двух героинь одного пола не различить. Составляем один раз
                         await nnbAutoFillCastAppearance(st, mesId, comicOpts, cast);
+                        // Текст поста главнее памяти одежды: что сдали/сняли — убираем, другой цвет/материал — исправляем
+                        const postFull = (() => { try { const ch = ctx().chat || []; let ti = Number.isInteger(mesId) ? mesId : ch.length - 1; while (ti >= 0 && (!ch[ti] || ch[ti].is_system)) ti--; return String(ch[ti]?.mes || ''); } catch (e) { return ''; } })() || String(comicOpts?.chunkText || '');
+                        const sync = nnbSyncOutfitMemoryWithPost(st, postFull, nnbAllHeroNames(st));
+                        if (sync.changed) { try { ctx().saveMetadata(); } catch (e) { /* ignore */ } }
+                        sync.log.forEach(l => logImageDiag('👔 Одежда сверена с текстом поста', l));
                         const chapterLock = (comicOpts?.chapterOutfitLock && typeof comicOpts.chapterOutfitLock === 'object') ? comicOpts.chapterOutfitLock : {};
-                        const outfitMap = { ...nnbHeroOutfitMemory(st), ...chapterLock };
-                        pageCastReg = nnbBuildPageCast(st, cast, framesToDraw[0] || '', outfitMap);
+                        // замок главы мог собраться до сверки — для героев, чью одежду сверка поменяла, берём свежую память
+                        const memNow = nnbHeroOutfitMemory(st);
+                        const outfitMap = { ...memNow, ...chapterLock };
+                        for (const k of Object.keys(chapterLock)) { const mk = Object.keys(memNow).find(x => x.toLowerCase() === k.toLowerCase()); if (mk && sync.changed) outfitMap[k] = memNow[mk]; }
+                        pageCastReg = nnbBuildPageCast(st, cast, framesToDraw[0] || '', outfitMap, sync.cats);
                         // Текст этой страницы сам меняет одежду (снял, переоделся, надел) — значит, одежду не фиксируем, а запоминаем новую
                         pageClothesChange = NNB_CLOTHES_CHANGE_RU_RE.test(String(comicOpts?.chunkText || ''));
                         if (pageClothesChange) pageCastReg.forEach(h => { h.outfit = ''; });
@@ -10019,6 +10391,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                             const h = nnbMatchHero(pageCastReg.filter(x => !usedH.has(x)), cap, nnbSlotGender(cap));
                             if (!h) return;
                             usedH.add(h);
+                            if (nnbUpgradeOutfitColors(st, h.name, cap)) {
+                                logImageDiag(`👔 Одежда «${h.name}» уточнена (цвет)`, st.heroOutfits[String(h.name).toLowerCase().replace(/ё/g, 'е')]?.en || '');
+                                try { ctx().saveMetadata(); } catch (e) { /* ignore */ }
+                            }
                             const mem = nnbHeroOutfitMemory(st);
                             const has = Object.keys(mem).some(k => k.toLowerCase().replace(/ё/g, 'е') === String(h.name).toLowerCase().replace(/ё/g, 'е'));
                             if (!has || (pageClothesChange && fIdx === 0)) {
@@ -10864,6 +11240,11 @@ async function showScenePopup(mesId, forceAsk = false) {
         const note = toastr.info(`Рисуем главу манхвы (страница 1 из ${chunks.length})… Все страницы появятся под постом разом по готовности, чтобы текст не скакал!`, '📚 Глава манхвы', { timeOut: 300000, extendedTimeOut: 60000, tapToDismiss: true });
         const completedPages = [];
         let chapterPassport = '';
+        try {
+            const sync0 = nnbSyncOutfitMemoryWithPost(store(), String(cInit.chat?.[tIdxInit]?.mes || ''), nnbAllHeroNames(store()));
+            if (sync0.changed) await cInit.saveMetadata();
+            sync0.log.forEach(l => logImageDiag('👔 Одежда сверена с текстом поста', l));
+        } catch (e) { console.warn('[npc_notebook] outfit sync', e); }
         let chapterOutfitLock = { ...nnbHeroOutfitMemory(store()) };
         let chapterCanonByGender = { boy: '', girl: '', boyCast: [], girlCast: [] };
         let lastSceneSegIdx = -1;
