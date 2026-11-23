@@ -2184,12 +2184,56 @@ function buildActionPromptsInjection() {
 — Формулируй кратко (1–2 фразы), чтобы ${user} могла отправить этот вариант как свой ход. Метка невидима для игрока, не упоминай её в основном тексте ответа.]`;
 }
 
+// ===== 💧 Задумки «экономно»: в каждом ответе рассказчику одна активная задумка одной строкой =====
+// Задумка держится NNB_DRIP_SPAN ответов подряд (чтобы модель успела подвести к ней естественно), потом сменяется следующей
+const NNB_DRIP_SPAN = 3;
+function nnbDripState(st) {
+    if (!st.notesDrip || typeof st.notesDrip !== 'object') st.notesDrip = {};
+    if (st.notesDrip.activeId === undefined) st.notesDrip.activeId = null;
+    if (!Number.isFinite(st.notesDrip.shown)) st.notesDrip.shown = 0;
+    return st.notesDrip;
+}
+function nnbDripPickNote(st, exceptId = null) {
+    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3);
+    if (!pool.length) return null;
+    // реже всего подсказанная, при равенстве — самая старая
+    return pool.slice().sort((a, b) => (Number(a.dripCount) || 0) - (Number(b.dripCount) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))[0];
+}
+function nnbDripInjection(st) {
+    if (st?.direction?.notes !== 'drip' || !(st.notes || []).length) return '';
+    const d = nnbDripState(st);
+    let note = d.activeId != null ? st.notes.find(n => n.id === d.activeId && !n.ff) : null;
+    if (!note) {
+        note = nnbDripPickNote(st);
+        if (!note) return '';
+        d.activeId = note.id;
+        d.shown = 0;
+    }
+    return `[Задумка автора на ближайшие ответы: ${note.text}. Подведи к ней в этом или следующих ответах, когда ложится естественно, не обрывая текущий эпизод; не упоминай блокнот.]`;
+}
+// пришёл ответ рассказчика: задумка была показана ещё раз; после NNB_DRIP_SPAN ответов — следующая
+function nnbDripAfterReply(st) {
+    if (st?.direction?.notes !== 'drip') return;
+    const d = nnbDripState(st);
+    if (d.activeId == null) return;
+    d.shown += 1;
+    if (d.shown < NNB_DRIP_SPAN) return;
+    const note = (st.notes || []).find(n => n.id === d.activeId);
+    if (note) { note.dripCount = (Number(note.dripCount) || 0) + 1; note.dripAt = ctx().chat?.length ?? 0; }
+    const next = nnbDripPickNote(st, d.activeId);
+    d.activeId = next ? next.id : null;
+    d.shown = 0;
+    d.sinceThink = true; // размышление проверит, сбылась ли задумка (DONE)
+}
+
 function updateInjection() {
     try { const stW = store(); if (stW && settings().enabled) nnbAutoRetireStaleOutfit(stW); } catch (e) { /* ignore */ }
     const c = ctx();
     const s = settings();
     const st = store();
     const showNotes = st?.direction?.notes === true && st.notes.length;
+    let dripLine = '';
+    try { dripLine = st ? nnbDripInjection(st) : ''; } catch (e) { dripLine = ''; }
     const showIntrigues = st?.direction?.intrigues && st.intrigues.length;
     const showNpcs = st?.direction?.npcs && (st.npcs.length || st.mainCharCard);
     const showRels = st?.direction?.npcs && (st.relationships || []).length;
@@ -2204,7 +2248,7 @@ ${st.storySummary.trim()}]`
     const hasTime = !!(st && st.direction.time && (st.time?.date || placeLine(st)));
     const hasWardOrGacha = !!(st && (st.direction.wardrobe || st.gacha?.pending || (st.gacha?.choices || []).some(x => x.pinned)));
     const hasWorldOrLiving = !!(st && (st.worldProfile || st.direction.livingWorld || (st.neighborStories || []).length || (st.dreams || []).length));
-    if (!s.enabled || !st || (!showNotes && !showIntrigues && !showNpcs && !showRels && !showArcs && !hasTime && !hasWorldOrLiving && !linesBlock && !hasWardOrGacha && !actionBlock && !summaryBlock)) {
+    if (!s.enabled || !st || (!showNotes && !showIntrigues && !showNpcs && !showRels && !showArcs && !hasTime && !hasWorldOrLiving && !linesBlock && !hasWardOrGacha && !actionBlock && !summaryBlock && !dripLine)) {
         c.setExtensionPrompt(INJECT_KEY, '', POS_IN_CHAT, 0);
         c.setExtensionPrompt(INJECT_STATIC_KEY, '', POS_IN_CHAT, 0);
         c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
@@ -2254,6 +2298,7 @@ ${st.storySummary.trim()}]`
             if (activeNpcsStr) dynamicBlocks.push(NPC_INJECT_HEADER + '\n' + activeNpcsStr);
         }
         if (showNotes) dynamicBlocks.push(fillTemplate(s.injectPrompt, st.notes));
+        if (dripLine) dynamicBlocks.push(dripLine);
 
         c.setExtensionPrompt(
             INJECT_KEY,
@@ -2280,6 +2325,7 @@ ${st.storySummary.trim()}]`
         if (showRels) blocks.push(REL_INJECT_HEADER + '\n' + formatRelationships(st));
         if (showArcs) blocks.push(ARC_INJECT_HEADER + '\n' + formatArcs(st));
         if (showNotes) blocks.push(fillTemplate(s.injectPrompt, st.notes));
+        if (dripLine) blocks.push(dripLine);
         if (showIntrigues) blocks.push(INTRIGUE_INJECT_HEADER + '\n' + formatIntrigues(st.intrigues));
         c.setExtensionPrompt(
             INJECT_KEY,
@@ -3473,10 +3519,15 @@ async function think(manual = false) {
 
     try {
         let tpl = ensureSections(s.thinkPrompt);
-        if (st.direction?.notes !== true) {
+        // Задумки в размышлении: «полностью» — всегда; ручное 🪶 — всегда (это и есть вызов по требованию);
+        // «по капле» — только когда задумок мало (пополнить) или какую-то уже подсказали рассказчику (проверить, сбылась ли — DONE)
+        const dripD = st.direction?.notes === 'drip' ? nnbDripState(st) : null;
+        const notesInThink = st.direction?.notes === true || manual
+            || (dripD && ((st.notes || []).filter(n => !n.ff).length < 3 || dripD.sinceThink));
+        if (!notesInThink) {
             tpl = tpl.replace(/Задумки на будущее[\s\S]*?(?=Ответь ТОЛЬКО командами)/, '');
-        }
-        const raw = await quietGenerate(fillTemplate(tpl, st.direction?.notes === true ? st.notes : [], buildDirection(st), buildIntrigueSection(st), buildNpcSection(st), buildArcSection(st), buildTimeSectionFull(st), [buildWardrobeSection(st), buildMapSection(st)].filter(Boolean).join('\n')));
+        } else if (dripD) dripD.sinceThink = false;
+        const raw = await quietGenerate(fillTemplate(tpl, notesInThink ? st.notes : [], buildDirection(st), buildIntrigueSection(st), buildNpcSection(st), buildArcSection(st), buildTimeSectionFull(st), [buildWardrobeSection(st), buildMapSection(st)].filter(Boolean).join('\n')));
         if (ctx().chatId !== chatIdAtStart) return; // чат сменили, пока модель думала
         st.lastRaw = String(raw ?? '');
         const res = parseAndApply(raw);
@@ -15649,6 +15700,7 @@ async function onMessageReceived() {
 }
 
 function onMessageReceivedThink() {
+    try { const stD = store(); if (stD) nnbDripAfterReply(stD); } catch (e) { /* ignore */ }
     updateInjection();
     renderPanel();
     const s = settings();
@@ -18462,12 +18514,19 @@ function renderPanel(forceFull = false) {
         list.append(sumDet);
     }
 
-    const notesToggle = $(`<label class="checkbox_label" style="margin:4px 0 8px 0; font-size:0.86em;"><input type="checkbox"> 🪶 Вести и подсказывать задумки в чате (выключено по умолчанию для экономии токенов)</label>`);
-    notesToggle.find('input').prop('checked', st.direction?.notes === true).on('change', function () {
-        st.direction.notes = $(this).prop('checked');
+    const notesToggle = $(`<label style="display:block; margin:4px 0 8px 0; font-size:0.86em;">🪶 Задумки в сюжете:
+        <select class="text_pole" style="width:auto; display:inline-block; margin-left:6px;">
+            <option value="off">💤 Выкл — только по кнопке 🪶 и ⏩</option>
+            <option value="drip">💧 Экономно — одна задумка в каждом ответе, смена раз в 3 ответа</option>
+            <option value="full">🪶 Полностью — весь список в каждом ответе</option>
+        </select></label>`);
+    notesToggle.find('select').val(st.direction?.notes === true ? 'full' : st.direction?.notes === 'drip' ? 'drip' : 'off').on('change', function () {
+        const v = $(this).val();
+        st.direction.notes = v === 'full' ? true : v === 'drip' ? 'drip' : false;
+        if (v === 'drip') { const d = nnbDripState(st); d.activeId = null; d.shown = 0; }
         ctx().saveMetadata();
         updateInjection();
-        toastr.info(st.direction.notes ? '🪶 Задумки включены в инъекцию и фон блокнота' : '💤 Задумки выключены (экономия токенов)', 'Блокнот рассказчика');
+        toastr.info(v === 'full' ? '🪶 Весь список задумок идёт в каждый ответ' : v === 'drip' ? '💧 Рассказчик всегда держит в уме одну задумку, смена раз в 3 ответа' : '💤 Задумки выключены (экономия токенов)', 'Блокнот рассказчика');
     });
     list.append(notesToggle);
     list.append($('<div class="nnb-subhead"></div>').text(`🪶 Задумки (${st.notes.length})`));
