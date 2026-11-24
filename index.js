@@ -3058,7 +3058,13 @@ ${writerNote}]
 
 `
         : '';
-    return quietGenerate(writerPrefix + prompt, maxTokens);
+    const res = await quietGenerate(writerPrefix + prompt, maxTokens);
+    if (String(res ?? '').trim() || nnbStopActive() || String(prompt || '').includes(SELF_CONTAINED_PROMPT_MARKER)) return res;
+    // Пусто: Таверна при ошибке API (например 400 «check the request parameters») отдаёт расширению пустую строку.
+    // Задание для картинки самодостаточное (внешность, пост, прошлые кадры уже внутри) — повторяем его одно,
+    // без истории чата и пресета: так же, как работает отдельная модель промптов.
+    logImageDiag('⚠️ Основное подключение вернуло пустой ответ или ошибку — повторяю запрос только с заданием, без истории чата и пресета');
+    return quietGenerate(SELF_CONTAINED_PROMPT_MARKER + writerPrefix + prompt, Math.max(maxTokens, 8192));
 }
 
 // При ошибке лимита (429) ждём и пробуем ещё раз
@@ -10349,6 +10355,8 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 else if (attempt > 1 && !lastWasEmpty) req = `${basePromptReq}\n\n[IMPORTANT: last time your reply contained reasoning. Don't reason or explain — output the finished lines in the required format RIGHT AWAY; PANEL/SCENE lines contain only English comma-separated tags.]`;
                 // пустой ответ — чаще всего размышление модели съело лимит длины: даём больше места
                 const budget = lastWasEmpty ? 8192 : 4096;
+                // после пустого ответа основное подключение уже пробовало и с историей, и без — дальше сразу без истории
+                if (lastWasEmpty && !settings().imgPromptSource) req = SELF_CONTAINED_PROMPT_MARKER + req;
                 raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(req, budget));
                 lastPromptRaw = raw;
                 lastWasEmpty = !String(raw || '').trim();
@@ -10356,7 +10364,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                 if (attempt === 3 || nnbStopActive()) break;
                 if (lastWasEmpty) {
                     lastHadNoPanels = false;
-                    logImageDiag(`🔁 Модель промптов вернула пустой ответ (обычно размышление модели съедает лимит длины) — запрашиваю заново с бо́льшим лимитом (попытка ${attempt + 1}/3)`);
+                    logImageDiag(`🔁 Модель промптов вернула пустой ответ (ошибка API или размышление съело лимит длины; текст ошибки — в консоли Таверны) — запрашиваю заново (попытка ${attempt + 1}/3)`);
                 } else {
                     const hasPanels = (answerLines(raw).filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ)\s*[_#№]?\s*\d/i.test(l.replace(/^[\s>*_#-]+/, ''))).length >= 2);
                     lastHadNoPanels = isComicMode && !hasPanels;
@@ -10476,7 +10484,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     }
                 });
             }
-            if (!desc && lastWasEmpty) throw new Error('модель промптов три раза подряд вернула пустой ответ — подключение отвечает, но текста нет (проверь, не закончился ли лимит у провайдера)');
+            if (!desc && lastWasEmpty) throw new Error('модель промптов три раза подряд вернула пустой ответ — похоже, API отклоняет запрос; точный текст ошибки виден в консоли Таверны');
             if (!desc) throw new Error('модель не описала сцену (в ответе нет строки SCENE) — открой лог диагностики в настройках блокнота');
         }
 
