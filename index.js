@@ -218,7 +218,27 @@ const ACTION_INJECT_KEY = 'npc_notebook_actions';
 // Константы SillyTavern (extension_prompt_types / extension_prompt_roles)
 const POS_IN_CHAT = 1;
 
-const DEFAULT_THINK = `[OOC: Пауза в ролевой. Ты — автор и обновляешь рабочий блокнот по последним событиям чата.
+const DEFAULT_THINK = `[OOC: Roleplay paused. You are the author, updating your working notebook from the latest chat events. Write every command's content in Russian.
+
+{{direction}}
+
+{{time}}
+
+{{npcs}}
+
+{{arcs}}
+
+{{intrigues}}
+
+{{wardrobe}}
+
+Ideas for the future (tie them to plot events/dates; at most 3 new ADD; fulfilled — DONE, no longer relevant — DROP):
+{{notes}}
+Commands: ADD [план|вопрос|идея]: text | DONE #number | DROP #number
+
+Reply ONLY with commands, one per line. If a section needs no change — skip it; if nothing at all — reply: НИЧЕГО.]`;
+
+const NNB_OLD_RU_THINK = `[OOC: Пауза в ролевой. Ты — автор и обновляешь рабочий блокнот по последним событиям чата.
 
 {{direction}}
 
@@ -241,31 +261,33 @@ const DEFAULT_THINK = `[OOC: Пауза в ролевой. Ты — автор �
 const INJECT_FF_KEY = 'npc_notebook_ff';
 const FF_MARKER = '[Перемотка:';
 
-const DEFAULT_INJECT = `[Блокнот автора (задумки на будущее — не упоминай и не форсируй): вплетай идеи постепенно, только на естественном стыке сцен, не перебивая текущий эпизод. «Сообщ. назад» — счётчик постов чата, не сюжетное время.]
+const DEFAULT_INJECT = `[Author's notebook (ideas for the future — never mention them, never force them): weave ideas in gradually, only at a natural seam between scenes, without breaking the current episode. "msgs ago" counts chat posts, not story time.]
+{{notes}}`;
+const NNB_OLD_RU_INJECT = `[Блокнот автора (задумки на будущее — не упоминай и не форсируй): вплетай идеи постепенно, только на естественном стыке сцен, не перебивая текущий эпизод. «Сообщ. назад» — счётчик постов чата, не сюжетное время.]
 {{notes}}`;
 
-const REROLL_PROMPT = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Игроку не понравилась одна из твоих задумок:
+const REROLL_PROMPT = `[OOC: Roleplay paused. You are the author of this story. The player didn't like one of your ideas:
 «{{old}}»
 
-Придумай одну другую задумку взамен — отличающуюся по сути, а не перефразированную. Учитывай, что происходило в чате.
+Come up with one different idea instead — different in substance, not a rephrasing. Take into account what happened in the chat.
 
-Остальные задумки в блокноте (не повторяй их):
+The other ideas in the notebook (don't repeat them):
 {{notes}}
 
 {{direction}}
 
-Ответь ровно одной строкой в формате:
-ADD [тег]: текст задумки]`;
+Reply with exactly one line in the format (text in Russian):
+ADD [tag]: idea text]`;
 
-const REROLL_INTRIGUE_PROMPT = `[OOC: Пауза в ролевой игре. Ты — автор этой истории. Игроку не понравилась одна из твоих тайн или интриг:
+const REROLL_INTRIGUE_PROMPT = `[OOC: Roleplay paused. You are the author of this story. The player didn't like one of your secrets or intrigues:
 «{{old}}»
 
-Придумай другую тайну, загадку, слух или интригу взамен — отличающуюся по сути. Учитывай, что происходило в чате и что уже есть в блокноте.
+Come up with another secret, mystery, rumour or intrigue instead — different in substance. Take into account what happened in the chat and what is already in the notebook.
 
 {{direction}}
 
-Ответь ровно одной строкой в формате:
-INTRIGUE [тайна|загадка|слух|интрига]: в чём правда на самом деле]`;
+Reply with exactly one line in the format (text in Russian):
+INTRIGUE [тайна|загадка|слух|интрига]: what the truth really is]`;
 
 const ARC_STAGES = [
     null,
@@ -276,24 +298,24 @@ const ARC_STAGES = [
 ];
 const ARC_MAX = 4;
 
-const ARC_INJECT_HEADER = '[Развитие персонажей (приоритетнее стартовой карточки; ядро личности сохраняется, изменения — строго по стадии):]';
+const ARC_INJECT_HEADER = '[Character development (takes priority over the starting card; the core personality stays, changes follow the current stage strictly):]';
 
-const NPC_INJECT_HEADER = `[Канон персонажей в текущей сцене: аксессуары, напитки и привычки из карточек — пассивный справочник, не повторяй одни и те же мелочи в каждом посте подряд. Отношения к {{user}} показывай поведением; никаких шкал, очков, цифр и пометок вида «+1 к симпатии» в тексте ответа.]`;
+const NPC_INJECT_HEADER = `[Canon of the characters in the current scene: accessories, drinks and habits from the cards are a passive reference — don't repeat the same small details in every post. Show their attitude to {{user}} through behaviour; no scales, points, numbers or notes like "+1 affection" in the reply text.]`;
 
-const INTRIGUE_INJECT_HEADER = '[Тайны и интриги (секрет автора): раскрывай постепенно через намёки, улики и слухи, не выдавай правду раньше времени.]';
+const INTRIGUE_INJECT_HEADER = '[Secrets and intrigues (the author\'s secret): reveal them gradually through hints, clues and rumours; never give away the truth too early.]';
 
 const GENRE_HINTS = {
-    'Комедия': 'недоразумения, нелепые ситуации, забавные привычки и реакции, неловкие моменты, конфликты с низкими ставками, которые разрешаются смехом',
-    'Повседневность': 'быт, мелкие ритуалы, совместные дела, маленькие открытия друг о друге, уютные события',
-    'Романтика': 'сближение, флирт, неловкая забота, ревность без драмы, моменты близости',
-    'Эротика': 'притяжение, чувственное напряжение между персонажами, интимные моменты и их предвкушение',
-    'Драма': 'серьёзные чувства, внутренние конфликты, трудные решения и их последствия',
-    'Ангст': 'боль, тоска, недосказанность, эмоциональные раны',
-    'Приключения': 'вылазки, новые места, находки, неожиданные встречи',
-    'Экшн': 'стычки, погони, опасность, физические испытания',
-    'Мистика': 'необъяснимое, странные совпадения, сверхъестественное',
-    'Ужасы': 'страх, жуткое, нарастающая угроза',
-    'Детектив': 'загадки, улики, расследование, скрытые мотивы',
+    'Комедия': 'misunderstandings, absurd situations, funny habits and reactions, awkward moments, low-stakes conflicts resolved with laughter',
+    'Повседневность': 'everyday life, small rituals, shared chores, little discoveries about each other, cosy events',
+    'Романтика': 'growing closer, flirting, awkward care, jealousy without drama, moments of intimacy',
+    'Эротика': 'attraction, sensual tension between characters, intimate moments and their anticipation',
+    'Драма': 'serious feelings, inner conflicts, hard decisions and their consequences',
+    'Ангст': 'pain, longing, things left unsaid, emotional wounds',
+    'Приключения': 'outings, new places, finds, unexpected encounters',
+    'Экшн': 'clashes, chases, danger, physical trials',
+    'Мистика': 'the inexplicable, strange coincidences, the supernatural',
+    'Ужасы': 'fear, the eerie, a growing threat',
+    'Детектив': 'mysteries, clues, investigation, hidden motives',
 };
 
   // ===================== Время и место =====================
@@ -560,6 +582,7 @@ const GENRE_HINTS = {
       if (mm) [y, m, d] = [Number(mm[1]), Number(mm[2]), Number(mm[3])];
       if (!mm && (mm = t.match(/(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?/))) {
           d = Number(mm[1]); m = Number(mm[2]);
+          if (m > 12 && d <= 12) [d, m] = [m, d]; // американский порядок 03/31/2025
           if (mm[3]) y = Number(mm[3].length === 2 ? '20' + mm[3] : mm[3]);
       }
       if (!m) {
@@ -571,10 +594,12 @@ const GENRE_HINTS = {
       }
       if (!m || !d || m > 12 || d > 31) return null;
       if (!y) {
-          // год не указан — берём ближайшую такую дату не раньше текущей даты истории
+          // год не указан — берём год, при котором дата БЛИЖЕ ВСЕГО к текущей дате истории
+          // (раньше бралась «не раньше текущей»: DATE 30.03 при истории 31.03.2025 улетала на 30.03.2026 — время скакало на год)
           const ref = refIso || toIso(new Date());
-          y = toDate(ref).getUTCFullYear();
-          if (ymd(y, m, d) < ref) y += 1;
+          const y0 = toDate(ref).getUTCFullYear();
+          const cands = [y0 - 1, y0, y0 + 1].filter(yy => toDate(ymd(yy, m, d)).getUTCMonth() + 1 === m);
+          y = cands.sort((a, b) => Math.abs(daysBetween(ref, ymd(a, m, d))) - Math.abs(daysBetween(ref, ymd(b, m, d))))[0] || y0;
       }
       const iso = ymd(y, m, d);
       return toDate(iso).getUTCMonth() + 1 === m ? iso : null;
@@ -649,39 +674,39 @@ const GENRE_HINTS = {
       const t = st.time;
       if (!st.direction.time || (!t.date && !placeLine(st))) return '';
       const place = placeLine(st);
-      const chronAll = t.date ? chronicleLines(st, 12) : [];
+      const chronAll = t.date && !settings().externalMemory ? chronicleLines(st, 12) : [];
 
       if (mode === 'static') {
           const sl = [];
-          if (place) sl.push(`Место действия: ${place} (еда, деньги, бытовые мелочи и реалии — местные).`);
-          if (t.flavor) sl.push(`Местный колорит: ${t.flavor}`);
+          if (place) sl.push(`Setting: ${place} (food, money, everyday details and realities are local).`);
+          if (t.flavor) sl.push(`Local colour: ${t.flavor}`);
           if (chronAll.length > 4) {
-              sl.push('Ранняя хроника событий:');
+              sl.push('Earlier chronicle:');
               chronAll.slice(0, chronAll.length - 4).forEach(l => sl.push(l));
           }
-          return sl.length ? `[Справка по месту и ранней хронике:\n${sl.join('\n')}]` : '';
+          return sl.length ? `[Reference: place and earlier chronicle:\n${sl.join('\n')}]` : '';
       }
 
-      const lines = ['[Время истории — держись этих дат:'];
+      const lines = ['[Story time — keep to these dates:'];
       if (t.date) {
           const s = season(t.date);
-          lines.push(`Сейчас: ${weekday(t.date)}, ${formatDate(t.date)}. ${s.name[0].toUpperCase() + s.name.slice(1)} (${s.phase}): ${s.hint}.`);
+          lines.push(`Now: ${weekday(t.date)}, ${formatDate(t.date)}. ${s.name[0].toUpperCase() + s.name.slice(1)} (${s.phase}): ${s.hint}.`);
       }
       if (mode === 'all') {
-          if (place) lines.push(`Место: ${place}. Еда, деньги, бытовые мелочи, обращения, праздники — местные; не переноси реалии других стран.`);
-          if (t.flavor) lines.push(`Местный колорит: ${t.flavor}`);
+          if (place) lines.push(`Place: ${place}. Food, money, everyday details, forms of address, holidays are local; don't import realities of other countries.`);
+          if (t.flavor) lines.push(`Local colour: ${t.flavor}`);
       } else if (place) {
-          lines.push(`Место: ${place}.`);
+          lines.push(`Place: ${place}.`);
       }
       if (t.date) {
           const up = upcoming(st, 14);
           if (up.length) {
-              lines.push('Ближайшие даты:');
+              lines.push('Upcoming dates:');
               up.slice(0, 2).forEach(h => lines.push(holidayLine(h, t.date)));
           }
           const chronUse = mode === 'dynamic' ? chronAll.slice(-4) : chronAll;
           if (chronUse.length) {
-              lines.push('Хроника последних событий (держись этих сроков):');
+              lines.push('Chronicle of recent events (keep to these timeframes):');
               chronUse.forEach(l => lines.push(l));
           }
       }
@@ -692,30 +717,91 @@ const GENRE_HINTS = {
   function buildTimeSection(st) {
       if (!st?.direction?.time) return '';
       const t = st.time;
-      const lines = ['Время и место. Календарь ведёт код — ты только сообщаешь изменения.'];
+      const lines = ['Time and place. The code keeps the calendar — you only report changes.'];
       if (t.date) {
-          lines.push(`Последняя известная дата истории: ${weekday(t.date)}, ${formatDate(t.date)}.`);
+          lines.push(`Last known story date: ${weekday(t.date)}, ${formatDate(t.date)}.`);
       } else {
-          lines.push('Дата истории ещё не задана. Определи её по чату (упоминания месяца, погоды, праздников, сезона). Если точных подсказок нет — выбери правдоподобную дату, которая подходит к происходящему, и задай её командой DATE.');
+          lines.push('The story date is not set yet. Work it out from the chat (mentions of the month, weather, holidays, season). If there are no precise hints, pick a plausible date that fits what is happening and set it with the DATE command.');
       }
       const place = placeLine(st);
-      lines.push(place ? `Место: ${place}.` : 'Место ещё не задано. Определи страну и город по чату и задай командой PLACE.');
+      lines.push(place ? `Place: ${place}.` : 'The place is not set yet. Work out the country and city from the chat and set them with PLACE.');
       if (t.date) {
           const up = upcoming(st, 45);
           if (up.length) {
-              lines.push('Ближайшие праздники и события:');
+              lines.push('Upcoming holidays and events:');
               up.slice(0, 6).forEach(h => lines.push(holidayLine(h, t.date)));
           }
       }
       lines.push('');
-      lines.push('Команды для времени и места (ВАЖНО: сначала запиши EVENT для текущего дня, и только если после этих событий герои легли спать и наступил новый день — ниже напиши TIME +N дней!):');
-      lines.push('EVENT: краткая хроника ключевых сцен, разговоров, встреч и событий, произошедших в чате с прошлой проверки (1–2 предложения в одну строку — пиши ОБЯЗАТЕЛЬНО при каждой проверке, чтобы в летописи текущего дня не пропадали события!). Дату плагин поставит сам; если событие было в другой день — EVENT ДД.ММ: текст.');
-      lines.push('TIME +N дней / недель / месяцев — сколько сюжетного времени прошло в чате с последней известной даты (оцени по событиям: ночёвки, «на следующий день», таймскипы). Если прошло меньше суток — не пиши ничего.');
-      lines.push('DATE ДД.ММ.ГГГГ — если в чате прямо названа дата или нужно задать её впервые.');
-      lines.push('PLACE Страна: Город — если место задано впервые или персонажи переехали.');
+      if (nnbHeaderMode(st)) {
+          lines.push('The date and time are set by the post headers ([Date: …]) — do NOT write TIME or DATE commands.');
+          lines.push('EVENT: a short chronicle of the key scenes since the last check (1–2 sentences on one line, in Russian). If an event happened on another day — EVENT DD.MM: text.');
+          lines.push('PLACE Country: City — only if the characters really moved to another city.');
+          const recentH = chronicleLines(st, 6);
+          if (recentH.length) { lines.push('Latest in the chronicle:'); recentH.forEach(l => lines.push(l)); }
+          return lines.join('\n');
+      }
+      lines.push('Time and place commands (IMPORTANT: first write EVENT for the current day, and only if after those events the characters went to sleep and a new day began — write TIME +N days below it!):');
+      lines.push('EVENT: a short chronicle of the key scenes, conversations, meetings and events in the chat since the last check (1–2 sentences on one line, in Russian — write it EVERY check so the current day\'s chronicle loses nothing). The plugin sets the date itself; if the event was on another day — EVENT DD.MM: text.');
+      lines.push(`TIME +N дней / недель / месяцев — how much story time passed ONLY in the last ${Math.max(1, (ctx().chat?.length ?? 0) - Number(st.lastThinkAt || 0))} messages (earlier nights and time skips are already counted in the date — don't count them again). Judge by events: nights, "the next day", time skips. If less than a day passed — write nothing.`);
+      lines.push('DATE DD.MM.YYYY — if the chat names the date directly or it has to be set for the first time.');
+      lines.push('PLACE Country: City — if the place is set for the first time or the characters moved.');
       const recent = chronicleLines(st, 6);
-      if (recent.length) { lines.push('Последнее в хронике:'); recent.forEach(l => lines.push(l)); }
+      if (recent.length) { lines.push('Latest in the chronicle:'); recent.forEach(l => lines.push(l)); }
       return lines.join('\n');
+  }
+
+  // ===== Шапка поста: [Date: 31/03/2025, Monday | Time: 13:30] [Location: …] — если рассказчик её пишет, время и место ведёт она =====
+  function nnbParseStoryHeader(text) {
+      const raw = String(text || '').slice(0, 600);
+      const out = {};
+      const dm = raw.match(/\[\s*(?:date|дата)\s*[:：]\s*([^\]|\n]+)/i);
+      if (dm) out.dateText = dm[1].trim();
+      const tm = raw.match(/(?:\||\[)\s*(?:time|время)\s*[:：]\s*([0-9]{1,2}[:.][0-9]{2}|[^\]|\n]{1,20})/i);
+      if (tm) out.clock = tm[1].trim();
+      const lm = raw.match(/\[\s*(?:location|локация|место)\s*[:：]\s*([^\]\n]+?)(?:\.\s*(?:characters|персонажи)\s*[:：][^\]]*)?\]/i);
+      if (lm) out.location = lm[1].trim().replace(/[.,;]\s*$/, '');
+      return out;
+  }
+  function nnbHeaderMode(st) {
+      const hs = st?.time?.headerSeen;
+      const len = ctx().chat?.length ?? 0;
+      return !!(hs && len - hs.idx <= 12);
+  }
+  // Берём последнюю шапку из последних сообщений; применяем, только если появилась НОВАЯ шапка (ручная правка даты в блокноте живёт до следующей)
+  function nnbSyncFromHeaders(st) {
+      if (!st?.time) return false;
+      const chat = ctx().chat || [];
+      for (let i = chat.length - 1; i >= Math.max(0, chat.length - 4); i--) {
+          const m = chat[i];
+          if (!m || m.is_system || typeof m.mes !== 'string') continue;
+          const h = nnbParseStoryHeader(m.mes);
+          if (!h.dateText && !h.location) continue;
+          const iso = h.dateText ? parseDateText(h.dateText, st.time.date || undefined) : null;
+          const key = `${i}|${iso || ''}|${h.location || ''}|${h.clock || ''}`;
+          if (st.time.headerSeen?.key === key) return false;
+          st.time.headerSeen = { idx: i, key, date: iso || '', location: h.location || '', clock: h.clock || '' };
+          let changed = false;
+          if (iso && st.direction?.time && iso !== st.time.date) {
+              const before = st.time.date;
+              if (before && iso < before) { try { handleDateRollback(st, before, iso); } catch (e) { /* ignore */ } }
+              st.time.date = iso;
+              st.time.dayStartedAtMsg = i;
+              changed = true;
+          }
+          if (h.clock) st.time.clock = h.clock;
+          if (h.location && st.map && Array.isArray(st.map.places)) {
+              const low = h.location.toLowerCase();
+              // «в лаборатории Лайоса» ↔ «Лаборатория Лайоса»: сравниваем основы слов, а не точную строку
+              const stems = x => String(x || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/i).filter(w => w.length >= 4).map(w => w.slice(0, Math.max(4, Math.min(6, w.length - 2))));
+              const lowS = low.replace(/ё/g, 'е');
+              const pl = st.map.places.find(p => { const ts = stems(p.title); return ts.length && ts.every(t => lowS.includes(t)); });
+              const next = pl ? pl.id : null;
+              if (st.map.current !== next) { st.map.current = next; st.map.enteredAt = i; changed = true; }
+          }
+          return changed;
+      }
+      return false;
   }
 
   // Обработка команд TIME / DATE / PLACE / LOCAL. Возвращает true, если строка распознана.
@@ -724,7 +810,15 @@ const GENRE_HINTS = {
       let m;
       if ((m = line.match(/^TIME\s*[:：]?\s*\+?\s*(.+)$/i))) {
           if (!st.direction.time || !t.date) return true;
+          if (nnbHeaderMode(st)) return true; // дату ведут шапки постов
+          // дату уже сдвинули после прошлого размышления (метка дня, поездка, ручная правка) — не считаем тот же переход второй раз
+          if (Number(t.dayStartedAtMsg) > Number(st.lastThinkAt || 0)) return true;
           const dur = parseDuration(m[1]);
+          // большой прыжок (больше 3 дней) — только если в новых сообщениях правда есть таймскип
+          if (dur && ((dur.days || 0) > 3 || (dur.months || 0) > 0)) {
+              const fresh = (ctx().chat || []).slice(Math.max(0, Number(st.lastThinkAt || 0) - 2)).map(x => x?.mes || '').join('\n');
+              if (!/недел|месяц|спустя|через\s+\d|прошл[оа]\s+\d|прошло|later|weeks?|months?|days? later|time ?skip|таймскип/i.test(fresh)) return true;
+          }
           if (dur && (dur.days > 0 || dur.months > 0)) {
               const before = t.date;
               if (res && !res._dateBeforeMove) res._dateBeforeMove = before;
@@ -736,6 +830,7 @@ const GENRE_HINTS = {
       }
       if ((m = line.match(/^DATE\s*[:：]?\s*(.+)$/i))) {
           if (!st.direction.time) return true;
+          if (t.date && nnbHeaderMode(st)) return true;
           const iso = parseDateText(m[1], t.date);
           if (iso) {
               if (t.date && iso !== t.date) {
@@ -750,6 +845,12 @@ const GENRE_HINTS = {
       }
       if ((m = line.match(/^PLACE\s*[:：]?\s*(.+)$/i))) {
           if (!st.direction.time) return true;
+          // место уже задано — меняем, только если новый город/страна правда звучит в недавних сообщениях
+          if (t.city || t.country || t.countryName) {
+              const recentTxt = (ctx().chat || []).slice(-12).map(x => x?.mes || '').join('\n').toLowerCase();
+              const words = m[1].toLowerCase().split(/[^a-zа-яё-]+/i).filter(w => w.length >= 4);
+              if (!words.some(w => recentTxt.includes(w.slice(0, Math.max(4, w.length - 2))))) return true;
+          }
           let countryText = m[1], city = '';
           const sep = m[1].match(/^\[?([^\]:：]+?)\]?\s*[:：—–]\s*(.+)$/);
           if (sep) { countryText = sep[1]; city = sep[2]; }
@@ -797,10 +898,10 @@ const GENRE_HINTS = {
 
   // Колорит — отдельным коротким запросом, чтобы модель его не пропускала
   function flavorPrompt(st) {
-      return '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа и не продолжаешь сцену — это короткая техническая справка для автора. ' +
-          'Напиши 2–3 предложения о местном колорите для ролевой игры, действие которой происходит здесь: ' + placeLine(st) + '. ' +
-          'Перечисли конкретно: типичная еда и напитки, валюта и привычки с деньгами (например, чаевые), транспорт, климат, бытовые мелочи и манера общения местных. ' +
-          'Это справка для автора, чтобы не путать реалии разных стран. Не упоминай персонажей и события истории — только само место. Пиши по-русски, без вступления и без списков — сразу текст.]';
+      return '[OOC: Roleplay paused. You are NOT writing a character reply and not continuing the scene — this is a short technical reference for the author. ' +
+          'Write 2–3 sentences about the local colour for a roleplay set here: ' + placeLine(st) + '. ' +
+          'List concretely: typical food and drinks, the currency and money habits (e.g. tipping), transport, climate, everyday details and the way locals talk. ' +
+          'This is a reference for the author so as not to mix up the realities of different countries. Don\'t mention the characters or events of the story — only the place itself. Write in Russian, no intro and no lists — straight to the text.]';
   }
   function cleanFlavor(raw) {
       return String(raw || '').replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u2800\u3000\u3164\uFEFF]/g, ' ')
@@ -931,13 +1032,13 @@ const GENRE_HINTS = {
   function activationPrompt(hol, st, names, direction) {
     var mood = moodOf(hol);
     return [
-      '[OOC: Пауза в ролевой игре. Ты — помощник автора. Скоро праздник: ' + hol.name + ' (' + formatDate(hol.start, false) + ')' + (placeLine(st) ? ', место: ' + placeLine(st) : '') + '.',
+      '[OOC: Roleplay paused. You are the author\'s assistant. A holiday is coming: ' + hol.name + ' (' + formatDate(hol.start, false) + ')' + (placeLine(st) ? ', place: ' + placeLine(st) : '') + '.',
       direction ? direction + '\n' : '',
-      'Классические традиции уже выбраны: ' + hol.tasks.map(function (x) { return '«' + x.text + '»'; }).join(', ') + '.',
-      'Придумай по контексту этой ролевой ещё две праздничные задачи для ' + names.user + ' — связанные с праздником И с персонажами, отношениями, происходящим в истории. Лёгкие, выполнимые за пару сцен, строго в духе направления истории.',
-      'STORY: открытая сюжетная задача (игрок её видит)',
-      'SECRET: скрытая задача-сюрприз (игрок её не видит, а ты будешь ненавязчиво создавать для неё поводы). Её настроение — ' + mood.name + ': ' + mood.rule + '. ' + SECRET_RULES,
-      'Ответь ровно двумя строками в этом формате, без пояснений.]'
+      'Classic traditions already chosen: ' + hol.tasks.map(function (x) { return '«' + x.text + '»'; }).join(', ') + '.',
+      'Based on the context of this roleplay, come up with two more holiday tasks for ' + names.user + ' — tied to the holiday AND to the characters, relationships and what is happening in the story. Light, doable within a couple of scenes, strictly in the spirit of the story\'s direction. Write them in Russian.',
+      'STORY: an open plot task (the player sees it)',
+      'SECRET: a hidden surprise task (the player doesn\'t see it; you will unobtrusively create occasions for it). Its mood — ' + mood.name + ': ' + mood.rule + '. ' + SECRET_RULES,
+      'Reply with exactly two lines in this format, no explanations.]'
     ].filter(Boolean).join('\n');
   }
 
@@ -960,20 +1061,20 @@ const GENRE_HINTS = {
     var what;
     if (x.kind === 'secret') {
       var mood = moodOf(hol);
-      what = 'Придумай новую скрытую задачу-сюрприз. Настроение — ' + mood.name + ': ' + mood.rule + '. ' + SECRET_RULES;
+      what = 'Come up with a new hidden surprise task. Mood — ' + mood.name + ': ' + mood.rule + '. ' + SECRET_RULES;
     } else if (x.kind === 'classic') {
-      what = 'Предложи другую классическую традицию этого праздника' + (placeLine(st) ? ' для места: ' + placeLine(st) : '') + ', которая подходит к направлению истории.';
+      what = 'Suggest another classic tradition of this holiday' + (placeLine(st) ? ' for the place: ' + placeLine(st) : '') + ', that fits the direction of the story.';
     } else {
-      what = 'Придумай другую открытую праздничную задачу, связанную с праздником и с персонажами, отношениями, происходящим в истории. Лёгкую, выполнимую за пару сцен.';
+      what = 'Come up with another open holiday task tied to the holiday and to the characters, relationships and what is happening in the story. Light, doable within a couple of scenes.';
     }
     return [
-      '[OOC: Пауза в ролевой игре. Ты — помощник автора. Праздник: ' + hol.name + '.',
+      '[OOC: Roleplay paused. You are the author\'s assistant. Holiday: ' + hol.name + '.',
       direction ? direction + '\n' : '',
-      x.kind === 'secret' ? 'Игроку нужна другая секретная задача.' : 'Игроку не подошла задача «' + x.text + '».',
+      x.kind === 'secret' ? 'The player needs another secret task.' : 'The player didn\'t like the task «' + x.text + '».',
       what,
-      others ? 'Не повторяй остальные задачи: ' + others + '.' : '',
-      'Ответь ровно одной строкой:',
-      'TASK: текст задачи для ' + names.user + ']'
+      others ? 'Don\'t repeat the other tasks: ' + others + '.' : '',
+      'Reply with exactly one line (in Russian):',
+      'TASK: task text for ' + names.user + ']'
     ].filter(Boolean).join('\n');
   }
 
@@ -1002,19 +1103,19 @@ const GENRE_HINTS = {
     var hol = st.holiday;
     var today = st.time.date;
     if (hol && !hol.finished && today) {
-      var lines = ['[Праздничное событие: ' + hol.emoji + ' ' + hol.name + ' — ' + whenText(hol, today) + '.'];
-      if (hol.vibe) lines.push('Атмосфера вокруг: ' + hol.vibe + '.');
+      var lines = ['[Holiday event: ' + hol.emoji + ' ' + hol.name + ' — ' + whenText(hol, today) + '.'];
+      if (hol.vibe) lines.push('Atmosphere around: ' + hol.vibe + '.');
       var open = hol.tasks.map(function (x, i) { return { x: x, n: i + 1 }; }).filter(function (o) { return !o.x.hidden; });
-      lines.push('Праздничные традиции, которые игрок может выполнить (персонажи могут предлагать, но не навязывай):');
-      open.forEach(function (o) { lines.push(o.n + '. ' + o.x.text + (o.x.done ? ' — уже сделано' : '')); });
+      lines.push('Holiday traditions the player can do (characters may suggest them, but don\'t push):');
+      open.forEach(function (o) { lines.push(o.n + '. ' + o.x.text + (o.x.done ? ' — already done' : '')); });
       var sec = hol.tasks.map(function (x, i) { return { x: x, n: i + 1 }; }).filter(function (o) { return o.x.hidden && !o.x.done; });
-      if (sec.length) lines.push('Секретная задача (' + moodOf(hol).name + '; игрок о ней не знает; создавай для неё ненавязчивые поводы, не раскрывай прямо; это ситуация, а не сценарий — не диктуй персонажам реплики и чувства): ' + sec.map(function (o) { return o.n + '. ' + o.x.text; }).join('; '));
-      lines.push('Служебные метки: если в твоём ответе одна из задач по-настоящему выполнена — допиши в самом конце ответа <!--✓номер-->. Если в ответе наступил следующий день — допиши <!--день+1--> (или +N, если прошло несколько дней). Метки невидимы для игрока; не упоминай их в тексте.]');
+      if (sec.length) lines.push('Secret task (' + moodOf(hol).name + '; the player doesn\'t know about it; create unobtrusive occasions for it, never reveal it directly; it is a situation, not a script — don\'t dictate the characters\' lines and feelings): ' + sec.map(function (o) { return o.n + '. ' + o.x.text; }).join('; '));
+      lines.push('Service tags: if one of the tasks is truly completed in your reply, add <!--✓number--> at the very end of the reply. If the next day begins in the reply, add <!--день+1--> (or +N if several days passed). The tags are invisible to the player; never mention them in the text.]');
       out.push(lines.join('\n'));
     }
     var traces = st.traces.filter(function (x) { return today && today <= x.until; });
-    if (traces.length) out.push('[Следы недавних праздников — они ещё заметны в сцене: ' + traces.map(function (x) { return x.text; }).join(' ') + ']');
-    if (st.memories.length) out.push('[Воспоминания о прошлых праздниках (персонажи могут на них ссылаться): ' + st.memories.slice(-5).map(function (m) { return m.text; }).join(' ') + ']');
+    if (traces.length) out.push('[Traces of recent holidays — still noticeable in the scene: ' + traces.map(function (x) { return x.text; }).join(' ') + ']');
+    if (st.memories.length) out.push('[Memories of past holidays (characters may refer to them): ' + st.memories.slice(-5).map(function (m) { return m.text; }).join(' ') + ']');
     return out.join('\n\n');
   }
 
@@ -1027,9 +1128,9 @@ const GENRE_HINTS = {
     ensureHolidayState(st);
     var hol = st.holiday;
     if (!hol || hol.finished) return '';
-    var lines = ['Праздник «' + hol.name + '», задачи:'];
-    hol.tasks.forEach(function (x, i) { lines.push((i + 1) + '. ' + x.text + (x.hidden ? ' (секретная)' : '') + (x.done ? ' — выполнено' : '')); });
-    lines.push('TASK номер — если задача уже выполнена в чате, но выше не отмечена.');
+    var lines = ['Holiday «' + hol.name + '», tasks:'];
+    hol.tasks.forEach(function (x, i) { lines.push((i + 1) + '. ' + x.text + (x.hidden ? ' (secret)' : '') + (x.done ? ' — done' : '')); });
+    lines.push('TASK number — if a task has already been completed in the chat but isn\'t marked above.');
     return lines.join('\n');
   }
 
@@ -1051,7 +1152,7 @@ const GENRE_HINTS = {
     while ((m = TAG_RE.exec(String(text || '')))) {
       found = true;
       if (m[2]) markTask(st, m[2], res);
-      else if (m[4] && st.time.date) {
+      else if (m[4] && st.time.date && !nnbHeaderMode(st)) {
         var n = Math.min(60, Number(m[4]) || 1);
         st.time.date = addDays(st.time.date, n);
         res.timeMoved = (res.timeMoved || 0) + n;
@@ -1077,13 +1178,13 @@ const GENRE_HINTS = {
   function finalePrompt(hol, st, names) {
     var t = tierOf(hol);
     return [
-      '[OOC: Пауза в ролевой игре. Ты — помощник автора. Праздник «' + hol.name + '» закончился. Перечитай, как он прошёл в чате (если он прошёл за кадром из-за таймскипа — оцени, как он мог пройти).',
-      'Задачи праздника: ' + hol.tasks.map(function (x) { return '«' + x.text + '»' + (x.hidden ? ' (секретная)' : '') + ' — ' + (x.done ? 'выполнено' : 'нет'); }).join('; ') + '.',
-      'Итог: выполнено ' + t.done + ' из ' + t.total + ' открытых традиций' + (t.secret ? ', и секретная задача тоже' : '') + '. Уровень медали: ' + TIER_NAMES[t.tier] + '.',
-      'Ответь ровно тремя строками:',
-      'MEDAL: эмодзи | смешное название | одна строка с юмором о том, как ' + names.user + ' на самом деле провёл(а) этот праздник' + (t.tier === 'anti' ? ' (это антимедаль за то, что праздник прошёл мимо)' : ''),
-      'OUTCOME: 1–2 предложения о том, как это отразилось на отношениях: кто доволен, кто разочарован. ' + (t.tier === 'anti' || t.tier === 'bronze' ? 'Добавь лёгкие последствия в духе истории.' : 'Отметь, чем праздник запомнится.'),
-      'TRACE: что осталось от праздника в ближайшие дни — предмет, фото, остатки еды, следы веселья.]'
+      '[OOC: Roleplay paused. You are the author\'s assistant. The holiday «' + hol.name + '» is over. Reread how it went in the chat (if it passed off-screen because of a time skip, estimate how it might have gone). Write in Russian.',
+      'Holiday tasks: ' + hol.tasks.map(function (x) { return '«' + x.text + '»' + (x.hidden ? ' (secret)' : '') + ' — ' + (x.done ? 'done' : 'no'); }).join('; ') + '.',
+      'Result: completed ' + t.done + ' of ' + t.total + ' open traditions' + (t.secret ? ', and the secret task too' : '') + '. Medal level: ' + TIER_NAMES[t.tier] + '.',
+      'Reply with exactly three lines:',
+      'MEDAL: emoji | a funny title | one humorous line about how ' + names.user + ' really spent this holiday' + (t.tier === 'anti' ? ' (this is an anti-medal for letting the holiday slip by)' : ''),
+      'OUTCOME: 1–2 sentences on how it affected relationships: who is pleased, who is disappointed. ' + (t.tier === 'anti' || t.tier === 'bronze' ? 'Add light consequences in the spirit of the story.' : 'Note what the holiday will be remembered for.'),
+      'TRACE: what is left of the holiday in the next few days — an object, a photo, leftover food, traces of fun.]'
     ].join('\n').replace(/\{\{user\}\}/gi, names.user);
   }
 
@@ -1211,15 +1312,15 @@ const GENRE_HINTS = {
   }
   function bdaySection(st, userName, charNames, npcNames) {
     var known = st.time.custom.filter(function (c) { return c.bday; }).map(function (c) { var md = c.md.split('-').map(Number); return c.who + ' — ' + md[1] + ' ' + MONTHS_GEN[md[0] - 1]; });
-    var lines = ['Дни рождения' + (known.length ? ' (уже известны: ' + known.join(', ') + ')' : '') + '.'];
+    var lines = ['Birthdays' + (known.length ? ' (already known: ' + known.join(', ') + ')' : '') + '.'];
     var missing = [userName].concat(charNames || []).filter(function (n) { return n && !hasBday(st, n); });
-    if (missing.length) lines.push('Ещё не заданы для: ' + missing.join(', ') + '. Найди дату в карточке персонажа, описании персоны или в чате; если её нигде нет — придумай правдоподобную, подходящую персонажу.');
+    if (missing.length) lines.push('Not set yet for: ' + missing.join(', ') + '. Find the date in the character card, the persona description or the chat; if it is nowhere, invent a plausible one that suits the character.');
     var eligibleNpcs = (npcNames || []).filter(function (n) { return n && !hasBday(st, n) && !isHostileOrEx(n, st); }).slice(0, 8);
     if (eligibleNpcs.length) {
-      lines.push('У близких и значимых NPC тоже бывают дни рождения (только друзья, семья, возлюбленные, наставники, добрые коллеги или шеф). Ещё нет дат у: ' + eligibleNpcs.join(', ') + '. Добавь BDAY для одного-двух самых близких из них; если даты в истории нет — придумай. Если понятно, где и как этот персонаж будет праздновать, допиши после даты коротко, например «— отмечает в офисе».');
+      lines.push('Close and significant NPCs have birthdays too (only friends, family, lovers, mentors, kind colleagues or the boss). No dates yet for: ' + eligibleNpcs.join(', ') + '. Add BDAY for one or two of the closest of them; if the story has no date, invent one. If it is clear where and how this character will celebrate, add it briefly after the date, e.g. «— отмечает в офисе».');
     }
-    lines.push('СТРОГО ЗАПРЕЩЕНО добавлять дни рождения для бывших партнёров (ex), соперников, врагов, антагонистов или токсичных персонажей — такие даты не отмечаются и не являются праздниками.');
-    lines.push('BDAY Имя: ДД.ММ — день рождения' + (missing.length || eligibleNpcs.length ? ' (только для близких персонажей из перечисленных выше; не больше двух NPC за раз)' : ' близкого и важного для сюжета NPC') + '.');
+    lines.push('It is STRICTLY FORBIDDEN to add birthdays for exes, rivals, enemies, antagonists or toxic characters — such dates are not celebrated and are not holidays.');
+    lines.push('BDAY Name: DD.MM — birthday' + (missing.length || eligibleNpcs.length ? ' (only for the close characters listed above; no more than two NPCs at a time)' : ' a close NPC important to the plot') + '.');
     return lines.join('\n');
   }
   // Команды TASK и BDAY. Возвращает true, если строка распознана.
@@ -1298,6 +1399,10 @@ const defaults = {
     comicStyleId: 'comicbright',
     comicLinesMode: 'auto',
     comicFramesPerPage: 3,
+    comicCaptionsRu: false,
+    autoThink: true,
+    externalMemory: false,
+    autoAppearance: true,
     customComicStyles: [],
     imageRef: true,
     showToasts: true,
@@ -1311,22 +1416,23 @@ const defaults = {
     injectPrompt: DEFAULT_INJECT,
 };
 
-const DEFAULT_NAI_WRITER_PROMPT = `ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — составить чистый визуальный промпт из коротких тегов Danbooru для NovelAI V5 без рассуждений и комментариев.
-— Если запрошена обычная сцена (1 кадр): выдай ТОЛЬКО строки CAST, SCENE и (при 2+ людях в кадре) CHAR1, CHAR2.
-— Если запрошен КОМИКС (PANEL1, PANEL2, PANEL3): выдай ТОЛЬКО строки CAST, PANEL1, PANEL2, PANEL3 и QUOTE1, QUOTE2, QUOTE3 (БЕЗ строки SCENE!).
+const DEFAULT_NAI_WRITER_PROMPT = `YOUR ONLY TASK is to compose a clean visual prompt of short Danbooru tags for NovelAI V5, with no reasoning and no comments.
+— For an ordinary scene (1 frame): output ONLY the lines CAST, SCENE and (with 2+ people in the frame) CHAR1, CHAR2.
+— For a COMIC (PANEL1, PANEL2, PANEL3): output ONLY the lines CAST, PANEL1, PANEL2, PANEL3 and QUOTE1, QUOTE2, QUOTE3 (NO SCENE line!).
 
-ГЛАВНЫЕ ПРАВИЛА ДЛЯ СЦЕН И КОМИКСОВ В NOVELAI V5:
-1. ПРАВИЛО РАСКАДРОВКИ КОМИКСА (PANEL1, PANEL2, PANEL3) — РАЗНЫЕ МОМЕНТЫ И НЕ БОЛЕЕ 1–2 ГЕРОЕВ В КАДРЕ:
-   — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать в один кадр комикса толпу из 4–7 человек (4boys, 2girls, six people)! В одном фрейме комикса NovelAI может чисто нарисовать ТОЛЬКО 1 или 2 персонажей (максимум 3 на общем плане), которые непосредственно говорят реплику (QUOTE) или действуют ИМЕННО В ЭТОТ МОМЕНТ!
-   — Привязывай каждый кадр к своей реплике и своему микро-эпизоду поста:
-     • PANEL1 (Момент 1 под QUOTE1, средний план medium shot / cowboy shot): 1–2 персонажа из начала поста (кто произносит QUOTE1 и кому). Если их двое — в конце строки обязательно добавь: || CHAR1: пол, внешность, одежда и поза 1-го || CHAR2: пол, внешность, одежда и поза 2-го.
-     • PANEL2 (Момент 2 под QUOTE2, другой ракурс dynamic angle / medium close-up): ДРУГИЕ 1–2 персонажа (или другая поза и действие из середины поста, кто произносит QUOTE2 и кто реагирует). НЕ повторяй описание и позы из PANEL1! Добавь в конце || CHAR1: ... || CHAR2: ... (если в кадре двое).
-     • PANEL3 (Момент 3 под QUOTE3, крупный эмоциональный план close-up / portrait): СОЛЬНЫЙ крупный план (1boy, solo, close-up ИЛИ 1girl, solo, close-up) того персонажа, который произносит QUOTE3 или ярко реагирует в финале! В PANEL3 ЗАПРЕЩЕНО писать wide shot, full body или 2boys/4boys!
+MAIN RULES FOR SCENES AND COMICS IN NOVELAI V5:
+1. COMIC STORYBOARD RULE (PANEL1, PANEL2, PANEL3) — DIFFERENT MOMENTS AND NO MORE THAN 1–2 CHARACTERS PER FRAME:
+   — It is STRICTLY FORBIDDEN to cram a crowd of 4–7 people into one comic frame (4boys, 2girls, six people)! In one comic frame NovelAI can cleanly draw ONLY 1 or 2 characters (3 at most in a wide shot) who speak the line (QUOTE) or act AT THAT VERY MOMENT!
+   — Tie each frame to its own line and its own micro-episode of the post:
+     • PANEL1 (moment 1 for QUOTE1, medium shot / cowboy shot): 1–2 characters from the beginning of the post (who says QUOTE1 and to whom). If there are two, be sure to add at the end of the line: || CHAR1: sex, looks, clothes and pose of the 1st || CHAR2: sex, looks, clothes and pose of the 2nd.
+     • PANEL2 (moment 2 for QUOTE2, another angle, dynamic angle / medium close-up): OTHER 1–2 characters (or another pose and action from the middle of the post, who says QUOTE2 and who reacts). Do NOT repeat the description and poses of PANEL1! Add || CHAR1: ... || CHAR2: ... at the end (if two are in the frame).
+     • PANEL3 (moment 3 for QUOTE3, an emotional close-up / portrait): a SOLO close-up (1boy, solo, close-up OR 1girl, solo, close-up) of the character who says QUOTE3 or reacts vividly at the end! In PANEL3 it is FORBIDDEN to write wide shot, full body or 2boys/4boys!
+   — QUOTE lines are copied verbatim in the original language of the post.
 
-2. КАЛИБРОВКА ПРОПОРЦИЙ И ЗАПРЕТ БУКВАЛЬНЫХ МЕТАФОР:
-   — Если в кадре мужчина и женщина (1boy, 1girl), фиксируй взрослые пропорции: 1.2::tall lean adult man, adult male proportions, man slightly taller than woman, wider male shoulders::. Внутри фраз называй мужчину adult man / male (слово boy используй только в счётчике 1boy/2boys).
-   — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО переводить русские метафоры дословно: НЕ пиши "lion mane" про пышную шевелюру человека (иначе NovelAI нарисует голову льва-фурри! Пиши: thick messy greying hair, voluminous wild hair); НЕ пиши "greenish-pale" или "green face" про тошноту/бледность (иначе кожа станет зелёной как у зомби! Пиши: pale skin, unwell, exhausted, sweatdrop).
-   — Не используй частицу "no ..." в позитиве и не пиши общие слова стиля (anime style, masterpiece) в начале.`;
+2. PROPORTION CALIBRATION AND NO LITERAL METAPHORS:
+   — If the frame has a man and a woman (1boy, 1girl), fix adult proportions: 1.2::tall lean adult man, adult male proportions, man slightly taller than woman, wider male shoulders::. Inside phrases call the man adult man / male (use the word boy only in the counter 1boy/2boys).
+   — It is STRICTLY FORBIDDEN to translate Russian metaphors literally: do NOT write "lion mane" for a person's bushy hair (NovelAI will draw a furry lion head! Write: thick messy greying hair, voluminous wild hair); do NOT write "greenish-pale" or "green face" for nausea/pallor (the skin turns zombie-green! Write: pale skin, unwell, exhausted, sweatdrop).
+   — Don't use "no ..." in the positive prompt and don't put generic style words (anime style, masterpiece) at the start.`;
 
 const BUILTIN_NAI_WRITER_PRESETS = [
     {
@@ -1387,6 +1493,13 @@ function settings() {
             s.injectPrompt = DEFAULT_INJECT;
         }
         s.promptVersion = 5;
+        ctx().saveSettingsDebounced();
+    }
+    // 2.3.0: стандартные промпты переведены на английский — заменяем, только если у пользователя стоял старый стандартный русский
+    if ((s.promptVersion || 0) < 7) {
+        if (s.thinkPrompt === NNB_OLD_RU_THINK) s.thinkPrompt = DEFAULT_THINK;
+        if (s.injectPrompt === NNB_OLD_RU_INJECT) s.injectPrompt = DEFAULT_INJECT;
+        s.promptVersion = 7;
         ctx().saveSettingsDebounced();
     }
     if ((s.promptVersion || 0) < 6) {
@@ -1457,6 +1570,9 @@ function store() {
     });
     if (st.direction.autoBoxItems === undefined) st.direction.autoBoxItems = false;
     if (st.direction.notes === undefined) st.direction.notes = false;
+    if (st.direction.rels === undefined) st.direction.rels = true;
+    if (st.direction.worldInject === undefined) st.direction.worldInject = true;
+    if (st.direction.worldEvents === undefined) st.direction.worldEvents = true;
     if (st.worldProfile === undefined) st.worldProfile = null;
     if (!st.wallet || typeof st.wallet !== 'object') {
         st.wallet = { balance: 1200, currency: '£' };
@@ -1496,10 +1612,10 @@ function store() {
 }
 
 function formatNotes(notes) {
-    if (!notes.length) return '(пока пусто)';
+    if (!notes.length) return '(empty so far)';
     const len = ctx().chat?.length ?? 0;
     return notes
-        .map(n => `#${n.id}${n.tag ? ` [${n.tag}]` : ''} (записано ${Math.max(0, len - n.at)} сообщ. назад${n.ff ? ', ⏩ уже начата в чате' : ''}): ${n.text}`)
+        .map(n => `#${n.id}${n.tag ? ` [${n.tag}]` : ''} (noted ${Math.max(0, len - n.at)} msgs ago${n.ff ? ', ⏩ already started in the chat' : ''}): ${n.text}`)
         .join('\n');
 }
 
@@ -1507,7 +1623,7 @@ function buildDirection(st) {
     const parts = [buildGenreDirection(st)];
     // Направление определяется только выбранными жанрами без вшитых указаний на бытовые трения/ссоры
     if (st?.rejected?.length) {
-        parts.push('Игрок отклонил эти идеи — не предлагай их и похожие:\n' + st.rejected.map(t => `— ${t}`).join('\n'));
+        parts.push('The player rejected these ideas — don\'t suggest them or anything similar:\n' + st.rejected.map(t => `— ${t}`).join('\n'));
     }
     return parts.filter(Boolean).join('\n\n');
 }
@@ -1520,21 +1636,21 @@ function buildGenreDirection(st) {
     if (custom) genres.push(custom);
     const declared = d.lines?.trim();
     if (!genres.length && !declared) return '';
-    const lines = ['НАПРАВЛЕНИЕ ИСТОРИИ — главное правило для всех разделов блокнота (задумок, тайн, развития):'];
+    const lines = ['STORY DIRECTION — the main rule for every notebook section (ideas, secrets, development):'];
     const hint = g => GENRE_HINTS[g] ? `${g} (${GENRE_HINTS[g]})` : g;
     if (genres.length === 1) {
-        lines.push(`— жанр: ${hint(genres[0])}.`);
+        lines.push(`— genre: ${hint(genres[0])}.`);
     } else if (genres.length > 1 && d.mixMode === 'or') {
-        lines.push(`— жанры: ${genres.map(hint).join('; ')}. Каждая задумка — в ОДНОМ из этих жанров, не смешивай их внутри одной идеи; чередуй жанры между задумками.`);
+        lines.push(`— genres: ${genres.map(hint).join('; ')}. Each idea belongs to ONE of these genres — don't mix them inside one idea; alternate genres between ideas.`);
     } else if (genres.length > 1) {
-        lines.push(`— жанры: ${genres.map(hint).join('; ')}. Каждая задумка должна сочетать эти жанры одновременно.`);
+        lines.push(`— genres: ${genres.map(hint).join('; ')}. Each idea must combine these genres at once.`);
     }
     if (genres.length) {
-        lines.push('— жанр определяет, из чего строятся задумки и какие в них ставки. Предлагай только то, что работает на выбранный жанр. Не тащи элементы чужих жанров: если выбраны лёгкие жанры, не вводи внешние угрозы, бюрократию, преследование, опасность — конфликты должны быть мелкими, личными и решаемыми.');
-        lines.push('— тайны, слухи и интриги уместны в любом жанре — меняется только их характер. В комедии и повседневности это сплетни соседей, нелепые слухи, недоразумения, секрет ради сюрприза, чьи-то тайные привычки; в романтике — тайный поклонник, слухи о романе, интрижки, ревность, скрытые чувства. Запрет на угрозы и опасность не отменяет интриги — просто делай их лёгкими.');
+        lines.push('— the genre defines what ideas are built from and what is at stake. Suggest only what serves the chosen genre. Don\'t drag in elements of other genres: with light genres, introduce no external threats, bureaucracy, pursuit or danger — conflicts stay small, personal and solvable.');
+        lines.push('— secrets, rumours and intrigues fit any genre — only their nature changes. In comedy and slice of life they are neighbours\' gossip, silly rumours, misunderstandings, a secret kept for a surprise, someone\'s hidden habits; in romance — a secret admirer, rumours of an affair, flings, jealousy, hidden feelings. Banning threats and danger doesn\'t cancel intrigue — just keep it light.');
     }
-    if (declared) lines.push(`— ЗАЯВЛЕННЫЕ ЛИНИИ — игрок хочет видеть их в истории: ${declared}. Держи их живыми: заводи для них арки, тайны, слухи и задумки и периодически возвращай этих персонажей в сюжет, даже если о них давно не было речи.`);
-    lines.push('Не ломай логику уже идущей истории.');
+    if (declared) lines.push(`— DECLARED LINES — the player wants to see them in the story: ${declared}. Keep them alive: start arcs, secrets, rumours and ideas for them and bring these characters back into the plot from time to time, even if they have not come up for a while.`);
+    lines.push('Don\'t break the logic of the story already under way.');
     return lines.join('\n');
 }
 
@@ -1603,7 +1719,7 @@ function findRel(st, a, b) {
     });
 }
 
-const REL_INJECT_HEADER = '[Отношения и связи между персонажами — канон их динамики. Держись этих линий в разговорах, взглядах, симпатиях и спорах.]';
+const REL_INJECT_HEADER = '[Relationships and ties between characters — the canon of their dynamics. Keep to these lines in conversations, glances, sympathies and arguments.]';
 
 function getActiveSceneHeroSet(st) {
     const active = new Set();
@@ -1929,10 +2045,10 @@ function formatNpcScaleSummary(n, forThink = false) {
     ensureNpcScales(n);
     if (!forThink) {
         const rel = isRomanticTarget(n)
-            ? `${nnbTierWords(friendshipTierLabel(n.friendship))}; романтически — ${nnbTierWords(romanceTierLabel(n.romance))}`
+            ? `${nnbTierWords(friendshipTierLabel(n.friendship))}; romantically — ${nnbTierWords(romanceTierLabel(n.romance))}`
             : nnbTierWords(friendshipTierLabel(n.friendship));
         const moodObj = isRomanticTarget(n) && n.dailyMood && n.dailyMood !== 'off' ? DAILY_MOOD_OPTIONS[n.dailyMood] : null;
-        return `(служебно, в текст не выносить) с {{user}}: ${rel}.${moodObj?.label ? ` Тонус: ${nnbTierWords(moodObj.label)}.` : ''}`;
+        return `(internal, never put into the text) with {{user}}: ${rel}.${moodObj?.label ? ` Mood: ${nnbTierWords(moodObj.label)}.` : ''}`;
     }
     if (!isRomanticTarget(n)) {
         return `Отношение к {{user}}: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)}).`;
@@ -1963,11 +2079,11 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
         ensureNpcScales(n, st);
         const isActive = !useSmartFocus || n.isMainChar || n.favorite || isHeroActiveInCurrentScene(n.name, activeSet, st);
         if (isActive) {
-            const favTag = n.favorite ? ' (главный фаворит игрока)' : '';
+            const favTag = n.favorite ? ' (the player\'s main favourite)' : '';
             const formattedCard = String(n.card || '').trim().replace(/\n+/g, '\n   ');
             let line = `— ${n.name}${favTag}: ${formattedCard}`;
-            if (forThink) line += ' (существующий текст описания НЕ сокращай и НЕ переписывай — если в чате открылись важные новые факты об этом герое, добавь их через NPCFACT)';
-            if (n.status) line += `\n   Сейчас: ${n.status}`;
+            if (forThink) line += ' (do NOT shorten or rewrite the existing description — if important new facts about this character came out in the chat, add them via NPCFACT)';
+            if (n.status) line += `\n   ${forThink ? 'Сейчас' : 'Now'}: ${n.status}`;
             line += `\n   ${formatNpcScaleSummary(n, forThink)}`;
             fullLines.push(line);
         } else {
@@ -1982,7 +2098,7 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
             }
             const extraTraits = [
                 n.status ? `Сейчас: ${n.status}` : '',
-                forThink ? `Дружба: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)})` : `с {{user}}: ${nnbTierWords(friendshipTierLabel(n.friendship))}`,
+                forThink ? `Дружба: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)})` : `with {{user}}: ${nnbTierWords(friendshipTierLabel(n.friendship))}`,
                 n.dream ? `Мечта: ${n.dream}` : '',
                 n.likes ? `Любит: ${n.likes}` : '',
             ].filter(Boolean).join(' | ');
@@ -1995,7 +2111,7 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
     }
     if (mode === 'sleeping') {
         return sleepingLines.length
-            ? `[Второстепенные знакомые за кадром (сейчас не в сцене — справочник; не путай их внешность с героями в текущей сцене):\n${sleepingLines.join('\n')}]`
+            ? `[Secondary acquaintances off-screen (not in the scene now — reference only; don't mix up their looks with the characters in the current scene):\n${sleepingLines.join('\n')}]`
             : '';
     }
     if (sleepingLines.length) {
@@ -2007,21 +2123,21 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
 function buildNpcSection(st) {
     if (!st?.direction?.npcs) return '';
     const charName = storyNames().char;
-    return `Персонажи, их актуальное состояние в текущей сцене и связи.
+    return `Characters, their current state in the scene, and their ties. Write all command content in Russian.
 
-Текущие карточки и состояние:
+Current cards and state:
 ${formatNpcs(st.npcs, true, st)}
 
-Связи и отношения между персонажами:
+Ties and relationships between characters:
 ${formatRelationships(st, true)}
 
-Команды для них (с новой строки, вместе с остальными):
-NPC [Имя]: развёрнутое, подробное описание для НОВЫХ персонажей, которых ещё нет в списке выше (впиши ВСЕ важные детали внешности, биографии, характера, профессии и фактов, которые дал игрок, в одну строку без лимита по числу предложений).
-NPCFACT [Имя]: новый важный факт для УЖЕ СУЩЕСТВУЮЩЕГО персонажа (1–4 предложения в одну строку). Используй ТОЛЬКО когда в последних сообщениях игрок или сюжет раскрыл существенную деталь биографии, внешности, прошлого, характера или важный поворот в отношениях, которых ещё нет в его карточке. Сюда же — то, что выяснилось о нём лично: что его по-настоящему цепляет или, наоборот, охлаждает и отталкивает, чего он боится, о чём мечтает, что любит и не выносит (пиши как живой факт о герое, а не как список). Старое описание при этом НЕ стирается — новый факт аккуратно добавится к нему в конец (мелкую бытовую ерунду на одну сцену НЕ записывай!).
-NPCSTATE [Имя]: что персонаж делает ПРЯМО СЕЙЧАС в последних 1–2 сообщениях чата (обязательно обновляй для ${charName} и присутствующих в сцене NPC! Если прежняя сцена — например, близость, спор или поездка — уже закончилась несколько постов назад, замени старый статус на то, чем персонаж занят прямо сейчас).
-SCALE [Имя]: дружба=число_или_сдвиг | романтика=число_или_сдвиг — обнови шкалы, если отношения заметно изменились (для обычных NPC — только «дружба=...»).
-REL [Имя1 ↔ Имя2]: тип | как относятся друг к другу (или REL [Имя1 → Имя2]).
-DROP #R1 — если связь распалась.`;
+Commands for them (one per line, together with the rest):
+NPC [Name]: a full, detailed description for NEW characters not yet in the list above (put ALL important details of looks, biography, personality, profession and facts the player gave into one line, no limit on sentences).
+NPCFACT [Name]: a new important fact for an EXISTING character (1–4 sentences on one line). Use it ONLY when the latest messages revealed a significant detail of biography, looks, past, personality or an important turn in relationships that is not in the card yet. This also covers what came out about them personally: what really hooks them or, on the contrary, cools them and pushes them away, what they fear, dream of, love and can't stand (write it as a living fact about the character, not as a list). The old description is NOT erased — the new fact is appended to its end (don't record petty everyday trivia from a single scene!).
+NPCSTATE [Name]: what the character is doing RIGHT NOW in the last 1–2 chat messages (always update it for ${charName} and the NPCs present in the scene! If the previous scene — intimacy, an argument, a trip — ended several posts ago, replace the old status with what the character is doing now).
+SCALE [Name]: дружба=number_or_shift | романтика=number_or_shift — update the scales if the relationship noticeably changed (for ordinary NPCs — only «дружба=...»).
+REL [Name1 ↔ Name2]: type | how they feel about each other (or REL [Name1 → Name2]).
+DROP #R1 — if the tie fell apart.`;
 }
 function formatArcs(st, forThink = false, includeEvolved = true) {
     const need = Math.max(1, Number(settings().minStimuli) || 2);
@@ -2040,7 +2156,7 @@ function formatArcs(st, forThink = false, includeEvolved = true) {
     if (includeEvolved && st.evolved.length) {
         lines.push('Закреплённые изменения:\n' + st.evolved.map(e => `— ${e.who}: ${e.text}`).join('\n'));
     }
-    return lines.length ? lines.join('\n') : '(пока нет)';
+    return lines.length ? lines.join('\n') : '(none yet)';
 }
 
 // Если все арки касаются только главного персонажа — подталкиваем модель к NPC
@@ -2049,24 +2165,24 @@ function npcArcNudge(st) {
     const norm = x => String(x || '').toLowerCase().replace(/ё/g, 'е');
     const arcsAboutNpc = st.arcs.filter(a => norm(a.who) !== norm(charName)).length;
     if (arcsAboutNpc || !st.npcs.length) return '';
-    return `\nСейчас ни одной арки нет ни у NPC, ни у их отношений. Посмотри на карточки NPC (${st.npcs.slice(0, 6).map(n => n.name).join(', ')}) и на линии между ними — заведи арку хотя бы для одной, если в истории для неё есть почва.\n`;
+    return `\nThere are no arcs for the NPCs or their relationships yet. Look at the NPC cards (${st.npcs.slice(0, 6).map(n => n.name).join(', ')}) and the lines between them — start an arc for at least one if the story gives it ground.\n`;
 }
 
 function buildArcSection(st) {
     if (!st?.direction?.arcs) return '';
     const need = Math.max(1, Number(settings().minStimuli) || 2);
     const stages = ARC_STAGES.slice(1).map((x, i) => `${i + 1}. ${x.name} — ${x.hint}`).join('\n');
-    return `Арки развития персонажей (стадии 1–${ARC_MAX}, сдвиг после ${need} стимулов; ядро характера сохраняется):
+    return `Character development arcs (stages 1–${ARC_MAX}, a shift after ${need} stimuli; the core personality stays):
 ${formatArcs(st, true)}
-${npcArcNudge(st)}Команды: ARC [Имя или Имя + Имя]: было → к чему идёт | STIMULUS #A1: реальный толчок из чата | SHIFT #A1: переход на след. стадию | REGRESS #A1: откат | DROP #A1 — закрыть.`;
+${npcArcNudge(st)}Commands (content in Russian): ARC [Name or Name + Name]: was → where it is heading | STIMULUS #A1: a real push from the chat | SHIFT #A1: move to the next stage | REGRESS #A1: roll back | DROP #A1 — close.`;
 }
 
 function buildIntrigueSection(st) {
     if (!st?.direction?.intrigues) return '';
     const max = Math.max(1, Number(settings().maxIntrigues) || 5);
-    return `Тайны и интриги (макс. ${max}):
+    return `Secrets and intrigues (max ${max}):
 ${formatIntrigues(st.intrigues)}
-Команды: INTRIGUE [тайна|загадка|слух|интрига]: суть правды | CLUE #T1: что реально открылось в чате | SOLVED #T1 | DROP #T1.`;
+Commands (content in Russian): INTRIGUE [тайна|загадка|слух|интрига]: the truth behind it | CLUE #T1: what was actually revealed in the chat | SOLVED #T1 | DROP #T1.`;
 }
 
 function fillTemplate(template, notes, direction = '', intrigues = '', npcs = '', arcs = '', time = '', wardrobe = '') {
@@ -2103,56 +2219,56 @@ function livingWorldOn(st) {
 }
 
 function buildWorldProfileInjection(st) {
-    if (!st) return '';
+    if (!st || st.direction?.worldInject === false) return '';
     const wp = st.worldProfile;
     const user = storyNames().user;
     const parts = [];
     if (wp) {
-        if (wp.home) parts.push(`— Жильё ${user}: ${wp.home}.`);
-        if (wp.startVibe) parts.push(`— Точка старта: ${wp.startVibe}.`);
-        if (wp.job) parts.push(`— Профессия / занятие ${user}: ${wp.job}.`);
-        if (Array.isArray(wp.hobbies) && wp.hobbies.length) parts.push(`— Хобби и увлечения ${user}: ${wp.hobbies.join(', ')}.`);
-        if (wp.wealth) parts.push(`— Достаток: ${wp.wealth}.`);
-        if (wp.pet && wp.pet !== 'Без питомца') parts.push(`— Домашний питомец: ${wp.pet}.`);
+        if (wp.home) parts.push(`— ${user}'s home: ${wp.home}.`);
+        if (wp.startVibe) parts.push(`— Starting point: ${wp.startVibe}.`);
+        if (wp.job) parts.push(`— ${user}'s job / occupation: ${wp.job}.`);
+        if (Array.isArray(wp.hobbies) && wp.hobbies.length) parts.push(`— ${user}'s hobbies: ${wp.hobbies.join(', ')}.`);
+        if (wp.wealth) parts.push(`— Means: ${wp.wealth}.`);
+        if (wp.pet && wp.pet !== 'Без питомца') parts.push(`— Pet: ${wp.pet}.`);
         if (wp.freeWorld) {
             const favs = (st.npcs || []).filter(n => n.favorite).map(n => n.name);
             if (favs.length) {
-                parts.push(`— Свободная игра в мир: главный фокус и романтический/сюжетный интерес ${user} сейчас связан с фаворитом из блокнота (${favs.join(', ')}). Мир остаётся живым и открытым для исследования.`);
+                parts.push(`— Open-world play: ${user}'s main focus and romantic/plot interest is now the favourite from the notebook (${favs.join(', ')}). The world stays alive and open to explore.`);
             } else {
-                parts.push(`— Свободная игра в мир (без привязки к одному стартовому фавориту): не привязывай ${user} наручниками к одному персонажу в каждой сцене. Давай ${user} свободно исследовать мир, жить своей жизнью, общаться с разными людьми и встречать потенциальные симпатии по ходу сюжета.`);
+                parts.push(`— Open-world play (no single starting favourite): don't handcuff ${user} to one character in every scene. Let ${user} explore the world freely, live her own life, talk to different people and meet potential love interests along the way.`);
             }
         } else if (wp.charRel && wp.charRel !== 'По первому сообщению чата') {
-            parts.push(`— Стартовая связь с основным персонажем: ${wp.charRel}.`);
+            parts.push(`— Starting tie with the main character: ${wp.charRel}.`);
         }
     }
-    if (st.dynasty?.userFamily) parts.push(`— Семья и родня ${user}: ${st.dynasty.userFamily}.`);
-    if (st.dynasty?.charFamily) parts.push(`— Семья и близкий круг ${storyNames().char}: ${st.dynasty.charFamily}.`);
-    if (st.dynasty?.socialCircle) parts.push(`— Социальный круг (соседи, коллеги, знакомые): ${st.dynasty.socialCircle}.`);
+    if (st.dynasty?.userFamily) parts.push(`— ${user}'s family: ${st.dynasty.userFamily}.`);
+    if (st.dynasty?.charFamily) parts.push(`— ${storyNames().char}'s family and close circle: ${st.dynasty.charFamily}.`);
+    if (st.dynasty?.socialCircle) parts.push(`— Social circle (neighbours, colleagues, acquaintances): ${st.dynasty.socialCircle}.`);
     if (Array.isArray(st.home?.placed) && st.home.placed.length) {
         const placedStr = st.home.placed.map(p => {
             const it = (st.wardrobe?.box || []).find(x => x.id === p.itemId);
             return it ? `«${it.title}» (${p.spot})` : '';
         }).filter(Boolean).join(', ');
-        if (placedStr) parts.push(`— В комнате дома ${user} расставлены памятные вещи: ${placedStr}.`);
+        if (placedStr) parts.push(`— Keepsakes placed in ${user}'s room at home: ${placedStr}.`);
     }
     if (Array.isArray(st.trends) && st.trends.length) {
         const trStr = st.trends.map(t => `«${t.title}» [${t.category}] (${t.desc})`).join('; ');
-        parts.push(`— 🔥 Сейчас в моде и трендах города: ${trStr}. ВАЖНО — БЕЗ ПОЗИТИВНОГО БИАСА ПО ОТНОШЕНИЯМ: отношение любого персонажа к тренду зависит ТОЛЬКО от его личного характера, вкуса, скептицизма, прагматичности или скрытых слабостей, а НЕ от того, друг он или недруг! Близкая подруга или фаворит вполне могут посмеяться над модным хайпом и счесть его нелепой тратой денег, а хмурый скептик, соперник или строгий персонаж может неожиданно оказаться тайным поклонником этой новинки.`);
+        parts.push(`— 🔥 In fashion and trending in the city now: ${trStr}. IMPORTANT — NO POSITIVE BIAS FROM RELATIONSHIPS: any character's attitude to a trend depends ONLY on their personality, taste, scepticism, pragmatism or hidden weaknesses, NOT on whether they are friend or foe! A close friend or the favourite may well laugh at the hype and call it a silly waste of money, while a gloomy sceptic, a rival or a strict character may turn out to be a secret fan.`);
     }
     if (!parts.length) return '';
-    return `[Профиль мира, окружения и персонажа (${user}) — канон истории:\n` + parts.join('\n') + ']';
+    return `[Profile of the world, surroundings and the character (${user}) — story canon:\n` + parts.join('\n') + ']';
 }
 
 function buildEphemeralWorldEventsInjection(st) {
-    if (!st) return '';
+    if (!st || st.direction?.worldEvents === false) return '';
     const parts = [];
     const recentStory = (st.neighborStories || []).slice(-1)[0];
     if (recentStory && (ctx().chat?.length ?? 0) - (recentStory.at || 0) <= 4) {
-        parts.push(`[🏘 Недавняя новость в окружении NPC: ${recentStory.text}.]`);
+        parts.push(`[🏘 Recent news among the NPCs: ${recentStory.text}.]`);
     }
     const activeDreams = (st.dreams || []).filter(d => d.active && (ctx().chat?.length ?? 0) - (d.at || 0) <= 3);
     if (activeDreams.length) {
-        parts.push(`[🌙 Недавний сон/кошмар (может всплыть один раз): ${activeDreams.map(d => `${d.who} (${d.kind === 'nightmare' ? 'кошмар' : 'сон'}): ${d.text}`).join('; ')}.]`);
+        parts.push(`[🌙 A recent dream/nightmare (may surface once): ${activeDreams.map(d => `${d.who} (${d.kind === 'nightmare' ? 'nightmare' : 'dream'}): ${d.text}`).join('; ')}.]`);
     }
     return parts.join('\n');
 }
@@ -2167,9 +2283,9 @@ function buildLivingWorldInjection(st, includeWorldProfile = true) {
     const compRule = '';
     let lwBlock = '';
     if (curPlace && justEntered) {
-        const locLine = `Текущая локация (герои только что пришли сюда): «${curPlace.title}»${curPlace.desc ? ` (${curPlace.desc})` : ''}${curPlace.hooks ? `. Зацепки и крючки этого места для первого впечатления: ${curPlace.hooks}` : ''}.\n`;
-        lwBlock = `[Живой мир — первое впечатление от локации:
-${locLine}При входе в локацию вплети в сцену 1–2 живые детали или точки интереса из зацепок места, чтобы локация ощущалась живой. После первого упоминания НЕ повторяй эти же зацепки в следующих ответах, если игрок сам не обратит на них внимание.${compRule}]`;
+        const locLine = `Current location (the characters have just arrived): «${curPlace.title}»${curPlace.desc ? ` (${curPlace.desc})` : ''}${curPlace.hooks ? `. Hooks of this place for the first impression: ${curPlace.hooks}` : ''}.\n`;
+        lwBlock = `[Living world — first impression of the location:
+${locLine}On entering, weave 1–2 lively details or points of interest from the place's hooks into the scene so the location feels alive. After the first mention do NOT repeat the same hooks in the following replies unless the player draws attention to them.${compRule}]`;
     } else if (curPlace) {
         lwBlock = `[Текущая локация: «${curPlace.title}». Не повторяй фоновые мелочи и крючки локации из поста в пост.]`;
     } else {
@@ -2182,15 +2298,15 @@ function buildActionPromptsInjection() {
     const user = storyNames().user;
     const st = store();
     const poiLine = (st && livingWorldOn(st))
-        ? `\n— Если в сцене есть точки интереса, необычные детали окружения, фоновые сценки или зацепки локации, хотя бы один из вариантов должен предлагать ${user} изучить, осмотреть или обыграть этот крючок мира.`
+        ? `\n— If the scene has points of interest, unusual details of the surroundings, background vignettes or location hooks, at least one option must invite ${user} to explore, examine or play off that hook of the world.`
         : '';
-    return `[Подсказки действий: в самом конце своего ответа добавь одну скрытую служебную строку с тремя вариантами следующего хода для игрока (${user}) — что может сделать или сказать САМА ${user} в ответ на происходящее:
-<!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->
-Требования к вариантам:
-— Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «погладить ${user}» — действует только сама ${user}.
-— Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${poiLine}
-— Формулируй кратко (1–2 фразы), чтобы ${user} могла отправить этот вариант как свой ход. Метка невидима для игрока, не упоминай её в основном тексте ответа.]`;
+    return `[Action hints: at the very end of your reply add one hidden service line with three options for the player's (${user}) next move — what ${user} HERSELF could do or say in response to what is happening. Write the options in the language of the roleplay:
+<!--ACTIONS: option 1 | option 2 | option 3-->
+Requirements:
+— All 3 options are actions and lines of ${user} HERSELF (what ${user} will do or say), NOT other characters' actions towards her! No "hand ${user} something", "ask ${user}", "stroke ${user}" — only ${user} acts.
+— The three options must differ substantially in meaning and tone (not rephrasings of one thought).
+— Each option takes the scene in a different direction: mix forms (direct speech by ${user}, a physical action or gesture, a pause/silence, a change of topic, an unexpected reaction).${poiLine}
+— Keep them short (1–2 phrases) so ${user} can send an option as her move. The line is invisible to the player; never mention it in the main text of the reply.]`;
 }
 
 // ===== 💧 Задумки «экономно»: в каждом ответе рассказчику одна активная задумка одной строкой =====
@@ -2209,27 +2325,118 @@ function nnbDripPickNote(st, exceptId = null) {
     return pool.slice().sort((a, b) => (Number(a.dripCount) || 0) - (Number(b.dripCount) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))[0];
 }
 function nnbDripInjection(st) {
-    if (st?.direction?.notes !== 'drip' || !(st.notes || []).length) return '';
+    const mode = st?.direction?.notes;
+    if ((mode !== 'drip' && mode !== 'director') || !(st.notes || []).length) return '';
     const d = nnbDripState(st);
     let note = d.activeId != null ? st.notes.find(n => n.id === d.activeId && !n.ff) : null;
     if (!note) {
-        note = nnbDripPickNote(st);
+        note = mode === 'director' ? nnbDirectorPick(st) : nnbDripPickNote(st);
         if (!note) return '';
         d.activeId = note.id;
         d.shown = 0;
     }
-    return `[Задумка автора на ближайшие ответы: ${note.text}. Подведи к ней в этом или следующих ответах, когда ложится естественно, не обрывая текущий эпизод; не упоминай блокнот.]`;
+    if (mode === 'director') {
+        const line = nnbDirectorLineOf(st, note.line);
+        const meta = [line ? `line «${line.name}»` : '', note.genre ? `genre ${note.genre}` : '', note.intensity ? `intensity ${note.intensity}/5` : '', (note.chars || []).length ? `characters: ${note.chars.join(', ')}` : ''].filter(Boolean).join('; ');
+        return `[Director — next scene: ${note.text}${meta ? ` (${meta})` : ''}. Lead up to it in this or the next few replies: give it a natural trigger, match tone and pace to the genre and intensity; don't cut the current episode off abruptly and never mention the director.]`;
+    }
+    return `[Author's idea for the next few replies: ${note.text}. Lead up to it in this or the following replies when it fits naturally, without cutting the current episode off; never mention the notebook.]`;
 }
+// ===== 🎬 Режиссёр: задумки разложены по сюжетным линиям с целевой долей; следующей берётся задумка из самой «отстающей» линии =====
+const NNB_DIR_GENRES = ['plot', 'drama', 'comedy', 'fluff', 'angst', 'chaos', 'slice'];
+function nnbDirector(st) {
+    if (!st.director || typeof st.director !== 'object') st.director = {};
+    const d = st.director;
+    if (!Array.isArray(d.lines) || !d.lines.length) d.lines = [
+        { id: 'main_plot', name: 'Основной сюжет', color: '#ef4444', target: 35 },
+        { id: 'relations', name: 'Отношения и коллектив', color: '#3b82f6', target: 35 },
+        { id: 'romance', name: 'Романтика', color: '#ec4899', target: 30 },
+    ];
+    if (!Array.isArray(d.history)) d.history = [];
+    if (typeof d.summary !== 'string') d.summary = '';
+    return d;
+}
+function nnbDirectorBalance(st) {
+    const d = nnbDirector(st);
+    const total = d.history.length || 0;
+    return d.lines.map(l => {
+        const count = d.history.filter(h => h.line === l.id).length;
+        const pct = total ? Math.round(count / total * 100) : 0;
+        return { ...l, count, pct, deficit: (Number(l.target) || 0) - pct };
+    });
+}
+function nnbDirectorLineOf(st, tag) {
+    const d = nnbDirector(st);
+    const t = String(tag || '').trim().toLowerCase();
+    if (!t) return null;
+    return d.lines.find(l => l.id.toLowerCase() === t || l.name.toLowerCase() === t || l.name.toLowerCase().includes(t) || t.includes(l.id.toLowerCase())) || null;
+}
+// Выбор следующей задумки: линия с наибольшим отставанием от цели; внутри — темп (после тяжёлой сцены — полегче) и реже подсказанные
+function nnbDirectorPick(st, exceptId = null) {
+    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3);
+    if (!pool.length) return null;
+    const bal = nnbDirectorBalance(st);
+    const deficitOf = id => (bal.find(b => b.id === id)?.deficit ?? -999);
+    const lastShown = st.notesDrip?.lastShown || null;
+    const lastInt = Number(lastShown?.intensity) || Number(nnbDirector(st).history.slice(-1)[0]?.intensity) || 0;
+    const today = st.time?.date || '';
+    // задумка привязана к дате («(5 апреля)», «05.04») — раньше этой даты не подсовываем
+    const notYet = n => {
+        if (!today) return false;
+        const m = String(`${n.title || ''} ${n.text || ''}`).match(/\b(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?![а-яё])|\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b/i);
+        if (!m) return false;
+        const iso = parseDateText(m[0], today);
+        return !!(iso && iso > today);
+    };
+    const score = n => {
+        let sc = n.line ? deficitOf(n.line) : -50;
+        if (notYet(n)) sc -= 1000;
+        if (lastShown?.line && n.line === lastShown.line) sc -= 6; // чередуем линии
+        const it = Number(n.intensity) || 3;
+        if (lastInt >= 4 && it >= 4) sc -= 15; // два тяжёлых эпизода подряд — нет
+        if (lastInt && lastInt <= 2 && it >= 3) sc += 5; // после лёгкого можно поднять накал
+        sc -= (Number(n.dripCount) || 0) * 10;
+        return sc;
+    };
+    const best = pool.slice().sort((a, b) => score(b) - score(a) || (Number(a.at) || 0) - (Number(b.at) || 0))[0];
+    return best && notYet(best) ? null : best;
+}
+// Сыгранная задумка → история режиссёра (для баланса линий)
+function nnbDirectorRecord(st, n) {
+    if (!n || !n.line) return;
+    const d = nnbDirector(st);
+    d.history.push({ id: 'h' + (d.history.length + 1), title: n.title || String(n.text || '').slice(0, 80), line: n.line, genre: n.genre || '', intensity: Number(n.intensity) || 3, characters: n.chars || [], date: st.time?.date || '' });
+    if (d.history.length > 200) d.history.splice(0, d.history.length - 200);
+}
+// Импорт из «ИИ-Режиссёр v4» (JSON: lines / ideas / history / contextSummary)
+function nnbDirectorImport(st, json) {
+    const data = typeof json === 'string' ? JSON.parse(json) : json;
+    if (!data || !Array.isArray(data.ideas)) throw new Error('В JSON нет списка ideas');
+    const d = nnbDirector(st);
+    if (Array.isArray(data.lines) && data.lines.length) d.lines = data.lines.map(l => ({ id: String(l.id), name: String(l.name || l.id), color: l.color || '#6366f1', target: Number(l.target) || 0 }));
+    if (Array.isArray(data.history)) d.history = data.history.map(h => ({ ...h, intensity: Number(h.intensity) || 3 }));
+    if (typeof data.contextSummary === 'string') d.summary = data.contextSummary;
+    let added = 0;
+    for (const it of data.ideas) {
+        const title = String(it.title || '').trim();
+        if (!title || st.notes.some(n => (n.title || '') === title)) continue;
+        st.notes.push({ id: st.nextId++, tag: 'режиссёр', title, text: it.text ? `${title}. ${String(it.text).trim()}` : title, line: it.line || '', genre: it.genre || '', intensity: Number(it.intensity) || 3, chars: Array.isArray(it.characters) ? it.characters : [], manual: true, at: ctx().chat?.length ?? 0 });
+        added++;
+    }
+    return added;
+}
+
 // пришёл ответ рассказчика: задумка была показана ещё раз; после NNB_DRIP_SPAN ответов — следующая
 function nnbDripAfterReply(st) {
-    if (st?.direction?.notes !== 'drip') return;
+    if (st?.direction?.notes !== 'drip' && st?.direction?.notes !== 'director') return;
     const d = nnbDripState(st);
     if (d.activeId == null) return;
     d.shown += 1;
     if (d.shown < NNB_DRIP_SPAN) return;
     const note = (st.notes || []).find(n => n.id === d.activeId);
     if (note) { note.dripCount = (Number(note.dripCount) || 0) + 1; note.dripAt = ctx().chat?.length ?? 0; }
-    const next = nnbDripPickNote(st, d.activeId);
+    if (note) d.lastShown = { line: note.line || '', intensity: Number(note.intensity) || 0 };
+    const next = st.direction.notes === 'director' ? nnbDirectorPick(st, d.activeId) : nnbDripPickNote(st, d.activeId);
     d.activeId = next ? next.id : null;
     d.shown = 0;
     d.sinceThink = true; // размышление проверит, сбылась ли задумка (DONE)
@@ -2245,11 +2452,12 @@ function updateInjection() {
     try { dripLine = st ? nnbDripInjection(st) : ''; } catch (e) { dripLine = ''; }
     const showIntrigues = st?.direction?.intrigues && st.intrigues.length;
     const showNpcs = st?.direction?.npcs && (st.npcs.length || st.mainCharCard);
-    const showRels = st?.direction?.npcs && (st.relationships || []).length;
+    const showRels = st?.direction?.npcs && st.direction.rels !== false && (st.relationships || []).length;
     const showArcs = st?.direction?.arcs && (st.arcs.length || st.evolved.length);
-    const linesBlock = st?.direction?.lines?.trim() ? `[Линии, которые игрок хочет видеть в истории: ${st.direction.lines.trim()}. Время от времени давай им проявиться: эти персонажи появляются, их отношения развиваются, о них говорят. Естественно и не в каждой сцене.]` : '';
-    const summaryBlock = st?.storySummary?.trim()
-        ? `[📜 Краткое содержание предыдущих глав истории (канон ролевой — учитывай эти события, отношения и контекст как уже произошедшие):
+    const linesBlock = st?.direction?.lines?.trim() ? `[Story lines the player wants to see: ${st.direction.lines.trim()}. From time to time let them surface: these characters appear, their relationships develop, people talk about them. Naturally, not in every scene.]` : '';
+    // Память ведёт Memory Books (или другое расширение) — летопись и хронику блокнота в ролевую не шлём, чтобы не дублировать
+    const summaryBlock = !s.externalMemory && st?.storySummary?.trim()
+        ? `[📜 Summary of the previous chapters (roleplay canon — treat these events, relationships and context as having already happened):
 ${st.storySummary.trim()}]`
         : '';
     const autoActionsEveryTurn = !!(s.actionPrompts && st && !s.actionPromptsOnClickOnly);
@@ -2439,21 +2647,25 @@ async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, lab
 
     const attempts = isTc
         ? [
-            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
-            () => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens),
+            // текстовый режим: без includeInstruct Таверна шлёт голый текст без шаблона модели — ответы уходят в продолжение промпта
+            (signal) => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag, includeInstruct: true, signal }),
+            (signal) => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag, includeInstruct: true, signal }),
+            (signal) => svc.sendRequest(pid, fullPrompt, maxTokens, { stream: false, extractData: true, includePreset: false, includeInstruct: false, signal }),
         ]
         : [
-            () => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag }),
-            () => svc.sendRequest(pid, singleUserMsgs, maxTokens),
+            (signal) => svc.sendRequest(pid, chatMsgs, maxTokens, { stream: false, extractData: true, includePreset: firstPresetFlag, signal }),
+            (signal) => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, includePreset: secondPresetFlag, signal }),
+            (signal) => svc.sendRequest(pid, singleUserMsgs, maxTokens, { stream: false, extractData: true, signal }),
         ];
 
     const attemptTimeoutMs = maxTokens >= 4096 || String(fullPrompt || '').length > 20000 ? 110000 : 75000;
     let lastErr = null;
     for (let ai = 0; ai < attempts.length; ai++) {
+        // каждая попытка со своим сигналом: по таймауту прошлый запрос ОТМЕНЯЕТСЯ, а не висит параллельно
+        // (раньше брошенные попытки продолжали идти к провайдеру и съедали лимит — отсюда 429 и «ошибки» на отдельном профиле)
+        const ab = nnbNewAbort();
         try {
-            const raw = await withTimeout(attempts[ai](), attemptTimeoutMs, label);
+            const raw = await withTimeout(attempts[ai](ab.signal), attemptTimeoutMs, label);
             const txt = extractTextFromApiResult(raw);
             if (txt && String(txt).trim()) {
                 return String(txt).trim();
@@ -2463,10 +2675,18 @@ async function sendViaTavernProfile(profileId, fullPrompt, maxTokens = 2048, lab
             }
         } catch (err) {
             lastErr = err;
+            try { ab.ctrl.abort(); } catch (e) { /* ignore */ }
+            if (nnbIsStopError(err)) throw nnbStopError();
             console.warn(`[npc_notebook] sendViaTavernProfile attempt failed (${label}):`, err?.message || err);
+            // ключ/доступ/модель неверны — другие варианты запроса не помогут, сразу понятная ошибка
+            if (/\b(401|403)\b|unauthori[sz]ed|invalid api key|incorrect api key|model.{0,40}not.{0,10}(found|exist)/i.test(String(err?.message || err))) {
+                throw new Error(`Профиль «${prof?.name || pid}»: ${String(err?.message || err).slice(0, 200)} — проверь ключ и модель в этом профиле подключения`);
+            }
             if (typeof logImageDiag === 'function' && /промпт/i.test(label)) {
                 logImageDiag(`⚠️ ${label}: попытка ${ai + 1}/${attempts.length} не удалась`, err?.message || String(err));
             }
+        } finally {
+            ab.done();
         }
     }
     throw lastErr || new Error(`Профиль «${prof?.name || pid}» вернул пустой ответ`);
@@ -2540,7 +2760,9 @@ async function generateViaStandaloneTextSource(taskPrompt, maxTokens = 4096) {
             base = 'https://generativelanguage.googleapis.com/v1beta/openai';
         }
         const endpoint = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
+        const abT = nnbNewAbort();
         const res = await withTimeout(imagesFetch(endpoint, {
+            signal: abT.signal,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -2552,7 +2774,9 @@ async function generateViaStandaloneTextSource(taskPrompt, maxTokens = 4096) {
                 max_tokens: maxTokens,
                 temperature: 0.7,
             }),
-        }), (maxTokens > 4096 ? 240000 : (isSelfContained || fullPrompt.length > 20000 ? 110000 : 75000)), `быстрое подключение блокнота (${model})`);
+        }), (maxTokens > 4096 ? 240000 : (isSelfContained || fullPrompt.length > 20000 ? 110000 : 75000)), `быстрое подключение блокнота (${model})`)
+            .catch(e => { try { abT.ctrl.abort(); } catch (x) { /* ignore */ } throw e; })
+            .finally(() => abT.done());
         const text = await res.text();
         let json = null;
         try { json = JSON.parse(text); } catch (e) { /* ignore */ }
@@ -2588,6 +2812,7 @@ async function quietGenerateOnce(prompt, maxTokens = 0) {
                     return standaloneRes;
                 }
             } catch (standaloneErr) {
+                if (nnbIsStopError(standaloneErr)) throw nnbStopError();
                 console.warn('[npc_notebook] standalone text source failed, falling back to main chat:', standaloneErr);
                 toastr.warning(`Отдельное подключение блокнота не ответило (${escapeHtml(standaloneErr?.message || standaloneErr)}) — использую основное подключение чата.`, '⚡ Подключение блокнота', { escapeHtml: false, timeOut: 7000 });
             }
@@ -2722,8 +2947,8 @@ function adaptWriterNoteForTask(rawWriterNote, isComicStripTask) {
     if (!note) return '';
     if (isComicStripTask) {
         // Если в пользовательском промпте для GLM написано «Выдай ТОЛЬКО строки CAST и SCENE», заменяем это требование на формат кадров комикса, чтобы GLM не игнорировал PANEL1..4!
-        note = note.replace(/выдай\s+только\s+строки\s+CAST\s+и\s+SCENE[^\n.]*/gi, 'В РЕЖИМЕ КОМИКСА выдай ТОЛЬКО строки CAST, PANEL1..PANEL3 (или PANEL4) и QUOTE1..QUOTE3 (или QUOTE4) БЕЗ общей строки SCENE!');
-        note += '\n\n[ВАЖНОЕ ПРАВИЛО ДЛЯ РАСКАДРОВКИ МАНХВЫ / КОМИКСА (PANEL1..PANEL3/4):\n1) Выведи строки CAST:, PANEL1:, PANEL2:, PANEL3: (и PANEL4:, если запрошено 4 фрейма) + QUOTE1:, QUOTE2:, QUOTE3: (строку SCENE писать НЕ нужно!).\n2) В КАЖДОЙ строке QUOTE пиши ПОЛНОЕ, ЗАКОНЧЕННОЕ предложение целиком до финальной точки, восклицательного или вопросительного знака (БЕЗ сокращений и БЕЗ многоточия «...» на середине предложения!): для прямой речи пиши `SPEECH | Имя | текст`, для мыслей про себя — `THOUGHT | Имя | текст`, для авторского описания — `NARRATION | полное предложение описания БЕЗ имени` (не бери в NARRATION обрубки речевых глаголов вроде «сказала она» или «проворковала юристка», бери полноценные предложения действия!). Ставь каждую строку QUOTE строго под тот номер фрейма PANEL, к которому относится этот текст (под безлюдный кадр животного/детали ставь NARRATION про эту деталь, а под кадр с человеком — его SPEECH или THOUGHT)!\n3) 🔍 ИСКЛЮЧЕНИЕ ДЛЯ КРУПНЫХ ФРЕЙМОВ ДЕТАЛЕЙ (ЖИВОТНЫЕ, ПРЕДМЕТЫ, РУКИ, ИНТИМ 18+): правила выше про обязательные теги 1boy/1girl, калибровку полного роста (tall lean adult man, long male legs, wider male shoulders) и описание лиц/причёсок действуют ТОЛЬКО для кадров с людьми в полный/средний рост! Если в отрывке есть животное/питомец (например, змея, кот, собака), важный предмет, тактильный жест рук ИЛИ эротика/интим 18+ (гениталии, проникновение, ласки крупным планом) — ОБЯЗАТЕЛЬНО сделай один из фреймов (PANEL2 или PANEL3) КРУПНЫМ ФРЕЙМОМ ЭТОЙ ДЕТАЛИ БЕЗ лиц и БЕЗ тегов роста (для животного/предмета пиши: no humans, animal focus / object focus, close-up, macro shot, ...; для эротики 18+ или рук пиши: nsfw, explicit, close-up, intimate close-up, head out of frame, cropped, focus on [конкретная деталь тела/гениталий/рук]).\n4) В остальных кадрах НЕ пихай толпу (4–7 человек): рисуй 1–2 участников текущего момента, а для эмоционального портрета используй сольный план по плечи/грудь (1boy, solo, close-up, portrait, upper body или 1girl, solo, close-up, portrait, upper body).\n5) Не переводи метафоры буквально: вместо "lion mane" у человека пиши "thick wild hair", вместо "greenish-pale" пиши "pale skin, unwell, sweatdrop".]';
+        note = note.replace(/выдай\s+только\s+строки\s+CAST\s+и\s+SCENE[^\n.]*/gi, 'IN COMIC MODE output ONLY the lines CAST, PANEL1..PANEL3 (or PANEL4) and QUOTE1..QUOTE3 (or QUOTE4), WITHOUT a general SCENE line!');
+        note += '\n\n[IMPORTANT RULE FOR THE MANHWA / COMIC STORYBOARD (PANEL1..PANEL3/4):\n1) Output the lines CAST:, PANEL1:, PANEL2:, PANEL3: (and PANEL4: if 4 frames are requested) + QUOTE1:, QUOTE2:, QUOTE3: (no SCENE line!).\n2) In EVERY QUOTE line write a FULL, COMPLETE sentence up to the final full stop, exclamation or question mark, verbatim in the original language of the post (NO shortening and NO «...» in the middle!): for speech write `SPEECH | Name | text`, for inner thoughts — `THOUGHT | Name | text`, for narration — `NARRATION | a full narration sentence WITHOUT a name` (don\'t take stubs of speech verbs like «сказала она» into NARRATION — take full action sentences!). Put each QUOTE line under the number of the PANEL frame it belongs to (under a frame without people put NARRATION about that detail, under a frame with a person — their SPEECH or THOUGHT)!\n3) 🔍 EXCEPTION FOR DETAIL CLOSE-UPS (ANIMALS, OBJECTS, HANDS): the rules above about mandatory 1boy/1girl tags, full-height calibration (tall lean adult man, long male legs, wider male shoulders) and describing faces/hairstyles apply ONLY to frames with people at full/medium height! If the passage has an animal/pet (a snake, cat, dog), an important object or a tactile hand gesture — be sure to make one frame (PANEL2 or PANEL3) a CLOSE-UP OF THAT DETAIL with NO faces and NO height tags (for an animal/object: no humans, animal focus / object focus, close-up, macro shot, ...; for hands: close-up, hand focus, head out of frame, cropped). ⚠️ 18+ erotica is NOT a detail: it is a close shot with people (nsfw, explicit, 1boy, 1girl, hetero, close-up, from side, action tags + CHAR slots of both characters), both bodies connected in the frame; no head out of frame / cropped / focus on.\n4) In the other frames don\'t cram a crowd (4–7 people): draw 1–2 participants of the current moment, and for an emotional portrait use a solo shoulders/chest shot (1boy, solo, close-up, portrait, upper body or 1girl, solo, close-up, portrait, upper body).\n5) Don\'t translate metaphors literally: instead of "lion mane" on a person write "thick wild hair", instead of "greenish-pale" write "pale skin, unwell, sweatdrop".]';
     }
     return note;
 }
@@ -2737,7 +2962,7 @@ async function generateViaImagePromptSource(taskPrompt) {
     const isComicStripTask = /\bPANEL1\s*:/i.test(String(taskPrompt || ''));
     const writerNote = adaptWriterNoteForTask(rawWriterNote, isComicStripTask);
     const writerBlock = writerNote
-        ? `[Авторская инструкция составителю промптов картинок (соблюдай обязательно!):
+        ? `[The author's instruction to the image prompt writer (follow it strictly!):
 ${writerNote}]
 
 `
@@ -2830,7 +3055,7 @@ async function quietGenerateRetry(prompt, maxTokens = 0) {
         return await quietGenerateOnce(prompt, maxTokens);
     } catch (err) {
         const msg = String(err?.message || err);
-        if (!/429|too many|rate|exhausted|quota/i.test(msg)) throw err;
+        if (nnbIsStopError(err) || !/429|too many|rate|exhausted|quota/i.test(msg)) throw err;
         setStatus('Лимит запросов — жду 30 секунд и пробую ещё раз…');
         toastr.info('Лимит запросов у провайдера. Повторю через 30 секунд.', 'Блокнот рассказчика');
         await new Promise(r => setTimeout(r, 30000));
@@ -2964,6 +3189,8 @@ function parseAndApply(raw) {
         }
         const mh = line.match(/^HERE\s*[:：—–-]\s*(.+)$/i);
         if (mh) {
+            if (st.direction.map && nnbHeaderMode(st) && st.time?.headerSeen?.location) continue; // место ведёт шапка поста
+            if (st.direction.map && /^(?:нигде|нет|—|-|none|не на карте)(?![а-яёa-z])/i.test(mh[1].trim())) { st.map.current = null; continue; }
             if (st.direction.map) {
                 const pl = findPlace(st, mh[1].split('|')[0]);
                 if (pl && st.map.current !== pl.id) {
@@ -2986,6 +3213,13 @@ function parseAndApply(raw) {
         let m = line.match(/^ADD\s*(?:\[([^\]]{1,40})\])?\s*[:：—–-]\s*(.+)$/i);
         if (m) {
             const note = { id: st.nextId++, tag: (m[1] || '').trim(), text: m[2].trim(), at: len };
+            if (st.direction?.notes === 'director') {
+                // ADD [линия]: суть (жанр, накал N/5)
+                const ln = nnbDirectorLineOf(st, note.tag);
+                if (ln) note.line = ln.id;
+                const gm = note.text.match(/\(\s*([a-z]+)\s*,?\s*(?:накал\s*)?(\d)\s*\/\s*5\s*\)\s*$/i);
+                if (gm) { if (NNB_DIR_GENRES.includes(gm[1].toLowerCase())) note.genre = gm[1].toLowerCase(); note.intensity = Number(gm[2]); note.text = note.text.slice(0, gm.index).trim(); }
+            }
             st.notes.push(note);
             res.added.push(note);
             continue;
@@ -3366,6 +3600,7 @@ function parseAndApply(raw) {
                 const [n] = st.notes.splice(i, 1);
                 n.status = m[1].toUpperCase() === 'DONE' ? 'done' : 'dropped';
                 n.closedAt = len;
+                if (n.status === 'done') nnbDirectorRecord(st, n);
                 st.archive.push(n);
                 (n.status === 'done' ? res.done : res.dropped).push(n);
             }
@@ -3373,8 +3608,10 @@ function parseAndApply(raw) {
     }
 
     const max = Math.max(1, Number(s.maxActive) || 12);
-    while (st.notes.length > max) {
-        const n = st.notes.shift();
+    // лимит — только для задумок, придуманных моделью; свои и импортированные из режиссёра не выкидываем
+    while (st.notes.filter(x => !x.manual).length > max) {
+        const autoIdx = st.notes.findIndex(x => !x.manual);
+        const n = st.notes.splice(autoIdx, 1)[0];
         n.status = 'dropped';
         n.closedAt = len;
         st.archive.push(n);
@@ -3465,25 +3702,26 @@ async function generateActionPromptsNow(forceReroll = false) {
         const txt = rawTxt.length <= lim ? rawTxt : `${rawTxt.slice(0, Math.floor(lim * 0.4))} … ${rawTxt.slice(-Math.floor(lim * 0.6))}`;
         return `${who}: ${txt}`;
     }).join('\n\n');
-    const notesHint = (st?.notes || []).length ? `Активные задумки сюжета: ${st.notes.slice(-3).map(n => n.text).join('; ')}.` : '';
-    const avoidPrev = prevActions.length ? `\n— НЕ повторяй предыдущие варианты (${prevActions.join('; ')}) — придумай 3 совершенно других хода!` : '';
+    const notesHint = (st?.notes || []).length ? `Active plot ideas: ${st.notes.slice(-3).map(n => n.text).join('; ')}.` : '';
+    const avoidPrev = prevActions.length ? `\n— Do NOT repeat the previous options (${prevActions.join('; ')}) — come up with 3 completely different moves!` : '';
     const poiLine = (st && livingWorldOn(st))
-        ? `\n— Если в сцене есть точки интереса, необычные детали окружения, фоновые персонажи или зацепки локации, хотя бы один вариант должен предлагать ${user} изучить, осмотреть или задействовать этот крючок мира.`
+        ? `\n— If the scene has points of interest, unusual details of the surroundings, background characters or location hooks, at least one option must invite ${user} to explore, examine or use this hook of the world.`
         : '';
     const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
-[OOC: Пауза в ролевой игре. Ты — автор этой истории.
-Последние сообщения текущей сцены:
+[OOC: Roleplay paused. You are the author of this story.
+The latest messages of the current scene:
+
 ${recentMsgs}
 ${notesHint}
 
-Предложи три возможных варианта следующего хода для игрока (${user}) — что может сделать или сказать САМА ${user} прямо сейчас в ответ на концовку последнего сообщения:
-<!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->
-Требования к вариантам:
-— Все 3 варианта — это действия и реплики САМОЙ ${user} (что сделает или скажет ${user}), а НЕ других персонажей по отношению к ней! Никаких «протянуть ${user}», «спросить у ${user}», «посмотреть на ${user}» — действует только сама ${user}.
-— Три варианта должны существенно отличаться друг от друга по смыслу и тону (не быть перефразировкой одной мысли).
-— Каждый вариант ведёт сцену в другое русло: сочетай разные формы (прямая речь от ${user}, физическое действие или жест, пауза/молчание, смена темы, неожиданная реакция).${poiLine}${avoidPrev}
-— Формулируй кратко (1–2 фразы), чтобы ${user} могла выбрать вариант как свой следующий ход.
-Ответь ТОЛЬКО строкой в формате <!--ACTIONS: вариант 1 | вариант 2 | вариант 3-->]`;
+Suggest three possible options for the next move of the player (${user}) — what ${user} HERSELF could do or say right now in response to the ending of the last message. Write the options in the language of the roleplay:
+<!--ACTIONS: option 1 | option 2 | option 3-->
+Requirements:
+— All 3 options are actions and lines of ${user} HERSELF (what ${user} will do or say), NOT other characters' actions towards her! No «hand something to ${user}», «ask ${user}», «look at ${user}» — only ${user} acts.
+— The three options must differ substantially in meaning and tone (not rephrasings of one thought).
+— Each option takes the scene in a different direction: mix forms (direct speech by ${user}, a physical action or gesture, a pause/silence, a change of topic, an unexpected reaction).${poiLine}${avoidPrev}
+— Keep them short (1–2 phrases) so ${user} can pick an option as her next move.
+Reply ONLY with a line in the format <!--ACTIONS: option 1 | option 2 | option 3-->]`;
 
     toastr.info('Придумываю варианты действий…', '💡 Подсказки');
     try {
@@ -3518,6 +3756,7 @@ async function think(manual = false) {
     if (!ctx().chat?.length) return;
 
     const chatIdAtStart = ctx().chatId;
+    try { nnbSyncFromHeaders(st); } catch (e) { /* ignore */ }
     busy = true;
     let afterBusy = null;
     setStatus('Модель листает блокнот…');
@@ -3530,12 +3769,19 @@ async function think(manual = false) {
         let tpl = ensureSections(s.thinkPrompt);
         // Задумки в размышлении: «полностью» — всегда; ручное 🪶 — всегда (это и есть вызов по требованию);
         // «по капле» — только когда задумок мало (пополнить) или какую-то уже подсказали рассказчику (проверить, сбылась ли — DONE)
-        const dripD = st.direction?.notes === 'drip' ? nnbDripState(st) : null;
+        const dripD = (st.direction?.notes === 'drip' || st.direction?.notes === 'director') ? nnbDripState(st) : null;
         const notesInThink = st.direction?.notes === true || manual
             || (dripD && ((st.notes || []).filter(n => !n.ff).length < 3 || dripD.sinceThink));
         if (!notesInThink) {
-            tpl = tpl.replace(/Задумки на будущее[\s\S]*?(?=Ответь ТОЛЬКО командами)/, '');
+            tpl = tpl.replace(/(?:Задумки на будущее|Ideas for the future)[\s\S]*?(?=Ответь ТОЛЬКО командами|Reply ONLY with commands)/, '');
         } else if (dripD) dripD.sinceThink = false;
+        if (notesInThink && st.direction?.notes === 'director') {
+            const bal = nnbDirectorBalance(st).map(b => `${b.id} «${b.name}»: played ${b.pct}%, target ${b.target}%`).join('; ');
+            const dirCmd = `Director: story lines — ${bal}. Invent new ideas first of all for the lines that lag behind their target. Format: ADD [line id]: the gist of the scene (genre, intensity N/5); genres: ${NNB_DIR_GENRES.join('/')}. A played idea — DONE #number.`;
+            tpl = /(?:Команды|Commands): ADD \[план\|вопрос\|идея\]: (?:текст|text)[^\n]*/.test(tpl)
+                ? tpl.replace(/(?:Команды|Commands): ADD \[план\|вопрос\|идея\]: (?:текст|text)[^\n]*/, `${dirCmd}\nCommands: ADD [line id]: text | DONE #number | DROP #number`)
+                : tpl.replace('{{notes}}', `{{notes}}\n${dirCmd}`);
+        }
         const raw = await quietGenerate(fillTemplate(tpl, notesInThink ? st.notes : [], buildDirection(st), buildIntrigueSection(st), buildNpcSection(st), buildArcSection(st), buildTimeSectionFull(st), [buildWardrobeSection(st), buildMapSection(st)].filter(Boolean).join('\n')));
         if (ctx().chatId !== chatIdAtStart) return; // чат сменили, пока модель думала
         st.lastRaw = String(raw ?? '');
@@ -3609,6 +3855,7 @@ function ensureSections(tpl) {
     if (!missing.length) return tpl;
     const block = missing.map(k => `{{${k}}}`).join('\n\n') + '\n\n';
     let at = tpl.lastIndexOf('Ответь ТОЛЬКО');
+    if (at < 0) at = tpl.lastIndexOf('Reply ONLY');
     if (at < 0) at = tpl.lastIndexOf('NONE');
     if (at < 0) return tpl + '\n\n' + block;
     const lineStart = tpl.lastIndexOf('\n', at) + 1;
@@ -3815,19 +4062,19 @@ function answerLines(raw) {
 // ---------- Перемотка ⏩ ----------
 
 function fastForwardPrompt(st) {
-    const parts = ['[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — автор этой истории. Игрок нажал «перемотку»: текущая сцена исчерпала себя, пора перейти к следующему событию. Перечитай чат и выбери самое органичное продолжение — то, что естественно вытекает из происходящего и давно просится в историю.'];
+    const parts = ['[OOC: Roleplay paused. You are NOT writing a character reply now. You are the author of this story. The player pressed «fast-forward»: the current scene has run its course, it is time to move to the next event. Reread the chat and pick the most organic continuation — the one that follows naturally from what is happening and has long been asking to enter the story.'];
     const dir = buildDirection(st);
     if (dir) parts.push(dir);
-    parts.push('Задумки в блокноте:\n' + formatNotes(st.notes));
-    if (st.direction.intrigues && st.intrigues.length) parts.push('Тайны (можно дать новую улику или повод):\n' + formatIntrigues(st.intrigues));
+    parts.push('Ideas in the notebook:\n' + formatNotes(st.notes));
+    if (st.direction.intrigues && st.intrigues.length) parts.push('Secrets (you may give a new clue or occasion):\n' + formatIntrigues(st.intrigues));
     if (st.direction.time && st.time.date) {
-        const up = upcoming(st, 30).map(h => `${h.name} — ${h.ongoing ? 'идёт сейчас' : h.inDays === 0 ? 'сегодня' : `через ${daysWord(h.inDays)}`}`);
-        parts.push(`Сейчас в истории: ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` + (up.length ? `\nБлижайшие праздники и даты: ${up.join('; ')}.` : ''));
+        const up = upcoming(st, 30).map(h => `${h.name} — ${h.ongoing ? 'ongoing now' : h.inDays === 0 ? 'today' : `in ${daysWord(h.inDays)}`}`);
+        parts.push(`Now in the story: ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` + (up.length ? `\nUpcoming holidays and dates: ${up.join('; ')}.` : ''));
     }
-    parts.push(`Ответь ровно тремя строками, без пояснений:
-NEXT: номер задумки (#3), номер тайны (T2), HOLIDAY — праздник или день рождения из календаря, или NEW — своё событие
-SKIP: сколько дней пройдёт до следующей сцены (0 — в тот же день, просто позже)
-SCENE: с чего начнётся следующая сцена — обстановка и событие в 1–2 предложениях, без реплик и чувств персонажей]`);
+    parts.push(`Reply with exactly three lines, no explanations:
+NEXT: idea number (#3), secret number (T2), HOLIDAY — a holiday or birthday from the calendar, or NEW — your own event
+SKIP: how many days pass before the next scene (0 — the same day, just later)
+SCENE: how the next scene begins — setting and event in 1–2 sentences in Russian, without the characters' lines and feelings]`);
     return parts.join('\n\n');
 }
 
@@ -3878,18 +4125,18 @@ async function offscreenCutaway() {
 
     const rosterBrief = targetList.slice(0, 8).map(h => {
         const parts = [`• ${h.name}: ${h.card || 'знакомый персонаж'}`];
-        if (h.status) parts.push(`(последний статус: ${h.status})`);
-        if (h.dream) parts.push(`(личная цель/мечта: ${h.dream})`);
+        if (h.status) parts.push(`(last status: ${h.status})`);
+        if (h.dream) parts.push(`(personal goal/dream: ${h.dream})`);
         return parts.join(' ');
     }).join('\n');
 
     const whenStr = (st.direction.time && st.time?.date)
-        ? `Сейчас в истории: ${weekday(st.time.date)}, ${formatDate(st.time.date)}${placeLine(st) ? `, ${placeLine(st)}` : ''}. `
+        ? `Now in the story: ${weekday(st.time.date)}, ${formatDate(st.time.date)}${placeLine(st) ? `, ${placeLine(st)}` : ''}. `
         : '';
 
-    const promptText = `${FF_MARKER} игрок нажал кнопку «🎬 За кадром». ${whenStr}В следующем ответе сделай атмосферную параллельную зарисовку «Тем временем за кадром…» и коротко (по 1 маленькому абзацу из 2–3 живых предложений на каждого) покажи, чем прямо в эту самую минуту заняты остальные герои, которых сейчас нет рядом с ${names.user} в текущей сцене:
+    const promptText = `${FF_MARKER} the player pressed the «🎬 Off-screen» button. ${whenStr}In the next reply write an atmospheric parallel vignette «Тем временем за кадром…» and briefly (one small paragraph of 2–3 lively sentences each) show what, at this very minute, the other characters who are not next to ${names.user} in the current scene are busy with:
 ${rosterBrief}
-Покажи их собственную жизнь за кадром: их текущие дела, быт, работу, личные стремления, разговоры друг с другом или мимолётную мысль о происходящем, не телепортируя их в комнату к ${names.user}. В конце зарисовки плавно верни фокус обратно в текущую сцену к ${names.user}. Пиши художественно, как часть повествования.]`;
+Show their own off-screen life: their current affairs, everyday life, work, personal aims, conversations with each other or a fleeting thought about what is happening, without teleporting them into the room with ${names.user}. At the end of the vignette smoothly return the focus to the current scene with ${names.user}. Write it as fiction, as part of the narration.]`;
 
     setSceneAdvancePrompt(promptText);
     toastr.info(
@@ -3933,12 +4180,12 @@ async function nextDayWithDivination() {
         updateInjection();
     }
 
-    const whenStr = nextDayLabel ? ` Наступает новый день: ${nextDayLabel}.` : '';
-    const promptText = `${FF_MARKER} игрок нажал кнопку «🔮 Новый день + гадание». Переходим к следующему дню.${whenStr}
-Но перед переходом к основной сцене нового дня обязательно вставь гадание от ${oracleName} (на картах Таро / расклад):
-1) Одно развёрнутое гадание побольше — на главное событие, которое является самым интересным и интригующим из того, что ты можешь придумать для сюжета (подано именно как образное гадание с картами и намёками, а не сухой пересказ).
-2) Коротко по остальным персонажам — по 1–2 предложения на каждого в формате гадания${rosterBrief ? `:\n${rosterBrief}` : '.'}
-После гадания плавно переходи к следующему дню${nextDayLabel ? ` (${nextDayLabel})` : ''}. Пиши художественно, как обычный пост ролевой, не упоминай кнопку или перемотку.]`;
+    const whenStr = nextDayLabel ? ` A new day begins: ${nextDayLabel}.` : '';
+    const promptText = `${FF_MARKER} the player pressed the «🔮 New day + fortune-telling» button. Moving to the next day.${whenStr}
+But before moving to the main scene of the new day, be sure to insert a fortune-telling by ${oracleName} (tarot cards / a spread):
+1) One larger detailed reading — about the main event, the most interesting and intriguing thing you can come up with for the plot (presented as figurative fortune-telling with cards and hints, not a dry retelling).
+2) Briefly about the other characters — 1–2 sentences each in the form of a reading${rosterBrief ? `:\n${rosterBrief}` : '.'}
+After the reading smoothly move to the next day${nextDayLabel ? ` (${nextDayLabel})` : ''}. Write it as fiction, like a normal roleplay post; don't mention the button or the fast-forward.]`;
 
     setSceneAdvancePrompt(promptText);
     toastr.info(
@@ -3974,9 +4221,9 @@ async function fastForward() {
             moved = ff.skip;
             // holidayStep отключён в фоне — запускается вручную из вкладки «События»
         }
-        const scene = ff.scene || 'самое органичное следующее событие: задумка из твоего блокнота, тайна, заявленная линия или приближающаяся дата';
-        const when = moved ? ` Между сценами прошло ${daysWord(moved)} — сейчас ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` : (ff.skip > 0 ? ` Между сценами прошло ${daysWord(ff.skip)}.` : '');
-        text = `${FF_MARKER} игрок просит перейти к следующему событию. Сверни текущую сцену одной-двумя фразами, без пересказа, и сразу начни новую: ${scene}${when} Пиши как обычный ответ, не упоминай перемотку.]`;
+        const scene = ff.scene || 'the most organic next event: an idea from your notebook, a secret, a declared story line or an approaching date';
+        const when = moved ? ` Between the scenes ${daysWord(moved)} passed — now ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` : (ff.skip > 0 ? ` Between the scenes ${daysWord(ff.skip)}.` : '');
+        text = `${FF_MARKER} the player asks to move to the next event. Wrap up the current scene in a phrase or two, without retelling, and start the new one right away: ${scene}${when} Write it as a normal reply; don't mention the fast-forward.]`;
         summary = moved ? `📅 прошло ${daysWord(moved)} → ${formatDate(st.time.date)}` : '';
         if (!s.hideSpoilers && ff.scene) summary = [ff.scene, summary].filter(Boolean).join('<br>');
         return true;
@@ -4144,17 +4391,17 @@ function buildWardrobeSection(st) {
     if (st.direction?.wardrobe) {
         if (w.active?.status === 'worn') {
             const look = w.active.look;
-            parts.push(`Гардероб. Наряд {{user}}: «${look.title}»${w.active.accent ? ` + ${w.active.accent.title}` : ''}${w.active.occasion ? ` (для: ${w.active.occasion})` : ''}.
-OUTFITDONE — если сцена, ради которой выбирался наряд, уже прошла или {{user}} уже переоделся(-ась).`);
+            parts.push(`Wardrobe. {{user}}'s outfit: «${look.title}»${w.active.accent ? ` + ${w.active.accent.title}` : ''}${w.active.occasion ? ` (for: ${w.active.occasion})` : ''}.
+OUTFITDONE — if the scene the outfit was chosen for is over or {{user}} has already changed clothes.`);
         } else if (!w.active) {
             const recent = w.history.slice(-3).map(h => h.occasion).filter(Boolean).join('; ');
-            parts.push(`Гардероб. Если в ближайшей сцене или скоро по сюжету важен наряд {{user}} (свидание, вечеринка, праздник, ужин с родными, важная встреча, собеседование) и образ для неё ещё не выбирали — OUTFIT: повод (коротко, например «ужин у родителей на День благодарения»). Только когда наряд действительно имеет значение.${recent ? ` Недавно уже выбирали образы для: ${recent}.` : ''}`);
+            parts.push(`Wardrobe. If {{user}}'s outfit matters in the next scene or soon in the plot (a date, a party, a holiday, dinner with family, an important meeting, an interview) and no look has been chosen for it yet — OUTFIT: the occasion in Russian (short, e.g. «ужин у родителей на День благодарения»). Only when the outfit really matters.${recent ? ` Looks were recently chosen for: ${recent}.` : ''}`);
         }
     }
     if ((st.direction?.wardrobe || st.direction?.gacha || accentsOn(st)) && st.direction?.autoBoxItems === true) {
-        parts.push(`Шкатулка {{user}}: ${w.box.length ? boxList(st, true) : '(пусто)'}.
-Правила: записывай в ITEM ТОЛЬКО долговечные значимые вещи, оставшиеся у {{user}} (украшения, духи, аксессуары, книги, ключи, письма, артефакты). ЗАПРЕЩЕНО писать еду/напитки/мусор и вещи, которые уже съели, отдали или потеряли (для них пиши DROP_ITEM: точное название).
-Формат: ITEM [духи|аксессуар|украшение|находка]: название | 1 фраза по-русски | 5–10 слов по-английски без людей | откуда вещь.`);
+        parts.push(`{{user}}'s keepsake box: ${w.box.length ? boxList(st, true) : '(empty)'}.
+Rules: put into ITEM ONLY lasting meaningful things that stayed with {{user}} (jewellery, perfume, accessories, books, keys, letters, artefacts). NEVER food/drinks/rubbish or things already eaten, given away or lost (for those write DROP_ITEM: exact name).
+Format: ITEM [духи|аксессуар|украшение|находка]: name in Russian | 1 phrase in Russian | 5–10 words in English, no people | where the item came from (Russian).`);
     }
     return parts.join('\n');
 }
@@ -4165,7 +4412,7 @@ function auraInjection(st) {
     const len = ctx().chat?.length ?? 0;
     const alive = st.time.date && au.until ? st.time.date <= au.until : len <= (au.untilMsg || 0);
     if (!alive) return '';
-    return `[Талисман: ${storyNames().user} носит ${au.title}${au.desc ? ` — ${au.desc}` : ''}. Вокруг держится лёгкий флёр${au.effects ? `: ${au.effects}` : ''}. Едва уловимо, на уровне настроения и совпадений; никто не говорит о магии прямо.]`;
+    return `[Talisman: ${storyNames().user} wears ${au.title}${au.desc ? ` — ${au.desc}` : ''}. A faint aura lingers around her${au.effects ? `: ${au.effects}` : ''}. Barely perceptible, on the level of mood and coincidences; nobody speaks of magic directly.]`;
 }
 
 // ================= Наряд из гардероба снимается сам, когда он уже не к месту =================
@@ -4227,7 +4474,7 @@ function wardrobeInjection(st, mode = 'all') {
     const user = storyNames().user;
     if (a?.status === 'choosing') {
         if (mode !== 'static') {
-            out.push(`[${user} сейчас выбирает, что надеть${a.occasion ? ` (${a.occasion})` : ''}. Не описывай, во что ${user} одет(а), — это решится выбором.]`);
+            out.push(`[${user} is choosing what to wear right now${a.occasion ? ` (${a.occasion})` : ''}. Don't describe what ${user} is wearing — the choice will decide it.]`);
         }
     } else if (a?.status === 'worn') {
         const look = a.look;
@@ -4236,41 +4483,41 @@ function wardrobeInjection(st, mode = 'all') {
         if (wornAge <= 2) {
             if (mode !== 'static') {
                 const effects = look.effects
-                    ? `Скрытые последствия этого выбора (покажи один раз при встрече, не повторяя в каждом посте): ${look.effects}.`
-                    : 'Персонажи могут заметить обновку в начале встречи.';
-                let text = `[Наряд ${user}${a.occasion ? ` (${a.occasion})` : ''}: «${look.title}» — ${String(look.desc || '').replace(/[.\s]+$/, '')}. ${effects}`;
+                    ? `Hidden consequences of this choice (show them once at the meeting, don't repeat in every post): ${look.effects}.`
+                    : 'Characters may notice the new outfit at the start of the meeting.';
+                let text = `[${user}'s outfit${a.occasion ? ` (${a.occasion})` : ''}: ${String(look.desc || '').replace(/[.\s]+$/, '')}. The outfit has no name — never write a name in quotes. ${effects}`;
                 acList.forEach(ac => {
                     const k = ACCENT_KINDS[ac.kind] || ACCENT_KINDS.accessory;
-                    text += `\nШтрих к образу (${k.name}): «${ac.title}»${ac.desc ? ` — ${String(ac.desc).replace(/[.\s]+$/, '')}` : ''}${ac.origin ? ` (${ac.origin})` : ''}.`;
-                    if (ac.effects) text += ` Скрытые последствия: ${ac.effects}.`;
-                    if (ac.kind === 'perfume') text += ' Аромат ощущается только вблизи.';
+                    text += `\nFinishing touch (${k.name}): «${ac.title}»${ac.desc ? ` — ${String(ac.desc).replace(/[.\s]+$/, '')}` : ''}${ac.origin ? ` (${ac.origin})` : ''}.`;
+                    if (ac.effects) text += ` Hidden consequences: ${ac.effects}.`;
+                    if (ac.kind === 'perfume') text += ' The scent can only be noticed up close.';
                 });
                 out.push(text + ']');
             }
         } else if (mode !== 'dynamic') {
             // Название наряда из гардероба — служебное: если его давать в постоянной подсказке, модель вставляет «Название» в каждый пост
             const acDescs = acList.map(ac => String(ac.desc || ac.title || '').replace(/[.\s]+$/, '')).filter(Boolean).join('; ');
-            out.push(`[Во что сейчас одет(а) ${user} (для справки, все это уже видели): ${String(look.desc || '').replace(/[.\s]+$/, '')}${acDescs ? `; детали: ${acDescs}` : ''}. Не описывай одежду ${user} заново и не упоминай её без прямого повода в сцене; у наряда нет названия — никаких названий в кавычках.]`);
+            out.push(`[What ${user} is wearing now (reference only, everyone has already seen it): ${String(look.desc || '').replace(/[.\s]+$/, '')}${acDescs ? `; details: ${acDescs}` : ''}. Don't describe ${user}'s clothes again and don't mention them without a direct reason in the scene; the outfit has no name — no names in quotes.]`);
         }
     }
     if (mode === 'static') {
         const equipped = personalBoxItems(st).filter(x => (st.wardrobe.equipped || []).includes(x.id));
         if (equipped.length) {
-            out.push(`[С собой у ${user}: ${equipped.map(x => `«${x.title}»`).join(', ')} — упоминать только по прямому поводу.]`);
+            out.push(`[${user} has with her: ${equipped.map(x => `«${x.title}»`).join(', ')} — mention only when there is a direct reason.]`);
         }
         return out.join('\n');
     }
     const equipped = mode === 'dynamic' ? [] : personalBoxItems(st).filter(x => (st.wardrobe.equipped || []).includes(x.id));
     if (equipped.length) {
-        out.push(`[С собой у ${user}: ${equipped.map(x => `«${x.title}»`).join(', ')} — упоминать только по прямому поводу.]`);
+        out.push(`[${user} has with her: ${equipped.map(x => `«${x.title}»`).join(', ')} — mention only when there is a direct reason.]`);
     }
     const counter = shopCounterItems(st);
     if (counter.length) {
         counter.forEach(x => ensureCounterPrice(x, st));
-        out.push(`[🏪 Витрина / Прилавок лавки ${user} — товары НА ПРОДАЖУ для посетителей (личные вещи ${user} из личной шкатулки посетителям НЕ продаются!): ${counter.map(x => `«${x.title}» — цена на ценнике: ${formatMoney(x.sellPrice, st)}${x.desc ? ` (${x.desc})` : ''}${x.hook ? ` [история вещи: ${x.hook}]` : ''}`).join('; ')}. Посетители и NPC могут рассматривать эти товары на прилавке, расспрашивать о них, торговаться и покупать их. Когда посетитель или NPC в твоём ответе покупает товар с прилавка, обязательно допиши в самом конце ответа скрытую метку <!--SOLD: точное название товара--> — плагин сам уберёт товар с прилавка и зачислит выручку в кошелёк ${user}.]`);
+        out.push(`[🏪 ${user}'s shop counter — goods FOR SALE to visitors (${user}'s personal items from her own box are NOT for sale!): ${counter.map(x => `«${x.title}» — price tag: ${formatMoney(x.sellPrice, st)}${x.desc ? ` (${x.desc})` : ''}${x.hook ? ` [the item's story: ${x.hook}]` : ''}`).join('; ')}. Visitors and NPCs may look at these goods, ask about them, haggle and buy them. When a visitor or NPC buys an item from the counter in your reply, add the hidden tag <!--SOLD: exact item name--> at the very end of the reply — the plugin removes the item from the counter and credits the money to ${user}'s wallet.]`);
     }
     if (st.wallet && typeof st.wallet.balance === 'number') {
-        out.push(`[💰 Кошелёк ${user}: сейчас ${formatMoney(st.wallet.balance, st)}.]`);
+        out.push(`[💰 ${user}'s wallet: ${formatMoney(st.wallet.balance, st)} now.]`);
     }
     const aura = auraInjection(st);
     if (aura) out.push(aura);
@@ -4408,12 +4655,12 @@ async function generateStarterAccentsOnly() {
     const names = storyNames();
     const sName = st.time?.date ? season(st.time.date).name : 'осень';
     await withBusy('Создаём 5 духов и 5 аксессуаров…', async s2 => {
-        const prompt = `[OOC: Пауза в ролевой игре. Придумай для ${names.user} (сезон: ${sName}) 5 вариантов духов и 5 стильных аксессуаров/украшений для шкафа.
-Ответь строго 10 строками без пояснений:
-PERF_ITEM: название духов | описание аромата по-русски в 1 предложении | коротко по-английски как выглядит флакон духов (elegant glass perfume bottle...)
-(5 строк PERF_ITEM)
-ACC_ITEM: название аксессуара | описание украшения, часов, шарфа или сумочки по-русски в 1 предложении | коротко по-английски как выглядит предмет (vintage silver locket...)
-(5 строк ACC_ITEM)]`;
+        const prompt = `[OOC: Roleplay paused. Come up with, for ${names.user} (season: ${sName}) 5 perfume options and 5 stylish accessories/jewellery for the wardrobe.
+Reply with exactly 10 lines, no explanations (names and descriptions in Russian):
+PERF_ITEM: perfume name | description of the scent in 1 sentence | short English description of how the bottle looks (elegant glass perfume bottle...)
+(5 PERF_ITEM lines)
+ACC_ITEM: accessory name | description of the jewellery, watch, scarf or handbag in 1 sentence | short English description of how the item looks (vintage silver locket...)
+(5 ACC_ITEM lines)]`;
         const raw = await quietGenerate(prompt);
         applyWorldCreationResult(s2, s2.worldProfile || {}, raw);
         if (wantImages() && canDrawScene()) {
@@ -4439,52 +4686,52 @@ function wardrobePrompt(st, occasion, exclude = []) {
     const customAppEn = st?.wardrobe?.customAppearanceEn ? String(st.wardrobe.customAppearanceEn).trim() : '';
     const worldApp = st?.worldProfile?.appearance ? String(st.worldProfile.appearance).trim() : '';
     const personaContextLine = [
-        cleanPersona ? `Описание и внешность ${names.user} из анкеты Персоны: «${cleanPersona}».` : '',
-        worldApp ? `Внешность из карточки мира: «${worldApp}».` : '',
-        customAppEn ? `Закреплённые английские теги внешности ${names.user}: «${customAppEn}».` : '',
+        cleanPersona ? `Description and looks of ${names.user} from the Persona profile: «${cleanPersona}».` : '',
+        worldApp ? `Looks from the world card: «${worldApp}».` : '',
+        customAppEn ? `Pinned English appearance tags of ${names.user}: «${customAppEn}».` : '',
     ].filter(Boolean).join(' ');
 
     const lines = [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и подбираешь наряд, как в визуальной новелле.',
-        `${names.user} собирается: ${occasion || 'в ближайшую сцену, где важен наряд (пойми по чату, куда именно)'}.`,
-        when ? `Когда и где: ${when}.` : '',
-        personaContextLine ? `ВАЖНО — ТОЧНАЯ ВНЕШНОСТЬ ${names.user} (строго сохраняй её цвет и длину волос, цвет глаз, рост и комплекцию!): ${personaContextLine}` : '',
-        favs.length ? `Ключевые фавориты в истории: ${favs.join(', ')}.` : '',
+        '[OOC: Roleplay paused. You are NOT writing a character reply now. You are the author\'s assistant picking an outfit, like in a visual novel. Write all names and descriptions in Russian (EN lines in English).',
+        `${names.user} is going to: ${occasion || 'the next scene where the outfit matters (work out from the chat where exactly)'}.`,
+        when ? `When and where: ${when}.` : '',
+        personaContextLine ? `IMPORTANT — EXACT LOOKS OF ${names.user} (strictly keep her hair colour and length, eye colour, height and build!): ${personaContextLine}` : '',
+        favs.length ? `Key favourites in the story: ${favs.join(', ')}.` : '',
         buildDirection(st),
-        avoid.length ? `Не повторяй эти образы: ${avoid.slice(0, 18).join(', ')}.` : '',
-        `Предложи 5 разных образов для ${names.user}: от спокойного и уютного до смелого и эффектного. Учитывай внешность и стиль ${names.user}, погоду, сезон, повод и то, кто там будет.`,
+        avoid.length ? `Don't repeat these looks: ${avoid.slice(0, 18).join(', ')}.` : '',
+        `Suggest 5 different looks for ${names.user}: from calm and cosy to bold and striking. Take into account the looks and style of ${names.user}, the weather, season, occasion and who will be there.`,
         (Array.isArray(st.trends) && st.trends.length)
-            ? `🔥 ВЛИЯНИЕ МОДЫ И ТРЕНДОВ СЕЗОНА: сейчас в городе в тренде: ${st.trends.map(tr => `«${tr.title}» [${tr.category}] (${tr.desc})`).join('; ')}. Обязательно сделай так, чтобы 1–2 из предлагаемых нарядов (LOOK) и хотя бы 1 из штрихов к образу (ACCENT) обыгрывали или включали в себя актуальные тренды сезона (отметь в описании, что это тренд сезона, и пропиши в EFFECT живую реакцию персонажей в зависимости от их вкуса и характера)!`
+            ? `🔥 FASHION AND SEASON TRENDS: trending in the city now: ${st.trends.map(tr => `«${tr.title}» [${tr.category}] (${tr.desc})`).join('; ')}. Make sure that 1–2 of the suggested outfits (LOOK) and at least 1 finishing touch (ACCENT) play on or include the current season trends (mention in the description that it is a season trend, and write in EFFECT the characters' lively reaction depending on their taste and personality)!`
             : '',
-        'К каждому образу придумай скрытые последствия — как на него отреагируют конкретные персонажи. Игрок их не увидит, пока сцена не пройдёт. Последствия у всех образов разные: не бывает образа, который нравится всем, и образа, который не нравится никому. Реакции — в характере персонажей и в духе жанра.',
+        'For each look invent hidden consequences — how specific characters will react to it. The player won\'t see them until the scene is over. Consequences differ between looks: no look pleases everyone and no look pleases no one. Reactions stay in character and in the spirit of the genre.',
     ];
     if (accents) {
-        lines.push(`Ещё предложи 4 штриха к образу — духи, макияж, аксессуар (украшение, сумочка, часы, шарф, заколка и т.п.) и мелочь в сумочке. ${wearableBox(st).length ? `Можно взять вещь из шкатулки ${names.user}: ${boxList(st)} — особенно если она к месту.` : ''}
-— Духи действуют в сцене и через память: аромат замечают вблизи, он о чём-то напоминает, может связаться с этим вечером.
-— Макияж — как ${names.user} выглядит лицом: смелая помада, лёгкие блёстки, стрелки, «почти без макияжа». Меняет то, как на неё смотрят в этой сцене.
-— Аксессуар — деталь, за которую цепляется взгляд и разговор; подарок, надетый при дарителе, тот обязательно заметит.
-— Мелочь в сумочке — то, что можно достать посреди сцены: леденцы, старый билет, блокнот, пластырь, фотография, ключ. Это крючок для сюжета: где-то она пригодится, выпадет или вызовет вопрос.
-У штрихов тоже скрытые последствия, разные по смыслу.`);
+        lines.push(`Also suggest 4 finishing touches — perfume, make-up, an accessory (jewellery, handbag, watch, scarf, hairpin etc.) and a small thing in the handbag. ${wearableBox(st).length ? `An item from the keepsake box of ${names.user}: ${boxList(st)} may be used — especially if it fits.` : ''}
+— Perfume works in the scene and through memory: the scent is noticed up close, it reminds of something, it may become tied to this evening.
+— Make-up — how ${names.user} looks in the face: bold lipstick, light glitter, eyeliner, «almost no make-up». It changes how people look at her in this scene.
+— An accessory is a detail that catches the eye and the conversation; a gift worn in front of the giver will surely be noticed.
+— A small thing in the handbag is something to take out mid-scene: candies, an old ticket, a notebook, a plaster, a photo, a key. It is a plot hook: somewhere it comes in handy, falls out or raises a question.
+The touches have hidden consequences too, different in meaning.`);
     }
     if (images) {
         if (settings().imgPromptWriterNote?.trim()) {
-            lines.push(`Инструкция автора для английских описаний художнику (APPEARANCE и EN): ${settings().imgPromptWriterNote.trim()}`);
+            lines.push(`The author's instruction for the English descriptions for the artist (APPEARANCE and EN): ${settings().imgPromptWriterNote.trim()}`);
         }
-        lines.push('Сначала одной строкой опиши точную внешность героини для художника по-английски (тегами Danbooru для NovelAI):');
-        lines.push(`APPEARANCE: точная внешность ${names.user} из анкеты Персоны по-английски — точный цвет и длина волос (hair color, hair length, hairstyle), точный цвет глаз (eye color), рост, тип фигуры и телосложение (body type, figure, breast size, waist, hips), тон кожи и заметные черты (НЕ выдумывай чужой цвет волос или глаз!)`);
-        lines.push('Затем по три строки на образ, без пояснений:');
-        lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
-        lines.push('EN: этот же наряд коротко по-английски, только одежда, обувь и причёска (БЕЗ тегов мимики, БЕЗ blush/shy/embarrassed)');
+        lines.push('First, in one line, describe the heroine\'s exact looks for the artist in English (Danbooru tags for NovelAI):');
+        lines.push(`APPEARANCE: the exact looks of ${names.user} from the Persona profile in English — exact hair colour and length (hair color, hair length, hairstyle), exact eye colour (eye color), height, body type and build (body type, figure, breast size, waist, hips), skin tone and notable features (do NOT invent another hair or eye colour!)`);
+        lines.push('Then three lines per look, no explanations:');
+        lines.push('LOOK: name of the look | what is worn, hairstyle, details — 1–2 sentences');
+        lines.push('EN: the same outfit briefly in English, only clothes, shoes and hairstyle (NO facial expression tags, NO blush/shy/embarrassed)');
     } else {
-        lines.push('Формат — по две строки на образ, без пояснений:');
-        lines.push('LOOK: название образа | что надето, причёска, детали — 1–2 предложения');
+        lines.push('Format — two lines per look, no explanations:');
+        lines.push('LOOK: name of the look | what is worn, hairstyle, details — 1–2 sentences');
     }
-    lines.push('EFFECT: Имя (+): как отреагирует; Имя (−): как отреагирует');
+    lines.push('EFFECT: Name (+): how they will react; Name (−): how they will react');
     if (accents) {
-        lines.push(images ? 'Затем по три строки на штрих:' : 'Затем по две строки на штрих:');
-        lines.push('ACCENT: духи|макияж|аксессуар|мелочь | название | описание в одном предложении');
-        if (images) lines.push('EN: этот же предмет коротко по-английски для художника: для духов — флакон (perfume bottle); для макияжа — макияж на лице персоны крупным планом (например: close-up beauty portrait of face, natural nose and facial proportions, wearing soft warm eyeshadow and wine-tinted lips, glasses); для аксессуара — украшение или предмет; для мелочи — небольшая вещица');
-        lines.push('EFFECT: последствия — кто как отреагирует; для мелочи — когда и как она всплывёт в сцене');
+        lines.push(images ? 'Then three lines per touch:' : 'Then two lines per touch:');
+        lines.push('ACCENT: духи|макияж|аксессуар|мелочь | name | description in one sentence');
+        if (images) lines.push('EN: the same item briefly in English for the artist: for perfume — the bottle (perfume bottle); for make-up — the make-up on the persona\'s face in close-up (e.g.: close-up beauty portrait of face, natural nose and facial proportions, wearing soft warm eyeshadow and wine-tinted lips, glasses); for an accessory — the jewellery or object; for the small thing — a small item');
+        lines.push('EFFECT: consequences — who reacts how; for the small thing — when and how it will surface in the scene');
     }
     return lines.filter(Boolean).join('\n') + ']';
 }
@@ -4673,12 +4920,40 @@ async function personaAvatarDataUrl() {
     }
 }
 
+// ===== ⏹ Полная остановка: всё, что ждёт ответа, обрывается сразу; запросы с сигналом отменяются и на сервере =====
+const NNB_STOP = { rejecters: new Set(), ctrls: new Set(), until: 0, epoch: 0 };
+function nnbStopError() { const e = new Error('Остановлено вручную'); e.nnbStopped = true; return e; }
+function nnbIsStopError(e) { return !!(e && (e.nnbStopped || e.name === 'AbortError' || /Остановлено вручную/.test(String(e?.message || '')))); }
+function nnbStopActive() { return Date.now() < NNB_STOP.until; }
+// Сигнал отмены для одного запроса (fetch / профиль Таверны); после ответа вызвать done()
+function nnbNewAbort() {
+    const ctrl = new AbortController();
+    NNB_STOP.ctrls.add(ctrl);
+    return { signal: ctrl.signal, ctrl, done: () => NNB_STOP.ctrls.delete(ctrl) };
+}
+function nnbStopAll() {
+    NNB_STOP.until = Date.now() + 5000; // повторы и следующие страницы главы в эти секунды тоже не стартуют
+    NNB_STOP.epoch++;
+    for (const c of NNB_STOP.ctrls) { try { c.abort(); } catch (e) { /* ignore */ } }
+    NNB_STOP.ctrls.clear();
+    for (const r of NNB_STOP.rejecters) { try { r(nnbStopError()); } catch (e) { /* ignore */ } }
+    NNB_STOP.rejecters.clear();
+    // фоновые генерации через основное подключение
+    try { ctx().stopGeneration?.(); } catch (e) { /* ignore */ }
+    try { if (typeof sceneDrawing !== 'undefined') sceneDrawing = false; } catch (e) { /* ignore */ }
+    try { if (typeof thinking !== 'undefined') thinking = false; } catch (e) { /* ignore */ }
+    try { setStatus?.('⏹ Остановлено'); } catch (e) { /* ignore */ }
+    try { toastr.info('Все генерации блокнота остановлены', 'Блокнот рассказчика'); } catch (e) { /* ignore */ }
+}
 function withTimeout(promise, ms, what) {
+    if (nnbStopActive()) return Promise.reject(nnbStopError());
     let t;
+    let rejStop = null;
     return Promise.race([
         promise,
         new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: нет ответа ${Math.round(ms / 1000)} сек.`)), ms); }),
-    ]).finally(() => clearTimeout(t));
+        new Promise((_, rej) => { rejStop = rej; NNB_STOP.rejecters.add(rej); }),
+    ]).finally(() => { clearTimeout(t); if (rejStop) NNB_STOP.rejecters.delete(rejStop); });
 }
 function imageSourceName() {
     const id = settings().imageSource;
@@ -4751,7 +5026,14 @@ async function imagesFetch(url, init) {
         return await fetch(url, init);
     } catch (e) {
         const viaProxy = '/proxy/' + url;
-        const res = await fetch(viaProxy, init).catch(() => null);
+        // Прокси Таверны — это запрос к самой Таверне: без её CSRF-токена сервер отвечает «Invalid CSRF token»
+        let csrf = {};
+        try {
+            const th = ctx().getRequestHeaders?.() || {};
+            const tok = th['X-CSRF-Token'] || th['x-csrf-token'];
+            if (tok) csrf = { 'X-CSRF-Token': tok };
+        } catch (e2) { /* ignore */ }
+        const res = await fetch(viaProxy, { ...init, headers: { ...(init?.headers || {}), ...csrf } }).catch(() => null);
         if (!res || res.status === 404) throw new Error('браузер не пустил запрос к сайту картинок. Включи прокси Таверны: в config.yaml поставь enableCorsProxy: true и перезапусти Таверну');
         return res;
     }
@@ -4890,7 +5172,7 @@ async function withSharedKeyRetry(taskFn, label = 'генерация', maxAttem
         } catch (err) {
             lastErr = err;
             const isHiddenTab = typeof document !== 'undefined' && document.visibilityState === 'hidden';
-            if (isPermanentAuthOrConfigError(err) || (!isHiddenTab && attempt >= maxAttempts) || attempt >= maxAttempts + 6) {
+            if (nnbIsStopError(err) || nnbStopActive() || isPermanentAuthOrConfigError(err) || (!isHiddenTab && attempt >= maxAttempts) || attempt >= maxAttempts + 6) {
                 throw err;
             }
             const jitterMs = Math.floor(Math.random() * 1400);
@@ -4907,7 +5189,9 @@ async function withSharedKeyRetry(taskFn, label = 'генерация', maxAttem
                     { escapeHtml: false, timeOut: waitMs + 400 }
                 );
             }
+            const ep = NNB_STOP.epoch;
             await bgSafeSleep(waitMs);
+            if (NNB_STOP.epoch !== ep) throw nnbStopError();
             if (typeof sceneDrawing !== 'undefined' && sceneDrawing) {
                 sceneDrawingStartedAt = Date.now();
             }
@@ -5456,7 +5740,7 @@ async function ensureHeroineAppearanceEnForNai(st, activeWardrobe = null) {
     // Если есть описание Персоны на русском, а закреплённых английских тегов ещё нет — один раз переводим внешность Персоны в точные теги Danbooru для NovelAI!
     if (sourceText && /[а-яА-ЯёЁ]/.test(sourceText)) {
         try {
-            const trPrompt = `[OOC: Выпиши из описания персонажа ТОЛЬКО физическую внешность (пол, возраст adult, точный цвет и длина волос, причёска, цвет глаз, рост, тип фигуры, размер груди, талия/бёдра, тон кожи, очки/родинки/особые приметы) и переведи её в короткие точные английские теги Danbooru через запятую для NovelAI. НЕ пиши характер, биографию и одежду. Выдай ТОЛЬКО одну строку тегов на английском без вступлений:\n«${sourceText}»]`;
+            const trPrompt = `[OOC: Extract ONLY the physical appearance from the character description (sex, age adult, exact hair colour and length, hairstyle, eye colour, height, body type, breast size, waist/hips, skin tone, glasses/moles/distinctive marks) and turn it into short exact English Danbooru tags, comma-separated, for NovelAI. Do NOT write personality, biography or clothes. Output ONLY one line of English tags, no intro:\n«${sourceText}»]`;
             const rawEn = await quietGenerateImagePrompt(trPrompt);
             const cleanedEn = String(rawEn || '').replace(/^APPEARANCE\s*[:：—–-]\s*/i, '').replace(/[\r\n]+/g, ', ').trim();
             if (cleanedEn && /[a-zA-Z]{3,}/.test(cleanedEn)) {
@@ -7929,8 +8213,8 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     // 1) OLDBlock: последние 2 промпта ТОЛЬКО для сохранения внешности и одежды (с жёстким запретом тащить старую локацию!)
     const oldPrompts = collectRecentScenePrompts(st, chat, targetIdx, 2);
     const oldBlock = oldPrompts.length
-        ? `[СПРАВКА ПО ОДЕЖДЕ И ВНЕШНОСТИ ИЗ ПРОШЛЫХ КАДРОВ (OLDBlock)]\nИспользуй эти прошлые промпты для сохранения ОДЕЖДЫ и ПРИМЕТ персонажей (звериные уши, хвосты, рога, крылья, шрамы, очки, причёска) — если они не переодевались. ⚠️ Исключение: каноничный тег Danbooru и цвет волос/глаз героя, у которого в «Справке по внешности NPC» есть канон-тег, бери ТОЛЬКО из справки — если прошлый кадр им противоречит, прав не он, а справка. У ОРИГИНАЛЬНЫХ героев (без канон-тега) ничего из их внешности не теряй!\n⚠️ СТРОЖАЙШИЙ ЗАПРЕТ НА КОПИРОВАНИЕ СТАРОЙ ЛОКАЦИИ: НИКОГДА не копируй из OLDBlock старое помещение, улицу или заведение (например, bar, counter, tavern, cafe, hospital, street, office), если в ГЛАВНОМ ЦЕЛЕВОМ ПОСТЕ ниже сцена уже происходит в другом месте (например, дома, в комнате, в спальне, на кухне, в коридоре)! Фон и локацию бери СТРОГО из ГЛАВНОГО ЦЕЛЕВОГО ПОСТА:\n` +
-          oldPrompts.map((p, idx) => `${idx + 1}) Прошлый кадр: ${p}`).join('\n')
+        ? `[REFERENCE: CLOTHES AND LOOKS FROM PREVIOUS FRAMES (OLDBlock)]\nUse these previous prompts to keep the characters' CLOTHES and FEATURES (animal ears, tails, horns, wings, scars, glasses, hairstyle) — unless they changed clothes. ⚠️ Exception: for a character who has a canon tag in the «NPC appearance reference», take the canonical Danbooru tag and hair/eye colour ONLY from the reference — if a previous frame contradicts it, the reference wins. For ORIGINAL characters (no canon tag) don't lose anything of their looks!\n⚠️ STRICTLY FORBIDDEN TO COPY THE OLD LOCATION: NEVER copy an old room, street or venue from the OLDBlock (e.g. bar, counter, tavern, cafe, hospital, street, office) if in the MAIN TARGET POST below the scene already takes place somewhere else (e.g. at home, in a room, bedroom, kitchen, hallway)! Take the background and location STRICTLY from the MAIN TARGET POST:\n` +
+          oldPrompts.map((p, idx) => `${idx + 1}) Previous frame: ${p}`).join('\n')
         : '';
 
     // 2) Отделяем САМ ЦЕЛЕВОЙ ПОСТ (targetPostMsg) от 1–2 коротких предыдущих реплик, чтобы старая локация из прошлых постов не перебивала новую!
@@ -7942,7 +8226,7 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     const prevContextMsgs = validUpToTarget.slice(Math.max(0, validUpToTarget.length - 3), Math.max(0, validUpToTarget.length - 1));
 
     const prevContext = prevContextMsgs.length
-        ? `[Краткая предыстория диалога (ТОЛЬКО для понимания того, кто с кем разговаривает — НЕ бери отсюда старую локацию, если в целевом посте герои уже перешли в другое место!)]:\n` +
+        ? `[Short dialogue backstory (ONLY to understand who is talking to whom — do NOT take the old location from here if in the target post the characters have already moved elsewhere!)]:\n` +
           prevContextMsgs.map(m => `${m.is_user ? names.user : (m.name || names.char)}: «${stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').slice(0, 1200)}»`).join('\n\n')
         : '';
     const rawTargetMes = targetPostMsg ? stripTags(stripActionTags(String(targetPostMsg.mes || ''))).replace(/<[^>]+>/g, '') : '';
@@ -7950,39 +8234,39 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     const hasSpecificChunk = !!(comicOpts?.enabled && comicOpts?.chunkText && String(comicOpts.chunkText).trim());
     const activeSceneSeg = hasSpecificChunk ? getActiveSceneSegmentFromFullPost(comicOpts.chunkText, rawTargetMes) : { sceneText: fullTargetText, sceneHeader: '', sceneIndex: 0 };
     const chunkHeaderNote = hasSpecificChunk
-        ? `[Контекст текущей сцены поста (для точного понимания локации, имён всех вошедших героев, их звериных черт — ушек/хвоста пумы/кота/пса — и одежды на протяжении всей сцены): «${(activeSceneSeg.sceneHeader ? activeSceneSeg.sceneHeader + ' ' : '') + (activeSceneSeg.sceneText || fullTargetText).slice(0, 2600)}»]\n\n` +
-          `[🎯 ЦЕЛЕВОЙ КУСОЧЕК ПОСТА ДЛЯ ЭТОЙ СТРАНИЦЫ МАНХВЫ (СТРАНИЦА ${(Number(comicOpts.chunkIndex) || 0) + 1} ИЗ ${Number(comicOpts.chunkTotal) || 1}) — СТРОЙ ВСЕ ФРЕЙМЫ (PANEL1..PANEL${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) И БЕРИ ВСЕ РЕПЛИКИ (QUOTE1..QUOTE${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) ИСКЛЮЧИТЕЛЬНО ИЗ ЭТОГО КУСОЧКА ТЕКСТА!]:\n` +
+        ? `[Context of the current scene of the post (to get the location exactly right, the names of everyone who came in, their animal features — puma/cat/dog ears and tail — and their clothes throughout the scene): «${(activeSceneSeg.sceneHeader ? activeSceneSeg.sceneHeader + ' ' : '') + (activeSceneSeg.sceneText || fullTargetText).slice(0, 2600)}»]\n\n` +
+          `[🎯 TARGET PIECE OF THE POST FOR THIS MANHWA PAGE (PAGE ${(Number(comicOpts.chunkIndex) || 0) + 1} OF ${Number(comicOpts.chunkTotal) || 1}) — BUILD ALL FRAMES (PANEL1..PANEL${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) AND TAKE ALL LINES (QUOTE1..QUOTE${Number(comicOpts.framesPerPage) === 4 ? 4 : 3}) EXCLUSIVELY FROM THIS PIECE OF TEXT!]:\n` +
           `${targetPostMsg?.is_user ? names.user : (targetPostMsg?.name || names.char)}: «${String(comicOpts.chunkText).trim()}»`
         : (targetPostMsg
-            ? `[🎯 ГЛАВНЫЙ ЦЕЛЕВОЙ ПОСТ ДЛЯ ИЛЛЮСТРАЦИИ — определяй ЛОКАЦИЮ (дом/квартира/комната/улица и т.д.), КТО ПРИСУТСТВУЕТ В СЦЕНЕ и ЧТО ОНИ ДЕЛАЮТ СТРОГО ПО ЭТОМУ ПОСТУ!]:\n` +
+            ? `[🎯 MAIN TARGET POST TO ILLUSTRATE — determine the LOCATION (house/flat/room/street etc.), WHO IS PRESENT IN THE SCENE and WHAT THEY ARE DOING STRICTLY FROM THIS POST!]:\n` +
               `${targetPostMsg.is_user ? names.user : (targetPostMsg.name || names.char)}: «${fullTargetText.slice(0, 4500)}»`
             : '');
     const moment = chunkHeaderNote;
     const a = st.wardrobe?.active;
-    const outfit = (!isPov && a?.status === 'worn') ? `[👗 АКТИВНЫЙ НАРЯД ${names.user} ИЗ ГАРДЕРОБА (рисуй ${names.user} в этом наряде вместо старой одежды из прошлых кадров — НО если в рисуемом отрывке сказано, что ${names.user} частично или полностью раздета, переоделась или сняла вещь, следуй тексту отрывка): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}]` : '';
+    const outfit = (!isPov && a?.status === 'worn') ? `[👗 ACTIVE OUTFIT OF ${names.user} FROM THE WARDROBE (draw ${names.user} in this outfit instead of the old clothes from previous frames — BUT if the drawn passage says that ${names.user} is partly or fully undressed, changed clothes or took something off, follow the passage): ${a.look.en || a.look.desc}${a.accent ? `; ${a.accent.title}` : ''}]` : '';
     const rawPersonaDesc = ctx().powerUserSettings?.persona_description || ctx().extensionSettings?.persona?.description || '';
     const cleanPersonaAppearance = rawPersonaDesc ? ctx().substituteParams(String(rawPersonaDesc)).slice(0, 600) : '';
     const lastAppearance = !isPov
         ? (st.wardrobe?.appearance
-            ? `Внешность ${names.user} (обязательно опиши её текстом в SCENE!): ${st.wardrobe.appearance}${cleanPersonaAppearance ? ` (${cleanPersonaAppearance})` : ''}.`
-            : (cleanPersonaAppearance ? `Внешность ${names.user} из анкеты Персоны (обязательно опиши её внешность текстом в SCENE!): ${cleanPersonaAppearance}.` : ''))
+            ? `Appearance of ${names.user} (be sure to describe it in SCENE!): ${st.wardrobe.appearance}${cleanPersonaAppearance ? ` (${cleanPersonaAppearance})` : ''}.`
+            : (cleanPersonaAppearance ? `Appearance of ${names.user} from the Persona profile (be sure to describe her looks in SCENE!): ${cleanPersonaAppearance}.` : ''))
         : '';
     const cObj = ctx();
     const rawMainCh = (cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]) ? cObj.characters[cObj.characterId] : null;
     const rawMainChDesc = rawMainCh?.description ? cObj.substituteParams(String(rawMainCh.description)).replace(/\s+/g, ' ').trim().slice(0, 900) : '';
     const mcCardObj = ensureMainCharCard(st);
     const mcAppParts = [
-        mcCardObj?.appearanceEn ? `[Теги внешности: ${mcCardObj.appearanceEn}]` : '',
+        mcCardObj?.appearanceEn ? `[Appearance tags: ${mcCardObj.appearanceEn}]` : '',
         mcCardObj?.card ? mcCardObj.card : '',
-        rawMainChDesc ? `[Описание из карточки ${names.char}: ${rawMainChDesc}]` : '',
+        rawMainChDesc ? `[Description from the card of ${names.char}: ${rawMainChDesc}]` : '',
     ].filter(Boolean).join(' ');
     const mcSceneTxt = hasSpecificChunk ? String(comicOpts.chunkText) : fullTargetText;
     const mcInScene = isNameMentionedInText(mcCardObj?.name || names.char, mcSceneTxt) || isNameMentionedInText(mcCardObj?.name || names.char, activeSceneSeg?.sceneText || '') || (Array.isArray(forcedCast) && forcedCast.some(fc => isNameMentionedInText(fc, mcCardObj?.name || names.char)));
     const mcAppLine = !mcAppParts ? '' : (mcInScene
         ? (parseCanonFromAppearance(mcCardObj?.appearanceEn)
-            ? `— ${mcCardObj?.name || names.char} (главный персонаж — КАНОНИЧНЫЙ: в каждом кадре и CHAR-слоте с ним ОБЯЗАТЕЛЬНО пиши его каноничный тег Danbooru ТОЧНО как здесь: "${parseCanonFromAppearance(mcCardObj.appearanceEn).tag}" и дальше его теги "${mcCardObj.appearanceEn}"; НЕ заменяй канон описанием похожей внешности!): ${mcAppParts}`
-            : `— ${mcCardObj?.name || names.char} (главный персонаж — обязательно подробно опиши его внешность по-английски в SCENE, если он в кадре!): ${mcAppParts}`)
-        : `— ${mcCardObj?.name || names.char} (главный персонаж): В ЭТОМ ОТРЫВКЕ ЕГО НЕТ — не рисуй его и НЕ переноси его внешность (цвет волос, глаза, одежду) на других персонажей!`);
+            ? `— ${mcCardObj?.name || names.char} (main character — CANONICAL: in every frame and CHAR slot with him ALWAYS write his canonical Danbooru tag EXACTLY as here: \"${parseCanonFromAppearance(mcCardObj.appearanceEn).tag}\" followed by his tags \"${mcCardObj.appearanceEn}\"; do NOT replace the canon with a description of a similar look!): ${mcAppParts}`
+            : `— ${mcCardObj?.name || names.char} (main character — be sure to describe his looks in detail in English in SCENE if he is in the frame!): ${mcAppParts}`)
+        : `— ${mcCardObj?.name || names.char} (main character): HE IS NOT IN THIS PASSAGE — don't draw him and do NOT transfer his looks (hair colour, eyes, clothes) to other characters!`);
     const effectiveForcedCast = hasSpecificChunk
         ? filterForcedCastForChunk(forcedCast, comicOpts.chunkText, rawTargetMes || fullTargetText)
         : (Array.isArray(forcedCast) ? forcedCast : []);
@@ -8005,30 +8289,30 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
     const npcsForPrompt = sceneRelevantNpcs.length ? sceneRelevantNpcs.slice(0, 12) : allNpcsSorted.slice(0, 6);
     const hasAnyCanonNpc = npcsForPrompt.some(n => !!n.appearanceEn);
     const canonHeaderHint = hasAnyCanonNpc
-        ? ' (если у героя указаны [Теги: ...], пиши их ТОЧНО как здесь вместо "Имя (original)", не подменяя канон описанием и не додумывая другой цвет волос/глаз!)'
+        ? ' (if a character has [Tags: ...], write them EXACTLY as here instead of \"Name (original)\", without replacing the canon with a description and without inventing another hair/eye colour!)'
         : '';
     const npcCardsList = [
         mcAppLine,
-        ...npcsForPrompt.map(n => `— ${n.name}: ${n.appearanceEn ? `[Теги: ${n.appearanceEn}] ` : ''}${n.card || 'персонаж истории'}`),
+        ...npcsForPrompt.map(n => `— ${n.name}: ${n.appearanceEn ? `[Tags: ${n.appearanceEn}] ` : ''}${n.card || 'a character of the story'}`),
     ].filter(Boolean).join('\n');
-    const npcBlock = npcCardsList ? `Справка по внешности и ролям персонажей этой сцены${canonHeaderHint}:\n${npcCardsList}` : '';
+    const npcBlock = npcCardsList ? `Reference: looks and roles of the characters in this scene${canonHeaderHint}:\n${npcCardsList}` : '';
     const forcedCastLine = Array.isArray(effectiveForcedCast) && effectiveForcedCast.length
-        ? `ВАЖНО — АКТИВНЫЕ ПЕРСОНАЖИ, ФИЗИЧЕСКИ НАХОДЯЩИЕСЯ В КОМНАТЕ/СЦЕНЕ В ЭТОМ ОТРЫВКЕ: ${effectiveForcedCast.join(', ')}. Включи ТОЛЬКО физически присутствующих в этот момент (${effectiveForcedCast.length} чел.) в строку CAST и SCENE! Если другие люди упоминаются лишь заочно (на картах Таро, в мыслях, разговорах или ещё не вошли в дверь в этом отрывке) — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО рисовать их в комнате!`
+        ? `IMPORTANT — ACTIVE CHARACTERS PHYSICALLY PRESENT IN THE ROOM/SCENE IN THIS PASSAGE: ${effectiveForcedCast.join(', ')}. Put ONLY those physically present at this moment (${effectiveForcedCast.length} people) into CAST and SCENE! If other people are only mentioned in absentia (on tarot cards, in thoughts, in conversation, or haven't come through the door yet in this passage) — it is STRICTLY FORBIDDEN to draw them in the room!`
         : '';
     const whisperLine = directorWhisper && String(directorWhisper).trim()
-        ? `🎬 ШЁПОТ РЕЖИССЁРУ ОТ ИГРОКА (ВЫСШИЙ ПРИОРИТЕТ — выполни это указание в кадре обязательно!): «${String(directorWhisper).trim()}».`
+        ? `🎬 THE PLAYER'S WHISPER TO THE DIRECTOR (TOP PRIORITY — be sure to fulfil this in the frame!): «${String(directorWhisper).trim()}».`
         : '';
     const canonCarryLine = (comicOpts?.chapterCanonByGender && (comicOpts.chapterCanonByGender.boy || comicOpts.chapterCanonByGender.girl))
-        ? `\n⚠️ КАНОНИЧНЫЕ ТЕГИ DANBOORU ЭТОЙ СЦЕНЫ (ОБЯЗАТЕЛЬНО пиши их в КАЖДОМ фрейме и в слоте CHAR с этим героем!): ${[comicOpts.chapterCanonByGender.boy ? `мужчина: "${comicOpts.chapterCanonByGender.boy}"` : '', comicOpts.chapterCanonByGender.girl ? `женщина: "${comicOpts.chapterCanonByGender.girl}"` : ''].filter(Boolean).join('; ')}`
+        ? `\n⚠️ CANONICAL DANBOORU TAGS OF THIS SCENE (ALWAYS write them in EVERY frame and in the CHAR slot of that character!): ${[comicOpts.chapterCanonByGender.boy ? `man: \"${comicOpts.chapterCanonByGender.boy}"` : '', comicOpts.chapterCanonByGender.girl ? `woman: \"${comicOpts.chapterCanonByGender.girl}"` : ''].filter(Boolean).join('; ')}`
         : '';
     const outfitLockSrc = (comicOpts?.chapterOutfitLock && typeof comicOpts.chapterOutfitLock === 'object' && Object.keys(comicOpts.chapterOutfitLock).length)
         ? comicOpts.chapterOutfitLock : nnbHeroOutfitMemory(st);
     const outfitLockEntries = Object.entries(outfitLockSrc || {}).filter(([, v]) => v).map(([k, v]) => `• ${k}: ${v}`);
     const outfitLockLine = outfitLockEntries.length
-        ? `\n[🔒 ЗАМОК ОДЕЖДЫ ГЛАВЫ (зафиксировано с 1-й страницы — СТРОГО сохраняй эту одежду 1-в-1, пока в тексте прямо не сказано, что герой переоделся):\n${outfitLockEntries.join('\n')}\nЕсли у вещи здесь не указан цвет — выбери его по тексту поста (или нейтральный) и дальше пиши ТОТ ЖЕ цвет во всех кадрах.]`
-        : `\n[👕 ОДЕЖДА: у каждой вещи героя ВСЕГДА указывай цвет (white puffy jacket, light blue hospital gown, dark grey sweater) и повторяй его одинаково во всех кадрах — иначе NovelAI каждый раз красит вещь по-новому.]`;
+        ? `\n[🔒 CHAPTER CLOTHES LOCK (fixed since page 1 — keep these clothes STRICTLY 1-to-1 until the text says directly that the character changed):\n${outfitLockEntries.join('\n')}\nIf an item has no colour here, pick it from the post text (or a neutral one) and then write THE SAME colour in every frame.]`
+        : `\n[👕 CLOTHES: ALWAYS give every item of clothing a colour (white puffy jacket, light blue hospital gown, dark grey sweater) and repeat it identically in every frame — otherwise NovelAI recolours the item every time.]`;
     const passportLine = (comicOpts?.chapterCharPassport && String(comicOpts.chapterCharPassport).trim())
-        ? `[👗 СКВОЗНОЙ ПАСПОРТ ОДЕЖДЫ И ВНЕШНОСТИ ТЕКУЩЕЙ ГЛАВЫ (СТРОГО СОХРАНЯЙ КАНОНИЧНЫЕ ТЕГИ DANBOORU, ОДЕЖДУ, ЦВЕТ ВОЛОС, ОЧКИ И ЗВЕРИНЫЕ УШКИ/ХВОСТЫ ВО ВСЕХ ФРЕЙМАХ И CHAR-СЛОТАХ ЭТОЙ СТРАНИЦЫ; но если паспорт противоречит «Справке по внешности NPC» (канон-тег или цвет волос героя) — права справка, ЕСЛИ ГЕРОИ НЕ ПЕРЕОДЕВАЛИСЬ В ТЕКСТЕ!)]:\n${String(comicOpts.chapterCharPassport).trim()}${outfitLockLine}${canonCarryLine}`
+        ? `[👗 CONTINUOUS CLOTHES-AND-LOOKS PASSPORT OF THE CURRENT CHAPTER (STRICTLY KEEP THE CANONICAL DANBOORU TAGS, CLOTHES, HAIR COLOUR, GLASSES AND ANIMAL EARS/TAILS IN ALL FRAMES AND CHAR SLOTS OF THIS PAGE; but if the passport contradicts the «NPC appearance reference» (a character's canon tag or hair colour), the reference wins — UNLESS THE CHARACTERS CHANGED CLOTHES IN THE TEXT!)]:\n${String(comicOpts.chapterCharPassport).trim()}${outfitLockLine}${canonCarryLine}`
         : (outfitLockLine ? outfitLockLine.trim() : '');
     const isNaiSource = settings().imageSource === 'novelai';
     let comicInstruction = '';
@@ -8037,80 +8321,46 @@ function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, dir
         const wantLines = comicOpts.linesMode !== 'off';
         const isMonoStyle = isMonochromeComicStyle(cStyle);
         const monoRule = isMonoStyle
-            ? `\n⚫⚪ СТРОГИЙ ЧЁРНО-БЕЛЫЙ МАНГА-СТИЛЬ (MONOCHROME / GREYSCALE — БЕЗ ЦВЕТОВ!): этот комикс рисуется СТРОГО чёрно-белой тушью и скринтонами! В строках SCENE, PANEL1..3 и CHAR1..4 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать любые названия цветов (НЕ пиши blonde, red, blue, green, yellow, orange, pink, purple, brown, pastel, colorful)! Заменяй цвета волос и одежды на ч/б тон: вместо blonde hair пиши light hair / white screentone hair, вместо тёмных волос — dark inked hair, вместо цветных глаз — detailed manga eyes!`
+            ? `\n⚫⚪ STRICT BLACK-AND-WHITE MANGA STYLE (MONOCHROME / GREYSCALE — NO COLOURS!): this comic is drawn STRICTLY in black ink and screentones! In the SCENE, PANEL1..3 and CHAR1..4 lines it is STRICTLY FORBIDDEN to write any colour names (do NOT write blonde, red, blue, green, yellow, orange, pink, purple, brown, pastel, colorful)! Replace hair and clothing colours with a b/w tone: instead of blonde hair write light hair / white screentone hair, instead of dark hair — dark inked hair, instead of coloured eyes — detailed manga eyes!`
             : '';
         const framesN = Number(comicOpts.framesPerPage) === 4 ? 4 : 3;
         const quoteSpeakerRule = wantLines
-            ? `\n⚠️ ПРАВИЛО ТЕКСТА ВО ВСЕХ ФРЕЙМАХ: РЕЧЬ, МЫСЛИ И АВТОРСКОЕ ОПИСАНИЕ (QUOTE1..QUOTE${framesN}):
-1) ЗАПОЛНИ КАЖДЫЙ ФРЕЙМ (QUOTE1..QUOTE${framesN}): у каждого из ${framesN} кадров ОБЯЗАТЕЛЬНО должна быть своя строка QUOTE! Если в моменте кадра никто не говорит вслух, бери из текста отрывка внутреннюю мысль персонажа (THOUGHT) или предложение авторского описания (NARRATION)!
-2) ТРИ ТИПА ТЕКСТА (пиши тип перед первой чертой |):
-   • Прямая речь вслух (белое облачко с именем): \`QUOTE1: SPEECH | Имя говорящего | Полная дословная реплика из текста до точки\`
-   • Внутренние мысли про себя (серое облачко курсивом): \`QUOTE2: THOUGHT | Имя персонажа | Полная дословная мысль персонажа из текста до точки\`
-   • Авторское описание / нарратив от 3-го лица (плашка БЕЗ имени персонажа!): \`QUOTE3: NARRATION | Полное дословное предложение описания из текста до точки\`
-   ⚠️ СТРОЖАЙШИЙ ЗАПРЕТ: НИКОГДА не подписывай авторское описание от 3-го лица (например, «София застегнула пальто...», «Полчаса спустя седан шуршал...», «На заднем сиденье Джулия расстегнула...») именем персонажа! Для любого описания действия или обстановки ВСЕГДА пиши \`NARRATION | текст описания\` БЕЗ имени!
-3) НЕ ОБРЫВАЙ ФРАЗЫ НА ПОЛУСЛОВЕ И НА ТИРЕ: всегда выписывай предложение ЦЕЛИКОМ до финальной точки, восклицательного или вопросительного знака (включая вторую часть фразы после тире «—»)!`
+            ? `\n⚠️ TEXT RULE FOR ALL FRAMES: SPEECH, THOUGHTS AND NARRATION (QUOTE1..QUOTE${framesN}):\n1) FILL EVERY FRAME (QUOTE1..QUOTE${framesN}): each of the ${framesN} frames MUST have its own QUOTE line! If nobody speaks aloud at the moment of the frame, take a character's inner thought (THOUGHT) or a sentence of narration (NARRATION) from the passage!\n2) THREE KINDS OF TEXT (write the kind before the first bar |). Copy the text VERBATIM in the original language of the post — never translate it:\n   • Speech aloud (white bubble with a name): \`QUOTE1: SPEECH | Speaker's name | The full verbatim line from the text up to the full stop\`\n   • Inner thoughts (grey italic bubble): \`QUOTE2: THOUGHT | Character's name | The character's full verbatim thought from the text up to the full stop\`\n   • Narration in the 3rd person (caption box WITHOUT a character name!): \`QUOTE3: NARRATION | The full verbatim narration sentence from the text up to the full stop\`\n   ⚠️ STRICTLY FORBIDDEN: NEVER sign 3rd-person narration (e.g. «София застегнула пальто...», «Полчаса спустя седан шуршал...», «На заднем сиденье Джулия расстегнула...») with a character's name! For any description of action or surroundings ALWAYS write \`NARRATION | narration text\` WITHOUT a name!\n3) DON'T CUT PHRASES OFF MID-WORD OR AT A DASH: always copy the WHOLE sentence up to the final full stop, exclamation or question mark (including the part after a dash «—»)!`
             : '';
         if (comicOpts.stripMode) {
             const panel4Line = framesN === 4
-                ? `\n— PANEL4 (Кадр 4 — Финальный акцент этого кусочка поста / Момент QUOTE4, \`close-up, portrait, upper body\` или \`medium close-up\`): яркая финальная эмоция, реакция или действие в конце этого отрывка (1–2 персонажа, без wide shot и без толпы).`
+                ? `\n— PANEL4 (Frame 4 — the final accent of this piece of the post / the QUOTE4 moment, \`close-up, portrait, upper body\` or \`medium close-up\`): a vivid final emotion, reaction or action at the end of this passage (1–2 characters, no wide shot, no crowd).`
                 : '';
-            comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ МАНХВЫ ИЗ ${framesN} РАЗНЫХ КАДРОВ ПО КУСОЧКУ ПОСТА (СТИЛЬ «${cStyle.name}»):
-Разбей события целевого отрывка по хронологии на ${framesN} СОВЕРШЕННО РАЗНЫХ последовательных кадра (PANEL1..PANEL${framesN}):
-⚠️ ГЛАВНЫЕ ПРАВИЛА РЕЖИССУРЫ И КРУПНЫХ ФРЕЙМОВ ДЕТАЛЕЙ:
-0) 🚫 НЕ РИСУЙ ТО, О ЧЁМ ПЕРСОНАЖИ ТОЛЬКО ГОВОРЯТ В ДИАЛОГЕ: если герои стоят в офисе/коридоре или едут в машине и просто НА СЛОВАХ упоминают в реплике то, чего сейчас рядом с ними нет (например: «поехали ко мне за город, познакомлю со своими змеями/чешуйчатыми красотками и заварю пуэр» или «он застрял в министерстве»), КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО рисовать эту змею, пуэр или министерство в текущей сцене, пока герои физически туда не приехали в самом повествовании отрывка! И когда человек просто зевает или потягивается с дороги — НИКОГДА не пиши теги плача (\`crying, tears\`) и не переодевай его в домашнюю белую футболку/пижаму (\`white t-shirt, pajamas\`)!
-1) 🔍 КРУПНЫЕ ФРЕЙМЫ ДЕТАЛЕЙ ПО КОНТЕКСТУ (ТОЛЬКО ДЛЯ ФИЗИЧЕСКИ ПРИСУТСТВУЮЩИХ В ЭТОМ ОТРЫВКЕ ДЕТАЛЕЙ!):
-   В настоящей манхве на странице не рисуют в каждом фрейме просто стоящих по пояс людей! Внимательно проверь текст отрывка: если в нём есть яркая деталь, животное, предмет, жест или интим — обязательно отдай ЦЕЛЫЙ ОТДЕЛЬНЫЙ ФРЕЙМ (обычно PANEL2 или PANEL3) под подробный крупный план этой детали:
-   • ЖИВОТНОЕ / ПИТОМЕЦ / СУЩЕСТВО (например, у подруги дома змея, кот, собака, птица и т.д.): сделай отдельный фрейм, где крупным планом показано ИМЕННО ЭТО ЖИВОТНОЕ (\`no humans, animal focus, close-up, macro shot, snake / python / cat..., detailed scales/fur, terrarium / branch, depth of field\`) — БЕЗ тегов \`1boy/1girl\`, БЕЗ лиц людей и БЕЗ калибровки роста!
-   • ЗНАЧИМЫЙ ПРЕДМЕТ / ЕДА / УЛИКА В ФОКУСЕ ВНИМАНИЯ (чашка, бокал, письмо, экран телефона, украшение, ключ, нож, блюдо): сделай отдельный предметный макро-фрейм (\`no humans, object focus, close-up, macro shot, ...\` или с руками в кадре без головы: \`close-up, hand focus, object focus, head out of frame, cropped, ...\`).
-   • ЭРОТИКА / 18+ / NSFW СЦЕНА: если в отрывке описана интимная близость, раздевание, ласки, возбуждение, гениталии или проникновение — ОБЯЗАТЕЛЬНО выдели целый фрейм (PANEL2 или PANEL3) под откровенный анатомический крупный план без цензуры (\`nsfw, explicit, close-up, intimate close-up, head out of frame, cropped, [точные теги Danbooru из текста: genitals / penis / erection / pussy / penetration / fingering / oral / breasts focus / thighs / hands gripping hips], sweat, detailed skin, depth of field\`)! В таком анатомическом кадре-детали НЕ описывай причёски/лица и НЕ вставляй теги полного роста (\`tall lean adult man, long male legs\`), чтобы весь кадр занимала именно интимная деталь!
-   • ТАКТИЛЬНЫЙ ЖЕСТ / ПРИКОСНОВЕНИЕ (дрожащие пальцы, переплетённые кисти, хватка за запястье/воротник): \`close-up, hand focus, head out of frame, cropped, depth of field\`; а для крупного плана шеи/ключиц/синяка/губ (neck/collarbone/bruise/lips) НИКОГДА не пиши \`head out of frame\` — пиши \`close-up, upper body, jawline, chin, collarbone, neck, depth of field\`, чтобы голова не обрезалась как пень.
-2) НЕ РИСУЙ ТОЛПУ В ОДНОМ КАДРЕ: КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать 4–7 человек в один кадр комикса (НЕ пиши \`4boys, 2girls\`, \`six people\`)! В кадрах с людьми выбирай ТОЛЬКО 1 или 2 персонажей (максимум 3), которые говорят реплику QUOTE этого кадра или непосредственно взаимодействуют именно в эту секунду!
-3) БЕЗ БУКВАЛЬНЫХ МЕТАФОР: никогда не переводи «львиная грива волос» у человека как \`lion mane\` (пиши \`thick voluminous wild hair\`) и не переводи «позеленевший» как \`greenish-pale\` (пиши \`pale skin, unwell, sweatdrop\`).
-— PANEL1 (Кадр 1 — Завязка отрывка / Момент QUOTE1, \`medium shot\` или \`cowboy shot\`): 1–2 персонажа этого момента, их внешность, одежда, действие и обстановка. Если в кадре 1 два персонажа — добавь в конце строки: \`|| CHAR1: пол (1boy/1girl), внешность, одежда и поза 1-го || CHAR2: пол, внешность, одежда и поза 2-го\`.
-— PANEL2 (Кадр 2 — КРУПНЫЙ ФРЕЙМ ДЕТАЛИ по контексту: животное/змея, важный предмет, тактильный жест рук, ИЛИ в 18+ сцене — крупный план гениталий/интимного контакта \`head out of frame, close-up\`; а если в отрывке нет таких деталей — смена ракурса и действия 1–2 героев \`dynamic angle, medium close-up\`).
-— PANEL3 (Кадр 3 — ОБЯЗАТЕЛЬНО указывай фон/локацию и освещение сцены, чтобы не было пустого белого фона! СОЛЬНЫЙ крупный план лица и эмоции говорящего QUOTE3 \`1girl, solo, close-up, portrait, upper body\` или \`1boy, solo, close-up, portrait, upper body\`, ЛИБО крупный фрейм детали/интима, если во 2-м кадре был средний план диалога! В сольном и детальном кадре ЗАПРЕЩЕНО писать \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\`!).${panel4Line}
-${wantLines ? `Также выпиши ${framesN} ДОСЛОВНЫЕ законченные реплики на русском языке из целевого отрывка поста (строго полными предложениями без обрыва фразы!) в строках QUOTE1..QUOTE${framesN}.` : ''}${quoteSpeakerRule}${monoRule}`;
+            comicInstruction = `💬 MANHWA PAGE MODE: ${framesN} DIFFERENT FRAMES FROM A PIECE OF THE POST (STYLE «${cStyle.name}»):\nSplit the events of the target passage chronologically into ${framesN} COMPLETELY DIFFERENT consecutive frames (PANEL1..PANEL${framesN}):\n⚠️ MAIN RULES OF DIRECTING AND DETAIL CLOSE-UPS:\n0) 🚫 DON'T DRAW WHAT CHARACTERS ONLY TALK ABOUT: if the characters stand in an office/hallway or ride in a car and only MENTION in a line something that is not next to them now (e.g. «поехали ко мне за город, познакомлю со своими змеями и заварю пуэр» or «он застрял в министерстве»), it is STRICTLY FORBIDDEN to draw that snake, tea or ministry in the current scene until the characters physically get there in the narration of the passage! And when a person just yawns or stretches after the road — NEVER write crying tags (\`crying, tears\`) and don't change them into a white home T-shirt/pyjamas (\`white t-shirt, pajamas\`)!\n1) 🔍 DETAIL CLOSE-UPS BY CONTEXT (ONLY FOR DETAILS PHYSICALLY PRESENT IN THIS PASSAGE!):\n   A real manhwa page doesn't show people standing waist-up in every frame! Check the passage: if it has a vivid detail, an animal, an object or a gesture — give a WHOLE SEPARATE FRAME (usually PANEL2 or PANEL3) to a detailed close-up of it:\n   • ANIMAL / PET / CREATURE (a snake, cat, dog, bird at a friend's place, etc.): a separate frame showing EXACTLY THAT ANIMAL in close-up (\`no humans, animal focus, close-up, macro shot, snake / python / cat..., detailed scales/fur, terrarium / branch, depth of field\`) — WITHOUT \`1boy/1girl\`, WITHOUT human faces and WITHOUT height calibration!\n   • A MEANINGFUL OBJECT / FOOD / CLUE IN FOCUS (a cup, glass, letter, phone screen, jewellery, key, knife, dish): a separate object macro frame (\`no humans, object focus, close-up, macro shot, ...\` or with hands in the frame and no head: \`close-up, hand focus, object focus, head out of frame, cropped, ...\`).\n   • EROTICA / 18+ / NSFW SCENE: if the passage describes intimacy, make one frame a CLOSE SHOT OF THE SAME SCENE, not a separate body part: \`nsfw, explicit, 1boy, 1girl, hetero, close-up, from side, [exact Danbooru action tags: sex / vaginal / fellatio / fingering / breasts / nipples …], [both poses], sweat, blush, detailed skin\` + slots || CHAR1/CHAR2 of both characters with their looks. Both bodies must be visible and connected to each other in the frame (shoulders/torso/hips); faces may be partly visible. FORBIDDEN: \`head out of frame\`, \`cropped\`, \`intimate close-up\`, \`focus on …\`, \`no humans\` and frames where genitals/breasts are drawn without a body — that produces body horror.\n   • A TACTILE GESTURE / TOUCH (trembling fingers, intertwined hands, a grip on a wrist/collar): \`close-up, hand focus, head out of frame, cropped, depth of field\`; but for a close-up of the neck/collarbone/bruise/lips NEVER write \`head out of frame\` — write \`close-up, upper body, jawline, chin, collarbone, neck, depth of field\` so the head isn't cut off like a stump.\n2) NO CROWD IN ONE FRAME: it is STRICTLY FORBIDDEN to cram 4–7 people into one comic frame (do NOT write \`4boys, 2girls\`, \`six people\`)! In frames with people choose ONLY 1 or 2 characters (3 at most) who speak the QUOTE of this frame or interact at that very second!\n3) NO LITERAL METAPHORS: never translate «львиная грива волос» on a person as \`lion mane\` (write \`thick voluminous wild hair\`) and don't translate «позеленевший» as \`greenish-pale\` (write \`pale skin, unwell, sweatdrop\`).\n— PANEL1 (Frame 1 — the opening of the passage / the QUOTE1 moment, \`medium shot\` or \`cowboy shot\`): 1–2 characters of this moment, their looks, clothes, action and surroundings. If frame 1 has two characters, add at the end of the line: \`|| CHAR1: sex (1boy/1girl), looks, clothes and pose of the 1st || CHAR2: sex, looks, clothes and pose of the 2nd\`.\n— PANEL2 (Frame 2 — a DETAIL CLOSE-UP by context: an animal/snake, an important object, a tactile hand gesture, OR in an 18+ scene — a close shot of the two characters together as described above; if the passage has no such details — a change of angle and action of 1–2 characters \`dynamic angle, medium close-up\`).\n— PANEL3 (Frame 3 — ALWAYS give the background/location and lighting of the scene so there's no empty white background! A SOLO close-up of the face and emotion of the QUOTE3 speaker \`1girl, solo, close-up, portrait, upper body\` or \`1boy, solo, close-up, portrait, upper body\`, OR a detail close-up / intimate close shot if frame 2 was a medium shot of dialogue! In solo and detail frames it is FORBIDDEN to write \`wide shot\`, \`full body\`, \`2boys\`, \`4boys\`!).${panel4Line}
+${wantLines ? `Also write out ${framesN} VERBATIM complete lines in the original language of the post from the target passage (strictly whole sentences, never cut off!) in the lines QUOTE1..QUOTE${framesN}.` : ''}${quoteSpeakerRule}${monoRule}`;
         } else {
-            comicInstruction = `💬 РЕЖИМ СТРАНИЦЫ КОМИКСА / МАНГИ («${cStyle.name}»):
-Построй композицию в виде многокадровой страницы комикса из 3–4 фреймов на одном листе (${isNaiSource ? `начни строку SCENE с тегов раскладки: ${cStyle.naiTags}` : cStyle.promptEn}):
-— Опиши в SCENE раскадровку по фреймам: крупный динамичный кадр взаимодействия героев, кадр с жестом рук/деталью и крупный эмоциональный план глаз/лица (или забавную чиби-реакцию в угловой врезке, если подходит по стилю).
-— Для каждого видимого персонажа укажи, что делает его левая и правая рука (строго по 2 руки у каждого человека, без лишних конечностей!).
-${(!isNaiSource && wantLines) ? `— Включи в описание SCENE 2–3 белых облачка реплик (speech bubbles) с ДОСЛОВНЫМИ короткими фразами на русском языке из текста поста.` : `— Внутри самой строки SCENE НЕ пиши русский текст (облачка с русскими репликами система аккуратно наложит поверх готового рисунка сама!).`}
-${wantLines ? `После основных строк обязательно выпиши 2–3 короткие ДОСЛОВНЫЕ реплики из текста поста в формате:
-QUOTE1: Имя говорящего | полная законченная реплика из поста до точки (без обрыва на полуслове!)
-QUOTE2: Имя говорящего из CAST | полная законченная реплика из поста до точки` : ''}${quoteSpeakerRule}${monoRule}`;
+            comicInstruction = `💬 COMIC / MANGA PAGE MODE («${cStyle.name}»):\nCompose the picture as a multi-panel comic page with 3–4 frames on one sheet (${isNaiSource ? `start the SCENE line with the layout tags: ${cStyle.naiTags}` : cStyle.promptEn}):\n— Describe the storyboard frame by frame in SCENE: a large dynamic frame of the characters' interaction, a frame with a hand gesture/detail and a large emotional close-up of eyes/face (or a funny chibi reaction in a corner inset if it suits the style).\n— For every visible character say what their left and right hand are doing (strictly 2 hands per person, no extra limbs!).\n${(!isNaiSource && wantLines) ? `— Include 2–3 white speech bubbles in the SCENE description with VERBATIM short phrases in Russian from the post text.` : `— Do NOT write Russian text inside the SCENE line itself (the system will neatly overlay the bubbles with Russian lines on the finished picture!).`}
+${wantLines ? `After the main lines be sure to write out 2–3 short VERBATIM lines from the post text in the format:\nQUOTE1: Speaker's name | the full complete line from the post up to the full stop (never cut off mid-word!)\nQUOTE2: Speaker's name from CAST | the full complete line from the post up to the full stop` : ''}${quoteSpeakerRule}${monoRule}`;
         }
     }
 
     let cameraInstruction = '';
     if (isPovHands) {
-        cameraInstruction = `ВАЖНО — ВИД ОТ ПЕРВОГО ЛИЦА (POV HANDS): кадр глазами ${names.user} (pov, first-person view). Голову, лицо и спину ${names.user} НЕ описывай. В кадре виден собеседник (или все присутствующие NPC) в естественной позе из текста сцены и рука ${names.user} (pov hands), если в сцене есть прикосновение. В CAST саму ${names.user} НЕ пиши.`;
+        cameraInstruction = `IMPORTANT — FIRST-PERSON VIEW (POV HANDS): the frame through the eyes of ${names.user} (pov, first-person view). Do NOT describe the head, face or back of ${names.user}. The frame shows the companion (or all NPCs present) in a natural pose from the scene, and the hand of ${names.user} (pov hands) if there is a touch in the scene. Do NOT put ${names.user} herself into CAST.`;
     } else if (isPov) {
-        cameraInstruction = `ВАЖНО — ВИД НАПРОТИВ (ГЛАЗАМИ ГЕРОИНИ): покажи собеседника (или всех присутствующих персонажей) так, как их видит ${names.user} в этой сцене, в естественной позе по тексту поста. Саму ${names.user} в кадре НЕ описывай и в CAST не включай.`;
+        cameraInstruction = `IMPORTANT — VIEW FROM OPPOSITE (THROUGH THE HEROINE'S EYES): show the companion (or all characters present) the way ${names.user} sees them in this scene, in a natural pose from the post. Do NOT describe ${names.user} herself in the frame and don't include her in CAST.`;
     } else {
-        cameraInstruction = `ВАЖНО — КИНОКАДР СО СТОРОНЫ (ВСЕ УЧАСТНИКИ СЦЕНЫ, НЕ ТЕРЯЙ NPC!):
-1) Внимательно проверь по тексту сообщения и контексту, КТО ИМЕННО находится в этой сцене прямо сейчас.
-2) СТРОГО ЗАПРЕЩЕНО по шаблону оставлять только ${names.user} и ${names.char}, если в сцене также присутствуют другие персонажи (подруга, коллега, продавец, родственник или любой NPC)! И наоборот: если ${names.char} в этой сцене нет (например, ${names.user} разговаривает только с подругой/NPC), НЕ пиши ${names.char} в CAST и НЕ рисуй его!
-3) Если в сцене 3 или более человек (например, ${names.user}, ${names.char} и ещё NPC) — обязательно перечисли их ВСЕХ в CAST, а описание SCENE начни с точного числа людей в кадре (например: "Group of 3 people in the scene: 1) [Name + appearance + pose], 2) [Name + appearance + pose], 3) [Name + appearance + pose]..."), чтобы художник гарантированно нарисовал каждого и никого не потерял!
-4) Персонажи смотрят ДРУГ НА ДРУГА или на своё занятие в сцене, а НЕ в камеру / НЕ на зрителя!`;
+        cameraInstruction = `IMPORTANT — A CINEMATIC SIDE SHOT (ALL PARTICIPANTS OF THE SCENE, DON'T LOSE THE NPCs!):\n1) Check the message text and context carefully: WHO EXACTLY is in this scene right now.\n2) It is STRICTLY FORBIDDEN to leave only ${names.user} and ${names.char} by habit if other characters are also present (a friend, colleague, shop assistant, relative or any NPC)! And vice versa: if ${names.char} is not in this scene (e.g. ${names.user} only talks to a friend/NPC), do NOT write ${names.char} into CAST and do NOT draw him!\n3) If the scene has 3 or more people (e.g. ${names.user}, ${names.char} and more NPCs), list them ALL in CAST and start the SCENE description with the exact number of people in the frame (e.g.: \"Group of 3 people in the scene: 1) [Name + appearance + pose], 2) [Name + appearance + pose], 3) [Name + appearance + pose]...\"), so the artist draws every one of them and loses nobody!\n4) The characters look AT EACH OTHER or at what they are doing, NOT into the camera / NOT at the viewer!`;
     }
     const hasCustomWriter = !!settings().imgPromptWriterNote?.trim();
     const writerAlreadyInSystem = !!String(settings().imgPromptSource || '').trim() && hasCustomWriter;
     // Кэшируемый порядок: статичные правила, инструкции манхвы и шаблон камеры идут ПЕРВЫМИ (попадают в Prompt Cache на страницах 2–8 главы!),
     // а меняющиеся от страницы к странице отрывок, OLDBlock, паспорт и НПС — в конце.
     return [
-        '[OOC: Задача для визуального теггера Danbooru / NovelAI. ИГНОРИРУЙ любые инструкции ролевого пресета про гротеск, комедию, стёб или драматизацию — переводи сцену только в эстетичные, чистые визуальные теги Danbooru без карикатурности и метафор.',
+        '[OOC: A task for a Danbooru / NovelAI visual tagger. IGNORE any roleplay preset instructions about grotesque, comedy, mockery or dramatisation — translate the scene only into aesthetic, clean Danbooru visual tags, no caricature and no metaphors.',
         comicInstruction,
         cameraInstruction,
-        `ВАЖНЫЕ ПРАВИЛА ПО ЛОКАЦИИ, КАНОНУ И ПЕРСОНАЖАМ В КАДРЕ:
-0) ТОЧНАЯ ЛОКАЦИЯ ИЗ ЦЕЛЕВОГО ПОСТА: описывай только ту комнату и обстановку, где герои находятся в целевом посте прямо сейчас, не тяни старую локацию из прошлых кадров!
-1) КАНОНИЧНЫЕ ГЕРОИ: для персонажей из аниме/манги/игр всегда пиши точный тег Danbooru \`фамилия имя, тайтл\` или \`имя (тайтл)\`, не заменяя его просто именем.
-2) РАЗДЕЛЕНИЕ 2–4+ ПЕРСОНАЖЕЙ: при нескольких героях одного пола в SCENE пиши только суммарный тег (\`2boys\`, \`2girls\`, \`multiple girls\`) без одиночных \`1boy\`/\`1girl\`, а каждого героя описывай отдельно в \`CHAR1:\`, \`CHAR2:\`, \`CHAR3:\`, \`CHAR4:\`.`,
+        `IMPORTANT RULES ON LOCATION, CANON AND CHARACTERS IN THE FRAME:\n0) EXACT LOCATION FROM THE TARGET POST: describe only the room and surroundings where the characters are in the target post right now; don't drag the old location from previous frames!\n1) CANONICAL CHARACTERS: for characters from anime/manga/games always write the exact Danbooru tag \`surname name, title\` or \`name (title)\`, never just the name.\n2) SPLITTING 2–4+ CHARACTERS: with several characters of the same sex write only the total tag in SCENE (\`2boys\`, \`2girls\`, \`multiple girls\`) without single \`1boy\`/\`1girl\`, and describe each character separately in \`CHAR1:\`, \`CHAR2:\`, \`CHAR3:\`, \`CHAR4:\`.`,
         (!writerAlreadyInSystem && hasCustomWriter)
-            ? `[ДОПОЛНИТЕЛЬНАЯ ИНСТРУКЦИЯ АВТОРА ПО ПРОМПТУ]:\n${adaptWriterNoteForTask(settings().imgPromptWriterNote.trim(), !!(comicOpts && comicOpts.enabled && comicOpts.stripMode))}`
+            ? `[ADDITIONAL AUTHOR INSTRUCTION FOR THE PROMPT]:\n${adaptWriterNoteForTask(settings().imgPromptWriterNote.trim(), !!(comicOpts && comicOpts.enabled && comicOpts.stripMode))}`
             : (!hasCustomWriter && settings().imageSource === 'novelai' ? adaptWriterNoteForTask(DEFAULT_NAI_WRITER_PROMPT, !!(comicOpts && comicOpts.enabled && comicOpts.stripMode)) : ''),
         lastAppearance,
-        st.time?.date ? `Время и место: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; локация: ${placeLine(st)}` : ''}.` : '',
+        st.time?.date ? `Time and place: ${formatDate(st.time.date)}, ${season(st.time.date).name}${placeLine(st) ? `; location: ${placeLine(st)}` : ''}.` : '',
         npcBlock,
         oldBlock,
         prevContext,
@@ -8119,24 +8369,24 @@ QUOTE2: Имя говорящего из CAST | полная законченн�
         outfit,
         forcedCastLine,
         whisperLine,
-        'Ответь строго по шаблону без пояснений:',
-        `CAST: кто именно виден в сцене через запятую (${isPov ? [...names.chars, ...allNpcsSorted.slice(0, 35).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...allNpcsSorted.slice(0, 35).map(n => n.name)].join(', ')}; или none, если в кадре никого нет). Тех, кого только УПОМИНАЮТ в репликах, мыслях или воспоминаниях («Дойл вчера сжевал…»), в CAST НЕ пиши и НЕ рисуй — их нет в комнате`,
+        'Answer strictly by the template, no explanations:',
+        `CAST: who exactly is visible in the scene, comma-separated (${isPov ? [...names.chars, ...allNpcsSorted.slice(0, 35).map(n => n.name)].join(', ') : [names.user, ...names.chars, ...allNpcsSorted.slice(0, 35).map(n => n.name)].join(', ')}; or none if nobody is in the frame). Those only MENTIONED in lines, thoughts or memories («Дойл вчера сжевал…») are NOT written into CAST and NOT drawn — they are not in the room`,
         ...(comicOpts && comicOpts.enabled && comicOpts.stripMode
             ? [
-                'PANEL1: полный английский промпт 1-го кадра (момент QUOTE1, medium/cowboy shot, 1–2 персонажа + внешность + одежда + обстановка; если двоих — добавь в конце: || CHAR1: теги 1-го || CHAR2: теги 2-го)',
-                'PANEL2: НАЧНИ СТРОГО С ОДНОГО ИЗ 4 ТИПОВ: [OBJECT] (чистый предмет/еда/документ/животное: no humans, still life, object focus, close-up — БЕЗ рук и людей), [HANDS] (простой жест одной/двух рук с предметом: 1girl/1boy, solo, hand focus — БЕЗ no humans и БЕЗ сплетения пальцев), [DETAIL] (шея/ключицы/синяк/украшение: 1girl/1boy, solo, close-up, upper body, jawline, chin, collarbone — НИКОГДА head out of frame!), или [REACTION] (чистый средний план реакции/эмоции 1–2 героев). ОБЯЗАТЕЛЬНО дописывай в конце фон/локацию и освещение сцены (например: indoors, bathhouse steam, warm lighting), чтобы фон не пропадал! БЕЗ sfx/звуков/текста на картинке!',
-                'PANEL3: полный английский промпт 3-го кадра (СОЛЬНЫЙ крупный план лица/эмоции одного героя: 1girl, solo, close-up, portrait, upper body ИЛИ 1boy, solo, close-up, portrait, upper body — либо крупный фрейм детали/интима, если в PANEL2 был диалог; БЕЗ wide shot и БЕЗ толпы!)',
-                ...(Number(comicOpts.framesPerPage) === 4 ? ['PANEL4: полный английский промпт 4-го кадра (финальный момент отрывка под QUOTE4, 1–2 персонажа, выразительная эмоция или жест)'] : []),
+                'PANEL1: full English prompt of frame 1 (the QUOTE1 moment, medium/cowboy shot, 1–2 characters + looks + clothes + surroundings; if two — add at the end: || CHAR1: tags of the 1st || CHAR2: tags of the 2nd)',
+                'PANEL2: START STRICTLY WITH ONE OF 4 TYPES: [OBJECT] (a pure object/food/document/animal: no humans, still life, object focus, close-up — NO hands, NO people), [HANDS] (a simple gesture of one/two hands with an object: 1girl/1boy, solo, hand focus — NO \"no humans\" and NO intertwined fingers), [DETAIL] (neck/collarbone/bruise/jewellery: 1girl/1boy, solo, close-up, upper body, jawline, chin, collarbone — NEVER head out of frame!), or [REACTION] (a clean medium shot of the reaction/emotion of 1–2 characters). An intimate 18+ moment is not a type — write it as a close shot of both characters with || CHAR slots. ALWAYS add the background/location and lighting at the end (e.g.: indoors, bathhouse steam, warm lighting) so the background doesn\'t vanish! NO sfx/sounds/text in the picture!',
+                'PANEL3: full English prompt of frame 3 (a SOLO close-up of one character\'s face/emotion: 1girl, solo, close-up, portrait, upper body OR 1boy, solo, close-up, portrait, upper body — or a detail close-up / intimate close shot if PANEL2 was dialogue; NO wide shot and NO crowd!)',
+                ...(Number(comicOpts.framesPerPage) === 4 ? ['PANEL4: full English prompt of frame 4 (the final moment of the passage for QUOTE4, 1–2 characters, an expressive emotion or gesture)'] : []),
             ]
             : [
-                'SCENE: общий промпт сцены на английском в одну строку (количество персонажей 1boy/1girl или 2boys/2girls, ракурс, взаимодействие, внешность и одежда каждого, окружение и свет — короткими тегами Danbooru)',
-                'CHAR1: (если в кадре >= 2 человек) английские теги 1-го персонажа в кадре (внешность, канон-тег, одежда, поза, эмоция)',
-                'CHAR2: (если в кадре >= 2 человек) английские теги 2-го персонажа в кадре (и далее CHAR3:, CHAR4: для 3-го и 4-го персонажа)',
+                'SCENE: the overall scene prompt in English on one line (number of characters 1boy/1girl or 2boys/2girls, angle, interaction, looks and clothes of each, surroundings and light — in short Danbooru tags)',
+                'CHAR1: (if >= 2 people in the frame) English tags of the 1st character in the frame (looks, canon tag, clothes, pose, emotion)',
+                'CHAR2: (if >= 2 people in the frame) English tags of the 2nd character in the frame (and further CHAR3:, CHAR4: for the 3rd and 4th character)',
             ]),
         (comicOpts && comicOpts.enabled && comicOpts.linesMode !== 'off')
-            ? ('QUOTE1: SPEECH | Имя говорящего | полная реплика вслух до точки (ИЛИ THOUGHT | Имя | мысль про себя ИЛИ NARRATION | полное предложение авторского описания БЕЗ имени!)\nQUOTE2: SPEECH | Имя | реплика (ИЛИ THOUGHT | Имя | мысль ИЛИ NARRATION | описание действия/детали БЕЗ имени!)\nQUOTE3: SPEECH | Имя | реплика (ИЛИ THOUGHT | Имя | мысль ИЛИ NARRATION | описание БЕЗ имени!)' + (Number(comicOpts.framesPerPage) === 4 ? '\nQUOTE4: SPEECH | Имя | реплика (ИЛИ THOUGHT | Имя | мысль ИЛИ NARRATION | описание БЕЗ имени!)' : ''))
+            ? ('QUOTE1: SPEECH | Speaker\'s name | the full line spoken aloud up to the full stop (OR THOUGHT | Name | inner thought OR NARRATION | a full narration sentence WITHOUT a name!)\nQUOTE2: SPEECH | Name | line (OR THOUGHT | Name | thought OR NARRATION | description of an action/detail WITHOUT a name!)\nQUOTE3: SPEECH | Name | line (OR THOUGHT | Name | thought OR NARRATION | description WITHOUT a name!)' + (Number(comicOpts.framesPerPage) === 4 ? '\nQUOTE4: SPEECH | Name | line (OR THOUGHT | Name | thought OR NARRATION | description WITHOUT a name!)' : ''))
             : '',
-        (comicOpts && comicOpts.enabled) ? 'ВАЖНО: в режиме комикса обязательно выведи все запрошенные строки выше (PANEL1, PANEL2, PANEL3 должны описывать 3 РАЗНЫХ момента и ракурса, не дублируй одну и ту же позу)!' : '',
+        (comicOpts && comicOpts.enabled) ? 'IMPORTANT: in comic mode be sure to output all the requested lines above (PANEL1, PANEL2, PANEL3 must show 3 DIFFERENT moments and angles; don\'t duplicate the same pose)!' : '',
         ']',
     ].filter(Boolean).join('\n\n');
 }
@@ -8434,6 +8684,12 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId =
         linesCol.append(linesSel);
         framesAndLinesRow.append(framesCol, linesCol);
         comicBox.append(framesAndLinesRow);
+        const ruRow = $(`<label class="checkbox_label" style="margin:0 0 8px 0; font-size:0.84em;"><input type="checkbox"> 🇷🇺 Облачка на русском, даже если ролевая на английском (один короткий запрос на перевод на страницу)</label>`);
+        ruRow.find('input').prop('checked', !!settings().comicCaptionsRu).on('change', function () {
+            settings().comicCaptionsRu = $(this).prop('checked');
+            saveSettings();
+        });
+        comicBox.append(ruRow);
 
         const chunkRow = $('<div style="margin-bottom:8px; font-size:0.84em;"></div>');
         chunkRow.append(`<div style="font-weight:600; margin-bottom:3px;">📖 Режим страниц манхвы по посту <span style="font-weight:400; opacity:0.8;">(пост разбит на ${postChunks.length} эп. — все страницы выдаются сразу сверху вниз, как в манхве!)</span></div>`);
@@ -8538,9 +8794,54 @@ function sanitizeLiteralMetaphorTags(promptStr) {
         .replace(/\bgreenish\s+(?:skin|face|complexion)\b/gi, 'pale skin, unwell');
 }
 
+// ===== NSFW крупный план = обычная сцена двоих, просто близкий кадр (иначе «отдельные части тела» рисуются бодихоррором) =====
+const NNB_NSFW_ACT_RE = /\b(sex|hetero|yaoi|yuri|genitals|penis|erection|testicles|pussy|vagina|clitoris|labia|anus|insertion|penetration|vaginal|anal|cum|ejaculation|creampie|fellatio|blowjob|oral|cunnilingus|handjob|fingering|paizuri|grinding|missionary|cowgirl position|doggystyle|straddling|nipples|areolae|nude|naked|completely nude)\b/i;
+function nnbIsNsfwActPrompt(p) {
+    const t = String(p || '').toLowerCase();
+    return /\b(nsfw|explicit)\b/.test(t) && NNB_NSFW_ACT_RE.test(t);
+}
+function nnbNsfwCloseupAsScene(rawPrompt) {
+    let p = String(rawPrompt || '');
+    if (!nnbIsNsfwActPrompt(p)) return p;
+    p = p.replace(/\b(?:head out of frame|face out of frame|cropped head|headless|cropped|intimate close-up|penetration close-up|sex close-up|extreme close-up|macro shot|macro|no humans|object focus|still life|disembodied[a-z ]*|(?:groin|pelvic|crotch|lower body|genitals?|penis|pussy|breasts?|ass|butt|thighs?) focus|focus on [^,]+)\b\s*,?/gi, '');
+    const low = p.toLowerCase();
+    const hasBoy = /\b(1boy|[2-6]boys|male)\b/.test(low);
+    const hasGirl = /\b(1girl|[2-6]girls|female)\b/.test(low);
+    const needBoy = /\b(penis|erection|testicles|fellatio|blowjob|handjob|paizuri|ejaculation|cum)\b/.test(low);
+    const needGirl = /\b(pussy|vagina|clitoris|labia|vaginal|cunnilingus|paizuri|breasts|nipples|areolae)\b/.test(low);
+    const add = [];
+    if (!hasBoy && (needBoy || (!hasGirl && !needGirl))) add.push('1boy');
+    if (!hasGirl && (needGirl || /\b(hetero|vaginal|penetration|sex)\b/.test(low))) add.push('1girl');
+    if ((hasBoy || add.includes('1boy')) && (hasGirl || add.includes('1girl')) && !/\bhetero\b/.test(low)) add.push('hetero');
+    // кадр близкий, но это СЦЕНА: оба тела целиком связаны, лица могут быть частично в кадре
+    const framing = /\b(close-up|upper body|lower body|cowboy shot|medium shot)\b/.test(low) ? [] : ['close-up'];
+    p = ['nsfw', 'explicit', ...add, ...framing, p.replace(/\b(?:nsfw|explicit)\b\s*,?/gi, '')].join(', ');
+    if (!/\b(from side|from above|from below|from behind|pov|dutch angle)\b/i.test(p)) p += ', from side';
+    p += ', anatomically correct, connected bodies';
+    return p.replace(/,\s*,+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+// Перевод реплик комикса на русский (только если они не по-русски). Имена и подписи говорящих не трогаем.
+async function nnbTranslateQuotesRu(quotes) {
+    const isRu = t => { const x = String(t || ''); const cyr = (x.match(/[а-яё]/gi) || []).length; const lat = (x.match(/[a-z]/gi) || []).length; return cyr >= lat; };
+    const idx = quotes.map((q, i) => (q && q.text && !isRu(q.text) ? i : -1)).filter(i => i >= 0);
+    if (!idx.length) return quotes;
+    const req = `${SELF_CONTAINED_PROMPT_MARKER}Translate these comic speech bubbles into natural, vivid literary Russian. Keep the tone, swearing and character voice; keep names as they are. Output ONLY the numbered lines in the same order, nothing else.\n\n${idx.map((i, k) => `${k + 1}. ${String(quotes[i].text).replace(/\n+/g, ' ')}`).join('\n')}`;
+    const raw = String(await quietGenerate(req, 1200) || '');
+    const out = quotes.map(q => ({ ...q }));
+    const lines = raw.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    idx.forEach((qi, k) => {
+        const m = lines.find(l => new RegExp(`^${k + 1}[.)]\\s*`).test(l));
+        const tr = m ? m.replace(/^\d+[.)]\s*/, '').replace(/^[«"]|[»"]$/g, '').trim() : '';
+        if (tr && isRu(tr)) { out[qi].textOrig = out[qi].text; out[qi].text = tr; }
+    });
+    return out;
+}
+
 function isDetailOrMacroPanelPrompt(rawPrompt) {
     const p = String(rawPrompt || '').toLowerCase();
     if (!p) return false;
+    if (nnbIsNsfwActPrompt(p)) return false; // интим — всегда кадр с людьми и их слотами, не «деталь»
     // Кадр с людьми в среднем/общем плане («2girls, medium shot, car interior, windshield…») — НЕ деталь, даже если в нём упомянут предмет.
     // Деталью его делают только явные пометки: hand focus, head out of frame, close-up, no humans и т.п.
     const hasPeopleCount = /\b([2-6](?:boys|girls)|multiple (?:boys|girls)|1boy\b[^|]*\b1girl|1girl\b[^|]*\b1boy)\b/.test(p);
@@ -8609,12 +8910,12 @@ function buildHeroAppearancePrompt(n) {
     const rawDesc = n.isMainChar && cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]?.description
         ? cObj.substituteParams(String(cObj.characters[cObj.characterId].description)).slice(0, 900)
         : '';
-    return `[OOC: Определи точные теги внешности персонажа «${n.name}» для генератора аниме-артов NovelAI (база Danbooru).
-Справка о персонаже: ${n.card || ''} ${rawDesc}
-ВАЖНЫЕ ПРАВИЛА:
-1) Если «${n.name}» — каноничный персонаж из известного аниме, манги или игры (например, Наоя Дзэнин / Naoya Zenin из Jujutsu Kaisen, Годжо Сатору, Тоджи Фушигуро, Сугуру Гето и т.д.), ОБЯЗАТЕЛЬНО поставь ПЕРВЫМИ два точных тега в формате Danbooru: \`фамилия_имя_по-японски, название_тайтла_по-английски\` со строчной буквы (например: \`zen'in naoya, jujutsu kaisen\` или \`fushiguro toji, jujutsu kaisen\`). Просто одного имени без фамилии и тайтла NovelAI не понимает!
-2) Сразу после каноничного тега (или с самого начала, если персонаж оригинальный) напиши через запятую 8–12 коротких точных тегов Danbooru его физической внешности: цвет и длина волос, причёска, цвет и форма глаз (например, slit pupils, upturned eyes), пирсинг/шрамы/уши/хвост, телосложение.
-Выдай ТОЛЬКО одну строку английских тегов через запятую без пояснений.]`;
+    return `[OOC: Determine the exact appearance tags of the character «${n.name}» for the NovelAI anime-art generator (Danbooru base).
+About the character: ${n.card || ''} ${rawDesc}
+IMPORTANT RULES:
+1) If «${n.name}» is a canonical character from a known anime, manga or game (e.g. Naoya Zenin from Jujutsu Kaisen, Gojo Satoru, Fushiguro Toji, Geto Suguru, etc.), ALWAYS put FIRST the two exact Danbooru tags in the format \`surname_name_in_japanese_order, title_in_english\` in lower case (e.g. \`zen'in naoya, jujutsu kaisen\` or \`fushiguro toji, jujutsu kaisen\`). NovelAI does not understand a bare first name without surname and title!
+2) Right after the canonical tag (or from the very start if the character is original) write 8–12 short exact Danbooru tags of their physical appearance, comma-separated: hair colour and length, hairstyle, eye colour and shape (e.g. slit pupils, upturned eyes), piercings/scars/ears/tail, build.
+Output ONLY one line of English tags, comma-separated, no explanations.]`;
 }
 
 // Автоматически (один раз на героя) заполняет «Внешность (англ.)» из карточки, если поле пустое —
@@ -8636,6 +8937,7 @@ async function nnbAutoFillCastAppearance(st, mesId, comicOpts, castNames = []) {
         });
         let changed = false;
         for (const n of heroes) {
+            if (settings().autoAppearance === false) break;
             if (String(n.appearanceEn || '').trim() || n._autoAppearTried) continue;
             n._autoAppearTried = true;
             logImageDiag(`🧬 У героя «${n.name}» не заполнена внешность (англ.) — составляю один раз по карточке`);
@@ -8983,6 +9285,12 @@ function nnbPromptAnswerHasReasoning(raw, isComicMode) {
 function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     let p = sanitizeLiteralMetaphorTags(String(rawPrompt || '').trim());
     if (!p) return '';
+    // NSFW: даже если модель пометила кадр [DETAIL]/[HANDS] — рисуем сцену двоих близким планом
+    if (nnbIsNsfwActPrompt(p)) {
+        const tagM = p.match(/^\[(OBJECT|HANDS|DETAIL|REACTION)\]\s*/i);
+        if (tagM) p = p.slice(tagM[0].length);
+        return nnbNsfwCloseupAsScene(p);
+    }
 
     // 0) Убираем текстовые звуки и облачка из позитива, чтобы текст не плыл в картинку
     p = p
@@ -10006,10 +10314,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             let raw = '';
             for (let attempt = 1; attempt <= 3; attempt++) {
                 const req = attempt === 1 ? basePromptReq
-                    : `${basePromptReq}\n\n[ВАЖНО: в прошлый раз в ответ попали рассуждения. Не рассуждай и не объясняй — выдай СРАЗУ готовые строки в нужном формате, в строках PANEL/SCENE только английские теги через запятую.]`;
+                    : `${basePromptReq}\n\n[IMPORTANT: last time your reply contained reasoning. Don't reason or explain — output the finished lines in the required format RIGHT AWAY; PANEL/SCENE lines contain only English comma-separated tags.]`;
                 raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(req));
                 lastPromptRaw = raw;
-                if (!nnbPromptAnswerHasReasoning(raw, isComicMode) || attempt === 3) break;
+                if (!nnbPromptAnswerHasReasoning(raw, isComicMode) || attempt === 3 || nnbStopActive()) break;
                 logImageDiag(`🔁 В ответе модели промптов рассуждения вместо тегов — автоматически запрашиваю заново (попытка ${attempt + 1}/3)`, String(raw || '').slice(0, 300));
             }
             logImageDiag('Ответ модели промптов получен', raw ? String(raw).slice(0, 500) : '(пусто)');
@@ -10357,6 +10665,10 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     : fullPostTxt;
                 const storyTxt = [prevMsgObj?.mes || '', fullPostTxt].join('\n');
                 verifiedQuotes = verifyComicQuotesAgainstStory(rawLlmQuotes, fullPostTxt || storyTxt, primaryQuoteSource, '', cast, st, Number(activeComicOpts.framesPerPage) === 4 ? 4 : 3);
+                // РП на английском, а облачка нужны на русском — переводим уже проверенные реплики одним коротким запросом
+                if (verifiedQuotes.length && settings().comicCaptionsRu) {
+                    try { verifiedQuotes = await nnbTranslateQuotesRu(verifiedQuotes); } catch (e) { if (nnbIsStopError(e)) throw e; logImageDiag('⚠️ Перевод облачек не удался — оставляю оригинал', e?.message || String(e)); }
+                }
                 if (!isNai && verifiedQuotes.length) {
                     prompt += `\nSpeech bubbles (Cyrillic text written exactly as given, never invent other words): ` +
                         verifiedQuotes.map((q, idx) => `Panel ${idx + 1}${q.speaker ? ` (${q.speaker})` : ''}: «${q.text}»`).join('; ');
@@ -11310,7 +11622,9 @@ async function showScenePopup(mesId, forceAsk = false) {
         let lastSceneSegIdx = -1;
         const fullRawMesForPassport = String(cInit.chat?.[tIdxInit]?.mes || '');
         try {
+            const stopEpoch0 = NNB_STOP.epoch;
             for (let i = 0; i < chunks.length; i++) {
+                if (NNB_STOP.epoch !== stopEpoch0) { logImageDiag('⏹ Глава остановлена вручную'); break; }
                 const chObj = chunks[i];
                 const curSeg = getActiveSceneSegmentFromFullPost(chObj.text, fullRawMesForPassport);
                 if (curSeg.sceneIndex !== lastSceneSegIdx) {
@@ -13190,42 +13504,42 @@ function gachaPrompt(st, rarities, hint, mode = 'items') {
     if (mode === 'choices') {
         const recentChoices = (st.gacha.choices || []).slice(-12).map(x => x.title);
         const lines = [
-            '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и устраиваешь «гачу вариантов»: игрок испытывает удачу и получает три варианта на выбор (НЕ предметы для инвентаря, а события, занятия, места, профессии, книги/фильмы, знакомства или решения).',
+            '[OOC: Roleplay paused. You are NOT writing a character reply now. You are the author\'s assistant running a «gacha of options»: the player tries their luck and gets three options to choose from (NOT inventory items, but events, activities, places, jobs, books/films, acquaintances or decisions). Write names and descriptions in Russian.',
             hint
-                ? `Тема розыгрыша от игрока: «${hint}». Придумай три разных варианта именно на эту тему (например, если это книга или фильм — три конкретных названия с жанром и о чём они; если профессия или подработка — три вакансии/роли с условиями; если куда пойти — три колоритных места; если знакомство — три интересных человека).`
-                : `Пойми по последним сообщениям чата, какой выбор или случай сейчас интереснее всего для ${names.user}: куда сходить, какую книгу почитать или фильм посмотреть на вечер, какую подработку/профессию выбрать, какое блюдо заказать, с кем случайно познакомиться или чем заняться. Выбери одну самую подходящую к сцене тему и предложи три варианта внутри неё.`,
-            when ? `Когда и где: ${when}. Учитывай реалии, атмосферу и местную валюту (если уместно).` : '',
+                ? `The player's topic for the roll: «${hint}». Come up with three different options on exactly this topic (e.g. for a book or film — three concrete titles with genre and what they are about; for a job or side gig — three vacancies/roles with conditions; for where to go — three colourful places; for an acquaintance — three interesting people).`
+                : `Work out from the latest chat messages which choice or occasion is most interesting right now for ${names.user}: where to go, what book to read or film to watch tonight, what side job/profession to pick, what dish to order, whom to meet by chance or what to do. Pick the one topic that fits the scene best and suggest three options within it.`,
+            when ? `When and where: ${when}. Take into account the local realities, atmosphere and currency (if relevant).` : '',
             buildDirection(st),
-            recentChoices.length ? `Уже выпадало ранее (не повторяй): ${recentChoices.join(', ')}.` : '',
-            'Редкость каждого варианта уже выпала, придумай их строго под неё, в этом порядке:',
+            recentChoices.length ? `Already rolled before (don't repeat): ${recentChoices.join(', ')}.` : '',
+            'The rarity of each option has already been rolled; invent them strictly to fit it, in this order:',
             ...rarities.map((r, i) => `${i + 1}) ${rarityOf(r).name.toUpperCase()} — ${rarityOf(r).choiceHint}`),
-            `Все три варианта должны заметно отличаться по настроению и сути. У каждого — скрытый «крючок»: чем обернётся этот выбор в сюжете, если ${names.user} выберет именно его (какая сцена начнётся, кто как отреагирует, что откроется). Крючок — для автора, игрок его заранее не видит. Персонажи и тайны — только из этой истории.`,
-            'Формат, без пояснений:',
-            'PLACE: короткое название темы (например «Книга на вечер», «Вакансия», «Куда пойти», «Случайная встреча»)',
-            'Затем по одной строке на каждый из 3 вариантов:',
-            'ITEM: название варианта | описание в 1–2 предложениях | короткая деталь (жанр, условия, особенность или где это) | сюжетный крючок',
+            `All three options must differ noticeably in mood and substance. Each has a hidden «hook»: what this choice will turn into in the plot if ${names.user} picks it (what scene begins, who reacts how, what is revealed). The hook is for the author; the player doesn't see it in advance. Characters and secrets only from this story.`,
+            'Format, no explanations:',
+            'PLACE: a short name of the topic (e.g. «Книга на вечер», «Вакансия», «Куда пойти», «Случайная встреча»)',
+            'Then one line for each of the 3 options:',
+            'ITEM: option name | description in 1–2 sentences | a short detail (genre, conditions, feature or where it is) | plot hook',
         ];
         return lines.filter(Boolean).join('\n') + ']';
     }
     const owned = st.wardrobe.box.slice(-12).map(x => x.title);
     const images = wantImages();
     const lines = [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и устраиваешь «гачу покупок и находок»: игрок выбирает из трёх осязаемых вещей или покупок.',
+        '[OOC: Roleplay paused. You are NOT writing a character reply now. You are the author\'s assistant running a «gacha of purchases and finds»: the player chooses from three tangible things or purchases. Write names and descriptions in Russian (EN lines in English).',
         hint
-            ? `ВАЖНО — ЧТО ИМЕННО ИЩЕТ ИЛИ ВЫБИРАЕТ ИГРОК: «${hint}». Придумай 3 конкретных предмета СТРОГО ЭТОЙ КАТЕГОРИИ! (Например, если игрок указал обувь — предложи 3 разные пары обуви: туфли, ботильоны, сапожки и т.д.; если платье/одежду — 3 вещи гардероба; если сумочку, книгу, мебель или подарок — строго их! СТРОГО ЗАПРЕЩЕНО подменять запрос игрока на мелкие безделушки у кассы!)`
-            : `Пойми по последним сообщениям чата, в каком магазине или месте сейчас находится ${names.user} и что там продаётся или лежит! ВАЖНО: предлагай основной товар этого места, а НЕ мелочёвку у кассы! Если героиня в обувном магазине — предложи 3 разные пары обуви; если в бутике одежды — 3 наряда/вещи; если в книжном — 3 книги; если в ювелирном — 3 украшения; если в мебельном/интерьерном — 3 предмета для дома; и только на барахолке или в лавке редкостей — винтажные диковинки.`,
-        when ? `Когда и где: ${when}. Цену пиши в местной валюте (${st.wallet?.currency || '£'}) сообразно категории вещи.` : 'Цену пиши в валюте, уместной для этого мира.',
+            ? `IMPORTANT — WHAT EXACTLY THE PLAYER IS LOOKING FOR OR CHOOSING: «${hint}». Come up with 3 concrete items STRICTLY OF THIS CATEGORY! (E.g. if the player named shoes — suggest 3 different pairs: heels, ankle boots, boots etc.; a dress/clothes — 3 wardrobe items; a handbag, book, furniture or gift — strictly those! It is STRICTLY FORBIDDEN to replace the player's request with small trinkets at the till!)`
+            : `Work out from the latest chat messages which shop or place ${names.user} is in now and what is sold or lying there! IMPORTANT: suggest the main goods of that place, NOT trinkets at the till! In a shoe shop — 3 different pairs of shoes; in a clothes boutique — 3 outfits/items; in a bookshop — 3 books; at a jeweller's — 3 pieces of jewellery; in a furniture/interior shop — 3 home items; and only at a flea market or curiosity shop — vintage oddities.`,
+        when ? `When and where: ${when}. Give the price in the local currency (${st.wallet?.currency || '£'}) appropriate to the category.` : 'Give the price in a currency appropriate to this world.',
         buildDirection(st),
-        owned.length ? `У ${names.user} уже есть: ${owned.join(', ')} — не повторяй.` : '',
-        'Редкость каждого варианта уже выпала, придумай 3 предмета строго под неё, в этом порядке:',
+        owned.length ? `${names.user} already has: ${owned.join(', ')} — don't repeat.` : '',
+        'The rarity of each option has already been rolled; invent 3 items strictly to fit it, in this order:',
         ...rarities.map((r, i) => `${i + 1}) ${rarityOf(r).name.toUpperCase()} — ${rarityOf(r).hint}`),
-        `Все три предмета должны быть полноценными вещами нужной категории (не мелочёвкой, если только игрок сам не ищет мелочь). У каждого — «крючок»: чем обернётся эта покупка/находка в сцене, кто из персонажей как отреагирует и что заметит.`,
-        'Формат, без пояснений:',
-        'PLACE: короткое название магазина, отдела или места (и что выбираем)',
-        `Затем по ${images ? 'две строки' : 'одной строке'} на каждый из 3 предметов:`,
-        'ITEM: название предмета | как выглядит, фасон/материал/детали — 1–2 предложения | цена | крючок',
+        `All three items must be proper things of the requested category (not trinkets unless the player is looking for one). Each has a «hook»: what this purchase/find will turn into in the scene, which characters react how and what they notice.`,
+        'Format, no explanations:',
+        'PLACE: a short name of the shop, department or place (and what we are choosing)',
+        `Then ${images ? 'two lines' : 'one line'} for each of the 3 items:`,
+        'ITEM: item name | how it looks, cut/material/details — 1–2 sentences | price | hook',
     ];
-    if (images) lines.push('EN: этот же предмет коротко по-английски для художника, только как он выглядит (без людей и рук)');
+    if (images) lines.push('EN: the same item briefly in English for the artist, only how it looks (no people or hands)');
     return lines.filter(Boolean).join('\n') + ']';
 }
 function parseGacha(raw, rarities) {
@@ -13608,7 +13922,7 @@ function gachaInjection(st, mode = 'all') {
 
     const pinned = (st?.gacha?.choices || []).filter(c => c.pinned);
     if (pinned.length && mode !== 'dynamic') {
-        out.push(`[Закреплённые выборы ${names.user}: ${pinned.map(c => `${c.topic ? `${c.topic}: ` : ''}«${c.title}»${c.detail ? ` (${c.detail})` : ''}${c.desc ? ` — ${c.desc}` : ''}`).join('; ')}.]`);
+        out.push(`[${names.user}'s pinned choices: ${pinned.map(c => `${c.topic ? `${c.topic}: ` : ''}«${c.title}»${c.detail ? ` (${c.detail})` : ''}${c.desc ? ` — ${c.desc}` : ''}`).join('; ')}.]`);
     }
     if (mode === 'static') return out.join('\n\n');
 
@@ -13621,19 +13935,19 @@ function gachaInjection(st, mode = 'all') {
         if (itemsList.length) {
             const oneItem = p => {
                 const r = rarityOf(p.rarity);
-                return `${p.price ? `купил(а) за ${p.price}` : 'взял(а)'}${p.place ? ` (${p.place})` : ''} ${r.name.toLowerCase().replace(/ая$/, 'ую')} находку — «${p.title}»${p.desc ? `: ${p.desc}` : ''}.${p.hook ? ` Как её обыграть: ${p.hook}.` : ''}${p.others?.length && !itemsList.some(q => q !== p && q.spin && q.spin === p.spin && itemsList.indexOf(q) > itemsList.indexOf(p)) ? ` Остальное (${p.others.join(', ')}) осталось на прилавке или досталось другим.` : ''}`;
+                return `${p.price ? `bought for ${p.price}` : 'got'}${p.place ? ` (${p.place})` : ''} a find of rarity «${r.name}» — «${p.title}»${p.desc ? `: ${p.desc}` : ''}.${p.hook ? ` How to play it: ${p.hook}.` : ''}${p.others?.length && !itemsList.some(q => q !== p && q.spin && q.spin === p.spin && itemsList.indexOf(q) > itemsList.indexOf(p)) ? ` The rest (${p.others.join(', ')}) stayed on the counter or went to others.` : ''}`;
             };
-            const body = itemsList.length === 1 ? `${names.user} только что ${oneItem(itemsList[0])}` : `${names.user} только что сделал(а) несколько находок:\n${itemsList.map((p, i) => `${i + 1}) ${oneItem(p)}`).join('\n')}`;
-            out.push(`[Находка: ${body}\nВ СЛЕДУЮЩЕМ ответе обязательно обыграй ${itemsList.length === 1 ? 'её' : 'их'}. Чем реже находка, тем заметнее её след в сюжете.]`);
+            const body = itemsList.length === 1 ? `${names.user} has just ${oneItem(itemsList[0])}` : `${names.user} has just made several finds:\n${itemsList.map((p, i) => `${i + 1}) ${oneItem(p)}`).join('\n')}`;
+            out.push(`[Find: ${body}\nIn the NEXT reply be sure to play ${itemsList.length === 1 ? 'it' : 'them'} out. The rarer the find, the more noticeable its trace in the plot.]`);
         }
 
         if (choicesList.length) {
             const oneChoice = p => {
                 const r = rarityOf(p.rarity);
-                return `в теме «${p.place || 'выбор'}» выпал ${r.name.toLowerCase().replace(/ая$/, 'ый')} вариант — «${p.title}»${p.price ? ` (${p.price})` : ''}${p.desc ? `: ${p.desc}` : ''}.${p.hook ? ` Сюжетный крючок (обыграй естественно): ${p.hook}.` : ''}${p.others?.length && !choicesList.some(q => q !== p && q.spin && q.spin === p.spin && choicesList.indexOf(q) > choicesList.indexOf(p)) ? ` Другие варианты (${p.others.join(', ')}) не выбраны.` : ''}`;
+                return `on the topic «${p.place || 'выбор'}» the roll gave a «${r.name}» option — «${p.title}»${p.price ? ` (${p.price})` : ''}${p.desc ? `: ${p.desc}` : ''}.${p.hook ? ` Plot hook (play it naturally): ${p.hook}.` : ''}${p.others?.length && !choicesList.some(q => q !== p && q.spin && q.spin === p.spin && choicesList.indexOf(q) > choicesList.indexOf(p)) ? ` Other options (${p.others.join(', ')}) were not chosen.` : ''}`;
             };
-            const body = choicesList.length === 1 ? `Для ${names.user} только что ${oneChoice(choicesList[0])}` : `Для ${names.user} только что выпали следующие варианты:\n${choicesList.map((p, i) => `${i + 1}) ${oneChoice(p)}`).join('\n')}`;
-            out.push(`[Выбор судьбы: ${body}\nВ СЛЕДУЮЩЕМ ответе обязательно естественно вплети и обыграй этот выбор в сцене (будь то книга/фильм на вечер, поход куда-то, работа/вакансия, знакомство или занятие). Чем выше редкость, тем ярче последствия для сюжета.]`);
+            const body = choicesList.length === 1 ? `For ${names.user}, ${oneChoice(choicesList[0])}` : `For ${names.user} the following options have just come up:\n${choicesList.map((p, i) => `${i + 1}) ${oneChoice(p)}`).join('\n')}`;
+            out.push(`[Twist of fate: ${body}\nIn the NEXT reply be sure to weave this choice into the scene naturally (a book/film for the evening, going somewhere, a job/vacancy, a new acquaintance or an activity). The higher the rarity, the brighter the consequences for the plot.]`);
         }
     }
     return out.join('\n\n');
@@ -13651,17 +13965,17 @@ function clearGachaPending() {
 function revealPrompt(st) {
     const a = st.wardrobe.active;
     const names = storyNames();
-    const arcs = st.direction.arcs && st.arcs.length ? `\nТекущие арки:\n${formatArcs(st, true)}` : '';
+    const arcs = st.direction.arcs && st.arcs.length ? `\nCurrent arcs:\n${formatArcs(st, true)}` : '';
     return [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора.',
-        `${names.user} выбрал(а) наряд «${a.look.title}» — ${a.look.desc}${a.occasion ? ` (для: ${a.occasion})` : ''}.`,
-        a.look.effects ? `Задуманные последствия: ${a.look.effects}.` : '',
-        a.accent ? `Штрих к образу: ${a.accent.title}${a.accent.effects ? ` (задумано: ${a.accent.effects})` : ''}.` : '',
-        'Перечитай чат: как этот выбор на самом деле сыграл в сцене?' + arcs,
-        'Ответь строками, без пояснений:',
-        'RESULT: итог в 1–2 предложениях, с юмором и теплом — кто как отреагировал и чем этот образ запомнится',
-        st.direction.arcs && st.arcs.length ? 'STIMULUS #A1: что изменилось — только если наряд действительно подтолкнул чью-то арку (иначе не пиши)' : '',
-        st.direction.npcs && st.npcs.length ? 'SCALE [Имя]: дружба=+2 — только если наряд действительно заметно повлиял на отношение NPC (иначе не пиши)' : '',
+        '[OOC: Roleplay paused. You are NOT writing a character reply now. You are the author\'s assistant. Write in Russian.',
+        `${names.user} chose the outfit «${a.look.title}» — ${a.look.desc}${a.occasion ? ` (for: ${a.occasion})` : ''}.`,
+        a.look.effects ? `Intended consequences: ${a.look.effects}.` : '',
+        a.accent ? `Finishing touch: ${a.accent.title}${a.accent.effects ? ` (intended: ${a.accent.effects})` : ''}.` : '',
+        'Reread the chat: how did this choice actually play out in the scene?' + arcs,
+        'Reply with lines, no explanations:',
+        'RESULT: the outcome in 1–2 sentences, with humour and warmth — who reacted how and what this look will be remembered for',
+        st.direction.arcs && st.arcs.length ? 'STIMULUS #A1: what changed — only if the outfit really pushed someone\'s arc (otherwise don\'t write it)' : '',
+        st.direction.npcs && st.npcs.length ? 'SCALE [Name]: дружба=+2 — only if the outfit really noticeably affected the NPC\'s attitude (otherwise don\'t write it)' : '',
         ']',
     ].filter(Boolean).join('\n');
 }
@@ -14218,9 +14532,9 @@ function addPlace(st, line, origin) {
 function buildMapSection(st) {
     if (!mapOn(st)) return '';
     const known = st.map.places.map(p => p.title).join('; ');
-    return `Карта мест. Уже на карте: ${known || '(пусто)'}.
-MAP: название | что это за место | 2–3 конкретных крючка и зацепки этого места через точку с запятой (необычная деталь, колоритный завсегдатай, слух или микро-ситуация) — если в чате появилось новое место, куда можно сходить, и его ещё нет на карте.
-HERE: название — если герои сейчас в месте с карты.`;
+    return `Map of places. Already on the map: ${known || '(empty)'}.
+MAP: name | what the place is | 2–3 concrete hooks of the place separated by semicolons (an unusual detail, a colourful regular, a rumour or a micro-situation) — if a new place one can go to appeared in the chat and it is not on the map yet. Write it in Russian.
+HERE: name — if the characters are now at a place from the map; HERE: нигде — if they went somewhere that is not on the map.`;
 }
 function isGenericPlaceHint(text) {
     const s = String(text || '').trim().toLowerCase();
@@ -14242,17 +14556,17 @@ function mapSeedPrompt(st, customHint = '') {
     const when = [t.date ? `${formatDate(t.date)}, ${season(t.date).name}` : '', placeLine(st)].filter(Boolean).join('; ');
     const known = st.map.places.map(p => p.title);
     const hintInstruction = customHint
-        ? `Игрок просит придумать место по запросу/категории: «${customHint}». НЕ записывай запрос буквально как «${customHint}» — придумай конкретное, атмосферное, правдоподобное название и описание такого места для этого города/мира (например, если игрок написал «бар» или «достопримечательность» — придумай конкретный колоритный бар или конкретную достопримечательность со своим именем и характером). Предложи 1 такое место (или 2–3, если игрок попросил несколько).`
-        : `Предложи ${known.length ? 4 : 5} мест поблизости, куда ${names.user} и другие персонажи могут пойти в этой истории. Места разные по настроению: уютные, людные, тайные, деловые, на природе. Учитывай город или мир, жанр, где живут и работают герои и что уже упоминалось в чате. Реальные места — только если они правда есть в этом городе, иначе придумай правдоподобные.`;
+        ? `The player asks to invent a place by request/category: «${customHint}». Do NOT record the request literally as «${customHint}» — invent a concrete, atmospheric, plausible name and description of such a place for this city/world (e.g. if the player wrote «бар» or «достопримечательность», invent a specific colourful bar or a specific landmark with its own name and character). Suggest 1 such place (or 2–3 if the player asked for several).`
+        : `Suggest ${known.length ? 4 : 5} places nearby where ${names.user} and the other characters could go in this story. The places differ in mood: cosy, crowded, secret, business-like, outdoors. Take into account the city or world, the genre, where the characters live and work and what was already mentioned in the chat. Real places only if they really exist in this city; otherwise invent plausible ones.`;
     return [
-        '[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — помощник автора и рисуешь карту мест для этой истории.',
-        when ? `Когда и где: ${when}.` : '',
+        '[OOC: Roleplay paused. You are NOT writing a character reply now. You are the author\'s assistant drawing a map of places for this story. Write names and descriptions in Russian.',
+        when ? `When and where: ${when}.` : '',
         buildDirection(st),
         hintInstruction,
-        'В КАЖДОЕ место сразу заложи 2–3 конкретных крючка (точки интереса, необычные детали, местные слухи, странности или колоритных завсегдатаев), за которые интересно зацепиться в игре.',
-        known.length ? `Уже на карте (не повторяй): ${known.join(', ')}.` : '',
-        'Формат, без пояснений:',
-        'MAP: конкретное название места | одно предложение, что это за место | крючок 1; крючок 2; крючок 3',
+        'Give EVERY place 2–3 concrete hooks right away (points of interest, unusual details, local rumours, oddities or colourful regulars) that are interesting to latch onto in play.',
+        known.length ? `Already on the map (don't repeat): ${known.join(', ')}.` : '',
+        'Format, no explanations:',
+        'MAP: concrete place name | one sentence on what the place is | hook 1; hook 2; hook 3',
     ].filter(Boolean).join('\n') + ']';
 }
 
@@ -14320,12 +14634,12 @@ async function finalizeTravel(pl, { skipDays = 0, companion = '' } = {}) {
     st.map.currentCompanion = isSolo ? 'solo' : companion.trim();
     const mainCharCandidates = names.chars.length ? names.chars : [names.char];
     const companionHasMainChar = !isSolo && mainCharCandidates.some(cn => cn && (matchesCharacterName(cn, companion) || isNameMentionedInText(cn, companion)));
-    const compText = isSolo ? ' В одиночку.' : ` Вместе с: ${companion.trim()}.`;
-    const hooksInfo = pl.hooks ? ` Известные особенности и зацепки этого места: ${String(pl.hooks).replace(/[.\s]+$/, '')}.` : '';
+    const compText = isSolo ? ' Alone.' : ` Together with: ${companion.trim()}.`;
+    const hooksInfo = pl.hooks ? ` Known features and hooks of this place: ${String(pl.hooks).replace(/[.\s]+$/, '')}.` : '';
     const poiPrompt = livingWorldOn(st)
-        ? ` Сразу при входе вплети в описание 2–3 конкретные точки интереса (живые крючки, за которые можно зацепиться): например, необычную деталь обстановки/объявление/забытый предмет, приметного человека со своим занятием и обрывок чужого разговора или микро-сценку поблизости.`
+        ? ` Right on entering, weave 2–3 concrete points of interest into the description (lively hooks to latch onto): e.g. an unusual detail of the setting/a notice/a forgotten object, a noticeable person busy with something, and a snatch of someone else's conversation or a micro-scene nearby.`
         : '';
-    const text = `${FF_MARKER} игрок решил отправиться: «${pl.title}»${pl.desc ? ` — ${String(pl.desc).replace(/[.\s]+$/, '')}` : ''}.${hooksInfo}${compText}${when} Сверни текущую сцену одной-двумя фразами и начни новую уже там: дорога коротко (если она не важна), прибытие, какое это место сейчас, кто там и что происходит.${poiPrompt} ${pl.visits > 1 ? `${names.user} здесь уже бывал(а) — что-то знакомое, что-то изменилось.` : ''} Пиши как обычный ответ, не упоминай карту.]`;
+    const text = `${FF_MARKER} the player decided to go to: «${pl.title}»${pl.desc ? ` — ${String(pl.desc).replace(/[.\s]+$/, '')}` : ''}.${hooksInfo}${compText}${when} Wrap up the current scene in a phrase or two and start the new one there: the way briefly (if it doesn't matter), the arrival, what the place is like now, who is there and what is happening.${poiPrompt} ${pl.visits > 1 ? `${names.user} has been here before — something familiar, something changed.` : ''} Write it as a normal reply; don't mention the map.]`;
 
     setSceneAdvancePrompt(text);
 
@@ -14692,9 +15006,9 @@ async function applyItemInScene(x, customAction) {
     if (busy) return toastr.info('Модель уже занята — подожди пару секунд', 'Блокнот рассказчика');
     const names = storyNames();
     const place = st.map?.places?.find(p => p.id === st.map?.current);
-    const where = place ? ` в месте «${place.title}»` : '';
-    const act = customAction ? ` Действие: ${customAction}.` : '';
-    const text = `${FF_MARKER} ${names.user} достаёт и применяет предмет: «${x.title}»${x.desc ? ` — ${x.desc}` : ''}${where}.${act} Опиши реакцию персонажей и последствия этого действия. Пиши как обычный ответ, не упоминай команды.]`;
+    const where = place ? ` at the place «${place.title}»` : '';
+    const act = customAction ? ` Action: ${customAction}.` : '';
+    const text = `${FF_MARKER} ${names.user} takes out and uses the item: «${x.title}»${x.desc ? ` — ${x.desc}` : ''}${where}.${act} Describe the characters' reaction and the consequences of this action. Write it as a normal reply; don't mention commands.]`;
     setSceneAdvancePrompt(text);
     toastr.info(`Применяем: ${escapeHtml(x.title)}`, '🪄 Активный предмет', { escapeHtml: false, timeOut: 4000 });
     const send = $('#send_but');
@@ -14710,7 +15024,7 @@ async function giftItemToNpc(x, npcName) {
     st.wardrobe.equipped = (st.wardrobe.equipped || []).filter(id => id !== x.id);
     await commit();
     const names = storyNames();
-    const text = `${FF_MARKER} ${names.user} дарит «${x.title}» персонажу ${x.giftedTo}. Это подарок (${x.origin || x.desc || 'особенная вещь'}). Опиши реакцию ${x.giftedTo} в характере и как этот жест отразится на их отношениях.]`;
+    const text = `${FF_MARKER} ${names.user} gives «${x.title}» to ${x.giftedTo}. It is a gift (${x.origin || x.desc || 'a special thing'}). Describe the reaction of ${x.giftedTo} in character and how this gesture affects their relationship.]`;
     setSceneAdvancePrompt(text);
     toastr.success(`🎁 «${escapeHtml(x.title)}» теперь у ${escapeHtml(x.giftedTo)}`, 'Подарок', { escapeHtml: false, timeOut: 5000 });
     const send = $('#send_but');
@@ -14774,7 +15088,7 @@ async function sellCounterItemNow(x, inScene = false) {
     );
     if (inScene) {
         const names = storyNames();
-        const text = `${FF_MARKER} Посетитель в лавке ${names.user} покупает с витрины товар «${x.title}»${x.desc ? ` (${x.desc})` : ''} за ${formatMoney(revenue, st)}.${x.hook ? ` Сюжетная деталь вещи: ${x.hook}.` : ''} Опиши живую сцену покупки: кто именно заинтересовался этой вещью, короткий диалог у прилавка, звон монет/оплату и интересную деталь или зацепку, которую оставляет покупатель. Метку SOLD добавлять не нужно — деньги уже зачислены.]`;
+        const text = `${FF_MARKER} A visitor in the shop of ${names.user} buys an item from the counter «${x.title}»${x.desc ? ` (${x.desc})` : ''} for ${formatMoney(revenue, st)}.${x.hook ? ` The item's plot detail: ${x.hook}.` : ''} Describe a lively purchase scene: who exactly took an interest in this item, a short dialogue at the counter, the clink of coins/payment and an interesting detail or hook the buyer leaves behind. No SOLD tag needed — the money is already credited.]`;
         setSceneAdvancePrompt(text);
         closeBook();
         const send = $('#send_but');
@@ -14794,11 +15108,11 @@ async function nextShopCustomer() {
     const counter = shopCounterItems(st);
     counter.forEach(x => ensureCounterPrice(x, st));
     const counterDesc = counter.length
-        ? `Сейчас на витрине выставлены на продажу: ${counter.map(x => `«${x.title}» (цена на ценнике: ${formatMoney(x.sellPrice, st)}${x.desc ? `, ${x.desc}` : ''}${x.hook ? `; история вещи: ${x.hook}` : ''})`).join('; ')}.`
-        : `На витрине сейчас пусто или товары ещё выкладываются — покупатель может спросить редкую вещь на заказ, принести необычную диковинку на оценку/продажу для ${names.user} или завязать интригующий разговор.`;
-    const wishLine = customWish.trim() ? ` Пожелание игрока к этому визитёру: ${customWish.trim()}.` : '';
+        ? `Now on display for sale: ${counter.map(x => `«${x.title}» (price tag: ${formatMoney(x.sellPrice, st)}${x.desc ? `, ${x.desc}` : ''}${x.hook ? `; the item's story: ${x.hook}` : ''})`).join('; ')}.`
+        : `The counter is empty now or the goods are still being laid out — the buyer may ask for a rare thing to order, bring an unusual curiosity for appraisal/sale to ${names.user} or start an intriguing conversation.`;
+    const wishLine = customWish.trim() ? ` The player's wish for this visitor: ${customWish.trim()}.` : '';
 
-    const text = `${FF_MARKER} Звенит колокольчик над дверью лавки ${names.user} — заходит следующий посетитель.${wishLine} ${counterDesc} Опиши живую, атмосферную сцену: кто именно вошёл (внешность, манера держаться, любопытная деталь), как он осматривается у прилавка, чем интересуется из товаров на витрине (или с каким необычным предложением/запросом пришёл к ${names.user}) и с какой реплики начинается ваш диалог. Не завершай сделку сразу за один пост — дай ${names.user} поговорить с покупателем, поторговаться или обсудить диковинку! Пиши как обычный ответ.]`;
+    const text = `${FF_MARKER} The bell over the door of the shop of ${names.user} rings — the next visitor comes in.${wishLine} ${counterDesc} Describe a lively, atmospheric scene: who exactly came in (looks, manner, a curious detail), how they look around at the counter, which goods on display interest them (or with what unusual offer/request they came to ${names.user}) and with what line your dialogue begins. Don't close the deal in a single post — let ${names.user} talk to the buyer, haggle or discuss the curiosity! Write it as a normal reply.]`;
 
     setSceneAdvancePrompt(text);
     closeBook();
@@ -15722,6 +16036,7 @@ async function onMessageReceived() {
 
 function onMessageReceivedThink() {
     try { const stD = store(); if (stD) nnbDripAfterReply(stD); } catch (e) { /* ignore */ }
+    try { const stH = store(); if (stH && nnbSyncFromHeaders(stH)) ctx().saveMetadata(); } catch (e) { /* ignore */ }
     updateInjection();
     renderPanel();
     const s = settings();
@@ -15729,7 +16044,7 @@ function onMessageReceivedThink() {
     if (!s.enabled || !st || busy) return;
     const len = ctx().chat.length;
     if (st.lastThinkAt > len) st.lastThinkAt = len; // сообщения удаляли
-    if (len - st.lastThinkAt >= (Number(s.interval) || 12)) {
+    if (s.autoThink !== false && len - st.lastThinkAt >= (Number(s.interval) || 12)) {
         setTimeout(() => think(false), 800);
     }
 }
@@ -15833,67 +16148,67 @@ function buildWorldCreationPrompt(st, cfg) {
     const sName = cfg.date ? season(cfg.date).name : 'осень';
     const hobbiesStr = (cfg.hobbies || []).join(', ') || 'прогулки по городу';
     const charLine = cfg.freeWorld
-        ? `Формат игры: СВОБОДНОЕ ИССЛЕДОВАНИЕ МИРА без привязки к одному стартовому фавориту. Не привязывай всё к ${names.char} — создай живое окружение вокруг ${names.user}, включая 1–2 харизматичных новых NPC с потенциалом интересного знакомства или романтической линии.`
-        : `Отношения с ${names.char} на старте: ${cfg.charRel}.`;
+        ? `Game format: FREE EXPLORATION OF THE WORLD without a single starting favourite. Don't tie everything to ${names.char} — build a living environment around ${names.user}, including 1–2 charismatic new NPCs with potential for an interesting acquaintance or a romance line.`
+        : `Relationship with ${names.char} at the start: ${cfg.charRel}.`;
     const hasShop = isShopOwnerJob(cfg.job);
     const cur = detectCurrencyForPlace(cfg.countryCode, cfg.countryName, cfg.city);
 
-    return `[OOC: Пауза в ролевой игре. Сейчас ты НЕ пишешь ответ персонажа. Ты — ведущий автор и создаёшь полный стартовый набор мира и персонажа (${names.user}) по выбранным параметрам.
+    return `[OOC: Roleplay paused. You are NOT writing a character reply now. You are the lead author creating the full starter pack of the world and the character (${names.user}) from the chosen parameters. Write all content in Russian except the parts explicitly requested in English.
 
-Параметры старта:
-— Место действия: ${cfg.city}${cfg.countryName ? `, ${cfg.countryName}` : ''}.
-— Дата и сезон: ${cfg.date ? `${formatDate(cfg.date)} (${sName})` : sName}.
-— Жильё ${names.user}: ${cfg.home}.
-— Точка старта: ${cfg.startVibe}.
-— Профессия / занятие ${names.user}: ${cfg.job}.
-— Хобби и увлечения ${names.user}: ${hobbiesStr}.
-— Достаток: ${cfg.wealth} (валюта места: ${cur}).${cfg.pet && cfg.pet !== 'Без питомца' ? ` Питомец дома: ${cfg.pet}.` : ''}
+Starting parameters:
+— Setting: ${cfg.city}${cfg.countryName ? `, ${cfg.countryName}` : ''}.
+— Date and season: ${cfg.date ? `${formatDate(cfg.date)} (${sName})` : sName}.
+— Home of ${names.user}: ${cfg.home}.
+— Starting point: ${cfg.startVibe}.
+— Job / occupation of ${names.user}: ${cfg.job}.
+— Hobbies of ${names.user}: ${hobbiesStr}.
+— Means: ${cfg.wealth} (local currency: ${cur}).${cfg.pet && cfg.pet !== 'Без питомца' ? ` Pet at home: ${cfg.pet}.` : ''}
 — ${charLine}
 ${buildDirection(st)}
 
-Сгенерируй за один раз весь стартовый пакет строго по шаблону ниже, без вступлений и пояснений:
+Generate the whole starter pack in one go strictly by the template below, no intros or explanations:
 
-1) Местный колорит и внешность для художника (2 строки):
-FLAVOR: 2–3 предложения о колорите места (еда, валюта, транспорт, погода в сезон «${sName}», атмосфера улиц и привычки местных)
-APPEARANCE: внешность ${names.user} по-английски для художника — пол, возраст, волосы, глаза, телосложение, заметные черты
+1) Local colour and looks for the artist (2 lines):
+FLAVOR: 2–3 sentences about the local colour (food, currency, transport, weather in the season «${sName}», the atmosphere of the streets and local habits)
+APPEARANCE: the looks of ${names.user} in English for the artist — sex, age, hair, eyes, build, notable features
 
-2) 5 стартовых локаций на Карте (дом ${names.user}, место работы/лавка, место под хобби, уютное кафе/бар и одно необычное/тайное место города). В КАЖДУЮ локацию обязательно заложи сразу 2–3 конкретных сюжетных крючка через точку с запятой (необычная деталь, слух, местная странность, колоритный завсегдатай или микро-сценка):
-MAP: название места | что это за место (1 предложение) | крючок 1; крючок 2; крючок 3
-(ровно 5 строк MAP)
+2) 5 starting locations on the Map (the home of ${names.user}, the workplace/shop, a hobby place, a cosy cafe/bar and one unusual/secret place in the city). Give EVERY location 2–3 concrete plot hooks right away, separated by semicolons (an unusual detail, a rumour, a local oddity, a colourful regular or a micro-scene):
+MAP: place name | what the place is (1 sentence) | hook 1; hook 2; hook 3
+(exactly 5 MAP lines)
 
-3) 4 стартовых NPC из окружения ${names.user} (например: коллега/поставщик/постоянный клиент по работе «${cfg.job}», подруга или сосед, знакомый по хобби «${hobbiesStr}», интересный незнакомец/потенциальный фаворит) и их связи с ${names.user}:
-NPC [Имя]: кто это, возраст, подробная внешность, характер, биография и отношение к ${names.user} (3–6 предложений в одну строку)
-REL [${names.user} ↔ Имя]: тип связи | что между ними сейчас
-(4 пары строк NPC и REL)
+3) 4 starting NPCs from the surroundings of ${names.user} (e.g.: a colleague/supplier/regular customer at work «${cfg.job}», a friend or neighbour, an acquaintance from the hobby «${hobbiesStr}», an interesting stranger/potential favourite) and their ties with ${names.user}:
+NPC [Name]: who they are, age, detailed looks, personality, biography and attitude to ${names.user} (3–6 sentences on one line)
+REL [${names.user} ↔ Name]: type of tie | what is between them now
+(4 pairs of NPC and REL lines)
 
-4) Стартовый гардероб ${names.user} на сезон «${sName}» — ровно 5 нарядов под разные поводы (Повседневный, Рабочий, На выход, Домашний, По погоде), учитывая достаток (${cfg.wealth}) и профессию (${cfg.job}), с коротким английским описанием для рисования картинки:
-CLOSET: категория (Повседневный|Рабочий|На выход|Домашний|По погоде) | название образа | подробное описание по-русски: что надето, обувь, причёска (1–2 предложения) | коротко по-английски только одежда, обувь и причёска для художника
-(ровно 5 строк CLOSET)
+4) Starting wardrobe of ${names.user} for the season «${sName}» — exactly 5 outfits for different occasions (Повседневный, Рабочий, На выход, Домашний, По погоде), taking into account the means (${cfg.wealth}) and the job (${cfg.job}), with a short English description for drawing:
+CLOSET: category (Повседневный|Рабочий|На выход|Домашний|По погоде) | name of the look | detailed description in Russian: what is worn, shoes, hairstyle (1–2 sentences) | briefly in English only clothes, shoes and hairstyle for the artist
+(exactly 5 CLOSET lines)
 
-5) 5 готовых вариантов духов (штрихов к образу) для ${names.user} под разное настроение — с английским описанием флакона для рисования картинки:
-PERF_ITEM: название духов | описание аромата, нот и настроения по-русски в 1 предложении | коротко по-английски как выглядит флакон духов (elegant perfume bottle...)
-(ровно 5 строк PERF_ITEM)
+5) 5 ready perfume options (finishing touches) for ${names.user} for different moods — with an English description of the bottle for drawing:
+PERF_ITEM: perfume name | description of the scent, notes and mood in Russian in 1 sentence | briefly in English how the bottle looks (elegant perfume bottle...)
+(exactly 5 PERF_ITEM lines)
 
-6) 5 готовых аксессуаров и украшений (штрихов к образу) для ${names.user} — с английским описанием предмета для рисования картинки:
-ACC_ITEM: название аксессуара | описание украшения, шарфа, часов или сумочки по-русски в 1 предложении | коротко по-английски как выглядит этот предмет (vintage silver locket, silk scarf...)
-(ровно 5 строк ACC_ITEM)
+6) 5 ready accessories and pieces of jewellery (finishing touches) for ${names.user} — with an English description of the item for drawing:
+ACC_ITEM: accessory name | description of the jewellery, scarf, watch or handbag in Russian in 1 sentence | briefly in English how the item looks (vintage silver locket, silk scarf...)
+(exactly 5 ACC_ITEM lines)
 
-7) Семья и династия (по 1 строке для ${names.user} и ${names.char} — кто их родители/родня и какая у семьи атмосфера или история) + базовое описание комнаты дома ${names.user} по-английски для художника:
-FAMILY_USER: кто в семье ${names.user}, какие у них отношения и семейная деталь
-FAMILY_CHAR: кто в семье и близком кругу ${names.char}, семейная история или деталь
-HOME_ROOM: описание уютной комнаты ${names.user} («${cfg.home}») по-английски для генерации картинки интерьера (cozy bedroom/studio interior, furniture, window, lighting, no people)
+7) Family and dynasty (1 line each for ${names.user} and ${names.char} — who their parents/relatives are and what the family atmosphere or history is) + a basic description of the room at home of ${names.user} in English for the artist:
+FAMILY_USER: who is in the family of ${names.user}, their relationships and a family detail
+FAMILY_CHAR: who is in the family and close circle of ${names.char}, the family history or a detail
+HOME_ROOM: description of the cosy room of ${names.user} («${cfg.home}») in English for generating an interior picture (cozy bedroom/studio interior, furniture, window, lighting, no people)
 
-8) 5 стартовых тем для разговора (о чём ${names.user} может заговорить с персонажами в первых сценах — по 5 разным эмоциональным и сюжетным крючкам):
-TOPIC: короткое название темы | реплика или идея от лица ${names.user}, с чего начать этот разговор
-(ровно 5 строк TOPIC)
+8) 5 starting conversation topics (what ${names.user} could start talking about with the characters in the first scenes — 5 different emotional and plot hooks):
+TOPIC: a short topic title | a line or idea on behalf of ${names.user}, how to start this conversation
+(exactly 5 TOPIC lines)
 
-9) 3 оригинальных, самобытных тренда сезона в этом городе и сеттинге (1 — модная вещь гардероба или аксессуар, 2 — гастрономический хит сезона, выпечка, десерт или напиток из местного заведения, 3 — коллекционная вещица, сувенир или предмет для этого сезона) с коротким английским описанием внешнего вида для рисования картинки:
-TREND: Одежда|Еда|Коллекция | название тренда | что это такое и почему вокруг этого сейчас ажиотаж в городе (1–2 предложения) | коротко по-английски как выглядит этот предмет, одежда, десерт или вещица для художника (без людей и рук)
-(ровно 3 строки TREND)${hasShop ? `
+9) 3 original, distinctive season trends in this city and setting (1 — a fashionable wardrobe item or accessory, 2 — the season's food hit, pastry, dessert or drink from a local place, 3 — a collectible, souvenir or seasonal item) with a short English description of the look for drawing:
+TREND: Одежда|Еда|Коллекция | trend name | what it is and why the city is buzzing about it now (1–2 sentences) | briefly in English how the item, clothing, dessert or object looks for the artist (no people or hands)
+(exactly 3 TREND lines)${hasShop ? `
 
-10) Стартовые товары на прилавке лавки ${names.user} («${cfg.job}») — 3 колоритных диковинки/товара на продажу посетителям (плагин сам добавит наценку +50% к закупочной цене):
-COUNTER: редкость (common|rare|epic) | название товара | описание и интригующая деталь/история вещи в 1 предложении | закупочная цена числом в ${cur}
-(ровно 3 строки COUNTER)` : ''}]`;
+10) Starting goods on the counter of the shop of ${names.user} («${cfg.job}») — 3 colourful curiosities/goods for sale to visitors (the plugin adds a +50% markup to the purchase price itself):
+COUNTER: rarity (common|rare|epic) | item name | description and an intriguing detail/story of the item in 1 sentence | purchase price as a number in ${cur}
+(exactly 3 COUNTER lines)` : ''}]`;
 }
 
 function applyWorldCreationResult(st, cfg, raw) {
@@ -16587,42 +16902,42 @@ async function generateTopicsNow() {
 
         const mc = ensureMainCharCard(s2);
         const allKnownChars = [
-            mc ? `— ${mc.name} (основной персонаж): ${mc.card || ''}${mc.status ? ` | Сейчас: ${mc.status}` : ''}${mc.petPeeves ? ` | Бытовая заноза: ${mc.petPeeves}` : ''}${mc.jealousyTriggers ? ` | Триггеры ревности: ${mc.jealousyTriggers}` : ''}${mc.fear ? ` | Скрытый страх: ${mc.fear}` : ''}${mc.dream ? ` | Мечта: ${mc.dream}` : ''}` : '',
-            ...(s2.npcs || []).slice(0, 12).map(n => `— ${n.name}: ${n.card || ''}${n.status ? ` | Сейчас: ${n.status}` : ''}${n.fear ? ` | Страх: ${n.fear}` : ''}${n.dream ? ` | Мечта: ${n.dream}` : ''}`),
+            mc ? `— ${mc.name} (main character): ${mc.card || ''}${mc.status ? ` | Now: ${mc.status}` : ''}${mc.petPeeves ? ` | Everyday pet peeve: ${mc.petPeeves}` : ''}${mc.jealousyTriggers ? ` | Jealousy triggers: ${mc.jealousyTriggers}` : ''}${mc.fear ? ` | Hidden fear: ${mc.fear}` : ''}${mc.dream ? ` | Dream: ${mc.dream}` : ''}` : '',
+            ...(s2.npcs || []).slice(0, 12).map(n => `— ${n.name}: ${n.card || ''}${n.status ? ` | Now: ${n.status}` : ''}${n.fear ? ` | Fear: ${n.fear}` : ''}${n.dream ? ` | Dream: ${n.dream}` : ''}`),
         ].filter(Boolean).join('\n');
         const companionHint = (s2.map?.currentCompanion && s2.map.currentCompanion !== 'solo')
-            ? `Сейчас ${names.user} отправилась по карте вместе с: ${s2.map.currentCompanion}.`
+            ? `Now ${names.user} has set out on the map together with: ${s2.map.currentCompanion}.`
             : '';
-        const intContext = (s2.intrigues || []).length ? `Активные тайны и слухи в сюжете: ${s2.intrigues.map(i => i.text).join('; ')}.` : '';
-        const notesContext = (s2.notes || []).length ? `Задумки автора на ближайшее будущее: ${s2.notes.slice(-4).map(n => n.text).join('; ')}.` : '';
-        const avoidContext = s2.pastTopics.length ? `СТРОГО ЗАПРЕЩЕНО повторять или перефразировать эти старые темы: ${s2.pastTopics.join('; ')}.` : '';
+        const intContext = (s2.intrigues || []).length ? `Active secrets and rumours in the plot: ${s2.intrigues.map(i => i.text).join('; ')}.` : '';
+        const notesContext = (s2.notes || []).length ? `The author's ideas for the near future: ${s2.notes.slice(-4).map(n => n.text).join('; ')}.` : '';
+        const avoidContext = s2.pastTopics.length ? `It is STRICTLY FORBIDDEN to repeat or rephrase these old topics: ${s2.pastTopics.join('; ')}.` : '';
 
         const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
-[OOC: Пауза в ролевой игре. Ты — автор истории.
-СНАЧАЛА определи по последним сообщениям чата ниже, КТО ИМЕННО находится рядом с ${names.user} в текущей сцене прямо сейчас (это может быть ${names.char}, конкретный NPC — например, подруга, коллега или случайный собеседник, — либо несколько персонажей сразу).
-Придумай РОВНО 5 СОВЕРШЕННО НОВЫХ, цепляющих, живых и небанальных тем для разговора, адресованных ИМЕННО тем персонажам, которые реально присутствуют в текущей сцене с ${names.user}! (Если в сцене сейчас подруга или другой NPC, а не ${names.char} — генерируй темы для разговора именно с этим NPC и укажи его имя в начале названия темы!)
+[OOC: Roleplay paused. You are the author of the story.
+FIRST work out from the latest chat messages below WHO EXACTLY is next to ${names.user} in the current scene right now (it may be ${names.char}, a specific NPC — e.g. a friend, a colleague or a chance companion — or several characters at once).
+Come up with EXACTLY 5 COMPLETELY NEW, gripping, lively and non-trivial conversation topics addressed to EXACTLY the characters really present in the current scene with ${names.user}! (If the scene now has a friend or another NPC rather than ${names.char} — generate topics for talking to that NPC and put their name at the start of the topic title!)
 
-Последние сообщения текущей сцены:
-${lastMsgs || '(начало истории)'}
+The latest messages of the current scene:
+${lastMsgs || '(the beginning of the story)'}
 ${companionHint}
 
-Карточки известных персонажей (используй тех, кто сейчас в сцене):
+Cards of the known characters (use those who are in the scene now):
 ${allKnownChars}
 ${intContext}
 ${notesContext}
 ${avoidContext}
 
-ВАЖНЫЕ ПРАВИЛА (АНТИ-СКУКА):
-— СТРОГО ЗАПРЕЩЕНО предлагать пресную бытовую болтовню про погоду, сквозняки, ремонт, уборку, расписание или случайные хобби из анкеты!
-— Все 5 тем должны быть эмоционально заряженными, интригующими и бить прямо в нерв отношений и сюжета. Сделай 5 РАЗНЫХ по настроению крючков:
-  1) 🔥 [Момент между нами] — живая, чувственная или очень личная реплика/действие прямо по следам того, что только что произошло между ${names.user} и ${names.char} в последнем посте.
-  2) 🗝 [Больная точка / Тайна прошлого] — проницательный вопрос или наблюдение, задевающее скрытый страх, уязвимость, тайну прошлого или странную деталь в поведении ${names.char}.
-  3) 🌶 [Бытовая заноза / Ревность / Недопонимание] — живая перепалка из-за упрямой бытовой привычки, острый повод для ревности/собственничества или выяснение двусмысленного недопонимания (без скучного соглашательства!).
-  4) 🕵️‍♀️ [Интрига / Слух] — вывести разговор на одну из тайн сюжета, подозрительного человека, странную находку или недосказанность.
-  5) ✨ [Неожиданная выходка / Поворот] — внезапное смелое предложение от лица ${names.user}, которое собьёт ${names.char} с привычного ритма или развернёт сцену в новое русло.
+IMPORTANT RULES (ANTI-BOREDOM):
+— It is STRICTLY FORBIDDEN to suggest bland small talk about the weather, draughts, repairs, cleaning, schedules or random hobbies from the profile!
+— All 5 topics must be emotionally charged, intriguing and hit right at the nerve of the relationship and the plot. Make 5 hooks DIFFERENT in mood:
+  1) 🔥 [Момент между нами] — a lively, sensual or very personal line/action right on the heels of what has just happened between ${names.user} and ${names.char} in the last post.
+  2) 🗝 [Больная точка / Тайна прошлого] — a perceptive question or observation touching a hidden fear, vulnerability, a secret of the past or a strange detail in the behaviour of ${names.char}.
+  3) 🌶 [Бытовая заноза / Ревность / Недопонимание] — a lively spat over a stubborn everyday habit, a sharp occasion for jealousy/possessiveness or clearing up an ambiguous misunderstanding (no boring agreeableness!).
+  4) 🕵️‍♀️ [Интрига / Слух] — steer the conversation to one of the plot's secrets, a suspicious person, a strange find or something left unsaid.
+  5) ✨ [Неожиданная выходка / Поворот] — a sudden bold suggestion on behalf of ${names.user} that knocks ${names.char} out of the usual rhythm or turns the scene in a new direction.
 
-Ответь строго 5 строками без пояснений:
-TOPIC: короткое название темы (2–4 слова) | живая реплика (и при желании короткое действие) от лица ${names.user}, без внешних кавычек]`;
+Reply with exactly 5 lines, no explanations, in Russian:
+TOPIC: a short topic title (2–4 words) | a lively line (and optionally a short action) on behalf of ${names.user}, without outer quotes]`;
 
         const raw = await quietGenerate(prompt);
         const newTopics = [];
@@ -16768,14 +17083,14 @@ async function generateTrendsNow() {
     if (!st) return;
     const sName = st.time?.date ? season(st.time.date).name : 'осень';
     const ok = await withBusy('🔥 Модель придумывает тренды сезона…', async s2 => {
-        const prompt = `[OOC: Пауза в ролевой игре. Ты — автор истории. Придумай 4 оригинальных, самобытных тренда сезона («${sName}», ${placeLine(s2) || 'город истории'}), которые органично подходят именно к этому миру, городу и атмосфере ролевой:
-1) модная вещь гардероба или заметный аксессуар;
-2) гастрономический хит сезона (необычный десерт, выпечка, уличная еда или сезонный напиток из местного заведения со своим названием);
-3) коллекционная вещица, лимитированный сувенир или предмет декора;
-4) популярное городское увлечение или желанная новинка сезона.
-ВАЖНО: придумай СВОИ свежие, правдоподобные названия и бренды внутри мира игры — НЕ копируй буквальные примеры из реальных соцсетей! Не расписывай заранее отношение конкретных героев — как кто отреагирует, выяснится только в самой сцене.
-Ответь строго 4 строками без пояснений:
-TREND: категория (Одежда|Еда|Коллекция|Увлечение) | название тренда | что это такое и почему вокруг него сейчас ажиотаж в городе (1–2 предложения) | коротко по-английски как выглядит этот предмет, одежда, десерт или атрибут для художника (без людей и рук)]`;
+        const prompt = `[OOC: Roleplay paused. You are the author of the story. Come up with 4 original, distinctive season trends («${sName}», ${placeLine(s2) || 'the story\'s city'}), that fit this particular world, city and atmosphere of the roleplay:
+1) a fashionable wardrobe item or a striking accessory;
+2) the season's food hit (an unusual dessert, pastry, street food or seasonal drink from a local place with its own name);
+3) a collectible, a limited souvenir or a decor item;
+4) a popular city pastime or a coveted novelty of the season.
+IMPORTANT: invent YOUR OWN fresh, plausible names and brands within the game world — do NOT copy literal examples from real social media! Don't spell out in advance how specific characters relate to them — who reacts how will come out in the scene itself.
+Reply with exactly 4 lines, no explanations (texts in Russian):
+TREND: category (Одежда|Еда|Коллекция|Увлечение) | trend name | what it is and why the city is buzzing about it now (1–2 sentences) | a short English description of how the item, clothing, dessert or attribute looks for the artist (no people or hands)]`;
         const raw = await quietGenerate(prompt);
         const newTrends = [];
         for (const line of answerLines(raw)) {
@@ -16880,7 +17195,7 @@ async function openTrendsModal() {
             const btnRow = $('<div class="nnb-buttons" style="margin-top:8px;"></div>');
             const getBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-bag-shopping"></i> Заполучить себе (в шкаф / шкатулку)</div>').on('click', async () => {
                 const isClothes = /одежд|плать|куртк|костюм|пальто|юбк|свитер|блуз|образ/i.test(tr.category + ' ' + tr.title);
-                const effectsText = `Это громкий тренд сезона («${tr.title}»)! Окружающие реагируют на него по своему личному характеру и вкусу (без шаблонного позитивного биаса: даже друзья могут подшутить над хайпом или счесть пустой тратой денег, а неожиданные персонажи — заинтересоваться или оценить).`;
+                const effectsText = `This is a hot trend of the season («${tr.title}»)! People around react to it according to their personal character and taste (without the stock positive bias: even friends may tease the hype or call it a waste of money, while unexpected characters may take an interest or appreciate it).`;
                 if (isClothes) {
                     addLookToCloset(st, {
                         category: 'На выход',
@@ -16915,7 +17230,7 @@ async function openTrendsModal() {
             const playSceneBtn = $('<div class="menu_button" style="padding:4px 10px; font-size:0.84em;"><i class="fa-solid fa-wand-magic-sparkles"></i> Отыграть в сцене</div>').on('click', async () => {
                 closePopupOf(el);
                 const names = storyNames();
-                const text = `${FF_MARKER} В сцене всплывает заметный тренд сезона — «${tr.title}» (${tr.desc}). Обыграй это живо и органично для текущего момента. ВАЖНО — избегай позитивного биаса по отношениям: реакция каждого персонажа на этот тренд должна зависеть ТОЛЬКО от его личного характера, вкусов, прагматичности или скрытых слабостей, а НЕ от того, друг он или недруг для ${names.user} (близкая подруга или фаворит вполне могут отнестись к модному хайпу скептически или с иронией, а хмурый скептик или соперник — неожиданно заинтересоваться или тайно любить эту вещь). Пиши как обычный ответ.]`;
+                const text = `${FF_MARKER} A noticeable season trend surfaces in the scene — «${tr.title}» (${tr.desc}). Play it out vividly and organically for the current moment. IMPORTANT — avoid positive bias from relationships: each character's reaction to this trend depends ONLY on their personality, taste, pragmatism or hidden weaknesses, NOT on whether they are friend or foe to ${names.user} (a close friend or the favourite may well treat the hype with scepticism or irony, while a gloomy sceptic or a rival may unexpectedly take an interest or secretly love the thing). Write it as a normal reply.]`;
                 setSceneAdvancePrompt(text);
                 const send = $('#send_but');
                 if (send.length) send.trigger('click');
@@ -16993,8 +17308,8 @@ function buildStrictPersonalContextForDiary(n, st, useDate = '') {
         .join('; ');
 
     const presenceNote = wasInRecentScene
-        ? `В последних сценах ${n.name} лично присутствовал(а) в кадре.`
-        : `⚠️ ВАЖНО: в последних постах чата персонажа «${n.name}» В СЦЕНЕ НЕ БЫЛО (другие герои общались без него/неё, а ${n.name} в это время занимался(ась) своими собственными делами за кадром: ${n.status || 'работа и личные дела'})! Поэтому ${n.name} ПОНЯТИЯ НЕ ИМЕЕТ, что происходило у других героев без него, и пишет в дневнике о своём собственном дне за кадром и только о тех прошлых встречах, где присутствовал(а) лично!`;
+        ? `In the latest scenes ${n.name} was personally present in the frame.`
+        : `⚠️ IMPORTANT: in the latest chat posts the character «${n.name}» WAS NOT IN THE SCENE (the others talked without them, while ${n.name} was busy with their own affairs off-screen: ${n.status || 'work and personal affairs'})! So ${n.name} HAS NO IDEA what happened with the other characters without them and writes in the diary about their own day off-screen and only about past meetings where they were personally present!`;
 
     const scenesBlock = personalPosts.length
         ? personalPosts.slice(-8).join('\n\n')
@@ -17025,32 +17340,32 @@ async function generateNpcDiaryForDate(n, targetDate = '') {
 
     let ok = false;
     try {
-        await withBusy(`📓 ${n.name} пишет в дневнике (${dateLabel})…`, async s2 => {
+        await withBusy(`📓 ${n.name} is writing in the diary (${dateLabel})…`, async s2 => {
             const pCtx = buildStrictPersonalContextForDiary(n, s2, useDate);
             const prevDiaryTexts = (n.diary || []).slice(-3).map(d => d.text.slice(0, 180)).join(' | ');
             const antiRepeatLine = prevDiaryTexts
-                ? `Предыдущие записи дневника (СТРОГО ЗАПРЕЩЕНО повторять их темы, метафоры и старые фразы!): ${prevDiaryTexts}`
+                ? `Previous diary entries (it is STRICTLY FORBIDDEN to repeat their topics, metaphors and old phrases): ${prevDiaryTexts}`
                 : '';
 
             const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
-[OOC: Пауза в ролевой игре. Напиши страницу из личного дневника персонажа «${n.name}» от ПЕРВОГО ЛИЦА («Я...») за дату: ${dateLabel}.
-Кто ведёт дневник: ${n.name} (${n.card || 'персонаж истории'}). Чем занят сейчас: ${n.status || 'свои дела'}. Отношение к ${names.user}: дружба ${n.friendship}/100${isRomanticTarget(n) ? `, романтика ${n.romance}/100` : ''}.
+[OOC: Roleplay paused. Write a page from the personal diary of the character «${n.name}» in the FIRST person («Я...»), in Russian, for the date: ${dateLabel}.
+Who keeps the diary: ${n.name} (${n.card || 'a character of the story'}). Busy with right now: ${n.status || 'their own business'}. Attitude to ${names.user}: friendship ${n.friendship}/100${isRomanticTarget(n) ? `, romance ${n.romance}/100` : ''}.
 ${pCtx.relHits}
 ${pCtx.personalEventsLine}
 ${pCtx.personalSummaryLines}
 ${pCtx.presenceNote}
 
-Сцены, которые ${n.name} видел(а) СВОИМИ ГЛАЗАМИ (в чужих закрытых сценах этот персонаж свечку НЕ держал и о них ничего не знает!):
+Scenes that ${n.name} saw WITH THEIR OWN EYES (this character did NOT witness other people's private scenes and knows nothing about them!):
 ${pCtx.scenesBlock}
 ${antiRepeatLine}
 
-СТРОГИЕ ПРАВИЛА ДЛЯ ЖИВОГО ДНЕВНИКА (ЗАЩИТА ОТ ЯСНОВИДЕНИЯ):
-1) НИКАКОГО ЯСНОВИДЕНИЯ («НЕ ДЕРЖАЛ СВЕЧКУ»): ${n.name} может писать ТОЛЬКО о том, что видел(а) своими глазами и слышал(а) лично, находясь в одной комнате! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО упоминать разговоры, чаепития, встречи или действия, которые происходили между ${names.user} и другими персонажами без личного присутствия ${n.name}! Если ${n.name} не было в последних сценах — пиши о том, как прошёл его/её собственный день за кадром (работа, дела, личные мысли).
-2) ОБЪЁМ И ФОРМАТ: напиши 1–2 абзаца (в сумме около 6–8 предложений — не раздувай в длинную поэму, но и не пиши совсем сухой телеграф).
-3) СВОЯ ГОЛОВА НА ПЛЕЧАХ (БЕЗ СЛЕПОГО ОПРАВДАНИЯ ${names.user}):
-   — Мир ${n.name} не крутится вокруг ${names.user} 24/7: основная часть записи — это его собственные дела, работа, мотивы, выгода/принципы и взгляд на ситуацию.
-   — Даже если ${n.name} хорошо относится к ${names.user}, у него есть собственное критическое мышление и свой характер.
-4) Пиши живо, в характерной манере речи ${n.name}, без кавычек и без служебных меток.]`;
+STRICT RULES FOR A LIVING DIARY (NO CLAIRVOYANCE):
+1) NO CLAIRVOYANCE: ${n.name} may write ONLY about what they saw with their own eyes and heard personally while in the same room! It is STRICTLY FORBIDDEN to mention conversations, tea, meetings or actions that happened between ${names.user} and other characters without ${n.name} being personally present! If ${n.name} was not in the latest scenes, write about how their own day went off-screen (work, errands, personal thoughts).
+2) LENGTH AND FORMAT: 1–2 paragraphs (about 6–8 sentences in total — not a long poem, but not a dry telegram either).
+3) A MIND OF THEIR OWN (NO BLIND JUSTIFICATION OF ${names.user}):
+   — The world of ${n.name} does not revolve around ${names.user} 24/7: most of the entry is about their own affairs, work, motives, interests/principles and view of the situation.
+   — Even if ${n.name} thinks well of ${names.user}, they have their own critical thinking and character.
+4) Write vividly, in the characteristic manner of speech of ${n.name}, without quotes and without service tags.]`;
             const raw = await quietGenerate(prompt);
             const text = stripActionTags(raw);
             if (text) {
@@ -17095,27 +17410,27 @@ async function generateAllNpcDiariesForDay(targetDate = '') {
                 ensureNpcScales(h, s2);
                 const pCtx = buildStrictPersonalContextForDiary(h, s2, useDate);
                 const prevLast = (h.diary || []).slice(-1)[0]?.text?.slice(0, 140) || '';
-                return `=== ГЕРОЙ #${idx + 1}: [${h.name}] ===
-Кто это: ${h.card || 'персонаж истории'}. Чем занят: ${h.status || 'свои дела'}. Отношение к ${names.user}: дружба ${h.friendship}/100${isRomanticTarget(h) ? `, романтика ${h.romance}/100` : ''}.
+                return `=== CHARACTER #${idx + 1}: [${h.name}] ===
+Who they are: ${h.card || 'a character of the story'}. Busy with: ${h.status || 'their own business'}. Attitude to ${names.user}: friendship ${h.friendship}/100${isRomanticTarget(h) ? `, romance ${h.romance}/100` : ''}.
 ${pCtx.presenceNote}
-Что видел(а) ТОЛЬКО ЛИЧНО [${h.name}] (СВОИМИ ГЛАЗАМИ):
+What ONLY [${h.name}] saw PERSONALLY (WITH THEIR OWN EYES):
 ${pCtx.scenesBlock}
-${prevLast ? `Прошлая запись (не повторяй её): ${prevLast}` : ''}`;
+${prevLast ? `Previous entry (don't repeat it): ${prevLast}` : ''}`;
             }).join('\n\n');
 
             const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
-[OOC: Пауза в ролевой игре. Напиши личные записи в дневниках за дату «${dateLabel}» сразу для каждого из перечисленных ниже персонажей (${allHeroes.map(h => h.name).join(', ')}) от ПЕРВОГО ЛИЦА («Я...»).
+[OOC: Roleplay paused. Write personal diary entries for the date «${dateLabel}» for each of the characters listed below at once (${allHeroes.map(h => h.name).join(', ')}) in the FIRST person («Я...»), in Russian.
 
 ${heroBlocks}
 
-СТРОЖАЙШИЕ ПРАВИЛА ПРОТИВ ЯСНОВИДЕНИЯ («НИКТО НЕ ДЕРЖАЛ СВЕЧКУ»):
-1) СТРОГАЯ ИНФОРМАЦИОННАЯ ИЗОЛЯЦИЯ КАЖДОГО ГЕРОЯ: каждый персонаж знает ТОЛЬКО то, что указано в ЕГО собственном блоке «Что видел(а) ТОЛЬКО ЛИЧНО [Имя]»!
-2) КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО приписывать одному персонажу знание о том, что происходило в закрытых сценах у других героев (например, если ${names.user} пила чай, разговаривала или была дома наедине с Персонажем А, то Персонаж Б / коллега / знакомый об этом НЕ ЗНАЕТ, свечку не держал и ни слова об этом писать не может!).
-3) Если героя сегодня не было в сценах чата — он пишет о своём собственном дне за кадром (о своей работе, заботах, планах или мыслях), не выдумывая несуществующих встреч с ${names.user}.
-4) Для КАЖДОГО героя напиши живую запись от первого лица в его собственном характере и манере речи (5–7 предложений в одну строку без переносов внутри записи).
+THE STRICTEST RULES AGAINST CLAIRVOYANCE:
+1) STRICT INFORMATION ISOLATION OF EACH CHARACTER: each character knows ONLY what is in THEIR OWN block «What ONLY [Name] saw PERSONALLY»!
+2) It is STRICTLY FORBIDDEN to attribute to one character knowledge of what happened in other characters' private scenes (e.g. if ${names.user} had tea, talked or was at home alone with Character A, then Character B / a colleague / an acquaintance does NOT know about it, did not witness it and cannot write a word about it!).
+3) If a character was not in today's chat scenes, they write about their own day off-screen (their work, worries, plans or thoughts), without inventing non-existent meetings with ${names.user}.
+4) For EACH character write a lively first-person entry in their own character and manner of speech (5–7 sentences on one line with no line breaks inside the entry).
 
-Ответь СТРОГО списком строк в следующем формате (по одной строке на каждого героя, без лишних вступлений):
-${allHeroes.map(h => `DIARY [${h.name}]: текст дневниковой записи от первого лица`).join('\n')}]`;
+Reply STRICTLY with a list of lines in the following format (one line per character, no intros):
+${allHeroes.map(h => `DIARY [${h.name}]: the diary entry text in the first person`).join('\n')}]`;
 
             const raw = await quietGenerate(prompt);
             const cleaned = stripActionTags(raw || '');
@@ -17474,11 +17789,11 @@ async function generateDynastyFromChat() {
     if (!st) return;
     const names = storyNames();
     await withBusy('Семейный архив: определяем семью и близкий круг по чату…', async s2 => {
-        const prompt = `[OOC: Пауза в ролевой игре. Проанализируй текущий чат и описание персонажей (${names.user} и ${names.char}) и сформулируй их семейную историю (династию, родителей/родню, семейные традиции или конфликты) и близкий социальный круг (соседи, коллеги, друзья или недоброжелатели). Если каких-то деталей в чате ещё не было, органично додумай их в духе сеттинга и характеров героев.
-Ответь ровно 3 строками без пояснений:
-FAMILY_USER: кто в семье ${names.user}, какие у них отношения и семейная история (1–2 предложения)
-FAMILY_CHAR: кто в семье ${names.char}, какие у них отношения и семейная история (1–2 предложения)
-SOCIAL_CIRCLE: 2–3 человека из социального круга (коллеги, соседи, знакомые) и их роль]`;
+        const prompt = `[OOC: Roleplay paused. Analyse the current chat and the character descriptions (${names.user} and ${names.char}) and formulate their family history (dynasty, parents/relatives, family traditions or conflicts) and close social circle (neighbours, colleagues, friends or ill-wishers). If some details have not come up in the chat yet, invent them organically in the spirit of the setting and the characters.
+Reply with exactly 3 lines in Russian, no explanations:
+FAMILY_USER: who is in the family of ${names.user}, what their relationships and family history are (1–2 sentences)
+FAMILY_CHAR: who is in the family of ${names.char}, what their relationships and family history are (1–2 sentences)
+SOCIAL_CIRCLE: 2–3 people from the social circle (colleagues, neighbours, acquaintances) and their role]`;
         const raw = await quietGenerate(prompt);
         s2.dynasty = s2.dynasty || {};
         for (const line of answerLines(raw)) {
@@ -18275,6 +18590,8 @@ const BOOK_HTML = `
       <div class="menu_button nnb-book-think" id="nnb_migrate_now" title="🚀 Переезд в новый чат (сохранить блокнот и сделать саммари истории)"><i class="fa-solid fa-suitcase-rolling"></i></div>
     <div class="menu_button nnb-book-think" id="nnb_world_now" title="Создание мира и стартового набора"><i class="fa-solid fa-earth-americas"></i></div>
     <div class="menu_button nnb-book-think" id="nnb_think_now" title="Подумать сейчас"><i class="fa-solid fa-feather"></i></div>
+    <div class="menu_button nnb-book-think" id="nnb_compress_now" title="🗜 Сжать записи блокнота (меньше токенов)"><i class="fa-solid fa-compress"></i></div>
+    <div class="menu_button nnb-book-think" id="nnb_stop_all" title="⏹ Остановить все генерации блокнота (размышление, картинки, комиксы, саммари)"><i class="fa-solid fa-stop"></i></div>
     <div class="menu_button nnb-book-close" title="Закрыть"><i class="fa-solid fa-xmark"></i></div>
   </div>
   <div class="nnb-tabs">${BOOK_TABS.map(t => `<div class="nnb-tab" data-tab="${t.id}">${t.icon} ${t.title}</div>`).join('')}</div>
@@ -18283,6 +18600,11 @@ const BOOK_HTML = `
       <div id="nnb_world_card_host"></div>
     </div>
     <div class="nnb-pane" data-pane="cfg">
+      <details class="nnb-direction" id="nnb_modules_box" open>
+        <summary><b>🧩 Модули — что блокнот делает и что отправляет в ролевую</b></summary>
+        <small>Каждый модуль включается и выключается здесь. Галочки «этого чата» хранятся в чате, остальные — общие.</small>
+        <div id="nnb_modules_list" style="margin-top:6px;"></div>
+      </details>
       <div class="nnb-direction">
         <b>⚡ Отдельное быстрое подключение для работы блокнота</b>
         <small>Основная ролевая остаётся на твоём текущем подключении (например, на Аргоне), а сам блокнот (размышления, гардероб, дневники, карта, тренды) будет думать через выбранный быстрый профиль или модель (например, Gemini Flash):</small>
@@ -18498,7 +18820,128 @@ async function askText(title, initial = '') {
     return window.prompt(title, initial);
 }
 
+// ===== 🗜 Сжатие записей блокнота: длинные карточки героев, связи, летопись — короче, без потери фактов =====
+async function nnbCompressNotebook() {
+    const st = store();
+    if (!st) { toastr.warning('Сначала открой чат', 'Блокнот рассказчика'); return; }
+    if (busy) { toastr.info('Блокнот сейчас думает — нажми ещё раз, когда закончит', 'Блокнот рассказчика'); return; }
+    const items = [];
+    const all = [ensureMainCharCard(st), ...(st.npcs || [])].filter(Boolean);
+    for (const n of all) {
+        if (n.locked) continue;
+        const t = String(n.card || '').trim();
+        if (t.length > 500) items.push({ kind: 'npc', ref: n, label: `ГЕРОЙ ${n.name}`, text: t });
+    }
+    for (const r of (st.relationships || [])) {
+        if (r.locked) continue;
+        const t = String(r.desc || '').trim();
+        if (t.length > 220) items.push({ kind: 'rel', ref: r, label: `СВЯЗЬ ${r.a} ${r.arrow || '↔'} ${r.b}`, text: t });
+    }
+    if (String(st.storySummary || '').trim().length > 2500) items.push({ kind: 'sum', ref: st, label: 'ЛЕТОПИСЬ', text: String(st.storySummary).trim() });
+    if (!items.length) { toastr.info('Сжимать нечего: записи и так короткие (защищённые 🔒 карточки не трогаю)', 'Блокнот рассказчика'); return; }
+    const before = items.reduce((a, x) => a + x.text.length, 0);
+    const req = `${SELF_CONTAINED_PROMPT_MARKER}Compress each record below to about half its length. Keep EVERY fact, name, date, relationship detail, preference, fear and plot point; drop repetition, filler and purple prose. Write in Russian, same third-person style. Keep each record's header line exactly as given. Output ONLY the records in the same format.
+
+${items.map((x, i) => `=== ${i + 1}. ${x.label} ===\n${x.text}`).join('\n\n')}`;
+    busy = true;
+    setStatus('🗜 Сжимаю записи…');
+    let raw = '';
+    try {
+        raw = String(await quietGenerate(req, Math.min(16000, Math.ceil(before / 2) + 1500)) || '');
+    } catch (e) {
+        busy = false;
+        setStatus('');
+        if (!nnbIsStopError(e)) toastr.error(String(e?.message || e), 'Сжатие не удалось');
+        return;
+    }
+    busy = false;
+    const parts = {};
+    raw.split(/^===\s*(\d+)\.[^=\n]*===\s*$/m).forEach((chunk, i, arr) => { if (i % 2 === 1) parts[Number(chunk)] = String(arr[i + 1] || '').trim(); });
+    const backup = { at: Date.now(), npcs: {}, rels: {}, sum: null };
+    let after = 0, applied = 0;
+    items.forEach((x, i) => {
+        const nt = parts[i + 1];
+        // защита: пусто, подозрительно коротко (потеря фактов) или длиннее исходника — оставляем как было
+        if (!nt || nt.length < x.text.length * 0.25 || nt.length >= x.text.length) { after += x.text.length; return; }
+        if (x.kind === 'npc') { backup.npcs[x.ref.name] = x.text; x.ref.card = nt; }
+        if (x.kind === 'rel') { backup.rels[x.ref.id] = x.text; x.ref.desc = nt; }
+        if (x.kind === 'sum') { backup.sum = x.text; st.storySummary = nt; }
+        after += nt.length;
+        applied++;
+    });
+    if (!applied) { setStatus(''); toastr.warning('Модель не вернула сжатые записи — ничего не изменено', 'Блокнот рассказчика'); return; }
+    st.compressBackup = backup;
+    await ctx().saveMetadata();
+    updateInjection();
+    renderPanel();
+    setStatus('');
+    const t = toastr.success(`Сжато записей: ${applied}. Было ${before} знаков, стало ${after} (−${Math.round((1 - after / before) * 100)}%).<br><u style="cursor:pointer">↩️ Вернуть как было</u>`, '🗜 Блокнот сжат', { escapeHtml: false, timeOut: 15000 });
+    try { t.find('u').on('click', () => nnbUndoCompress()); } catch (e) { /* ignore */ }
+}
+async function nnbUndoCompress() {
+    const st = store();
+    const b = st?.compressBackup;
+    if (!b) return;
+    const all = [ensureMainCharCard(st), ...(st.npcs || [])].filter(Boolean);
+    for (const [name, text] of Object.entries(b.npcs || {})) { const n = all.find(x => x.name === name); if (n) n.card = text; }
+    for (const [id, text] of Object.entries(b.rels || {})) { const r = (st.relationships || []).find(x => String(x.id) === String(id)); if (r) r.desc = text; }
+    if (b.sum) st.storySummary = b.sum;
+    delete st.compressBackup;
+    await ctx().saveMetadata();
+    updateInjection();
+    renderPanel();
+    toastr.info('Записи возвращены как были до сжатия', 'Блокнот рассказчика');
+}
+
+// ===== 🧩 Модули: все функции блокнота включаются/выключаются в одном месте =====
+const NNB_MODULES = [
+    { scope: 'chat', key: 'time', label: '📅 Время, календарь и хроника' },
+    { scope: 'chat', key: 'npcs', label: '👥 Герои: карточки и шкалы отношений' },
+    { scope: 'chat', key: 'rels', label: '🔗 Связи между героями' },
+    { scope: 'chat', key: 'arcs', label: '🌱 Арки развития героев' },
+    { scope: 'chat', key: 'intrigues', label: '🕵 Интриги и тайны' },
+    { scope: 'chat', key: 'map', label: '🗺 Карта мест' },
+    { scope: 'chat', key: 'livingWorld', label: '🌆 Живой мир (детали локаций)' },
+    { scope: 'chat', key: 'worldInject', label: '🏠 Профиль мира в промпте (жильё, работа, окружение)' },
+    { scope: 'chat', key: 'worldEvents', label: '🏘 Новости окружения и сны в промпте' },
+    { scope: 'chat', key: 'wardrobe', label: '👗 Гардероб' },
+    { scope: 'chat', key: 'gacha', label: '🎰 Гача' },
+    { scope: 'chat', key: 'shopMode', label: '🏪 Лавка' },
+    { scope: 'chat', key: 'autoBoxItems', label: '📦 Авто-шкатулка (вещи из сюжета)' },
+    { scope: 'chat', key: 'spicyFriction', label: '🌶 Острые трения между героями' },
+    { scope: 'global', key: 'enabled', label: '📖 Блокнот включён целиком' },
+    { scope: 'global', key: 'autoThink', label: '🪶 Фоновое размышление (без него — только по кнопке)' },
+    { scope: 'global', key: 'externalMemory', label: '🧠 Память ведёт Memory Books — не слать летопись и хронику блокнота' },
+    { scope: 'global', key: 'actionPrompts', label: '🎭 Варианты хода героини' },
+    { scope: 'global', key: 'events', label: '🎉 Праздники' },
+    { scope: 'global', key: 'autoAppearance', label: '🧬 Автозаполнение внешности героев для картинок' },
+    { scope: 'global', key: 'comicCaptionsRu', label: '🇷🇺 Облачка комиксов на русском' },
+    { scope: 'global', key: 'tokenSaverMode', label: '💎 Экономия токенов (умный фокус сцены)' },
+    { scope: 'global', key: 'showToasts', label: '🔔 Всплывающие уведомления' },
+];
+function nnbRenderModules() {
+    const box = $('#nnb_modules_list');
+    if (!box.length) return;
+    const st = store();
+    const s = settings();
+    box.empty();
+    for (const m of NNB_MODULES) {
+        const holder = m.scope === 'chat' ? st?.direction : s;
+        if (!holder) continue;
+        const on = m.scope === 'global' && ['autoThink', 'tokenSaverMode', 'autoAppearance'].includes(m.key) ? holder[m.key] !== false : !!holder[m.key];
+        const row = $(`<label class="checkbox_label" style="margin:2px 0; font-size:0.86em;"><input type="checkbox"> ${escapeHtml(m.label)}${m.scope === 'chat' ? ' <small style="opacity:.6">(этот чат)</small>' : ''}</label>`);
+        row.find('input').prop('checked', on).on('change', async function () {
+            holder[m.key] = $(this).prop('checked');
+            if (m.scope === 'chat') await ctx().saveMetadata(); else saveSettings();
+            updateInjection();
+            renderPanel();
+        });
+        box.append(row);
+    }
+}
+
 function renderPanel(forceFull = false) {
+    try { nnbRenderModules(); } catch (e) { /* ignore */ }
     const s = settings();
     const st = store();
     if (!busy) setStatus('');
@@ -18539,17 +18982,70 @@ function renderPanel(forceFull = false) {
         <select class="text_pole" style="width:auto; display:inline-block; margin-left:6px;">
             <option value="off">💤 Выкл — только по кнопке 🪶 и ⏩</option>
             <option value="drip">💧 Экономно — одна задумка в каждом ответе, смена раз в 3 ответа</option>
+            <option value="director">🎬 Режиссёр — то же по одной, но с балансом сюжетных линий и темпом</option>
             <option value="full">🪶 Полностью — весь список в каждом ответе</option>
         </select></label>`);
-    notesToggle.find('select').val(st.direction?.notes === true ? 'full' : st.direction?.notes === 'drip' ? 'drip' : 'off').on('change', function () {
+    notesToggle.find('select').val(st.direction?.notes === true ? 'full' : ['drip', 'director'].includes(st.direction?.notes) ? st.direction.notes : 'off').on('change', function () {
         const v = $(this).val();
-        st.direction.notes = v === 'full' ? true : v === 'drip' ? 'drip' : false;
-        if (v === 'drip') { const d = nnbDripState(st); d.activeId = null; d.shown = 0; }
+        st.direction.notes = v === 'full' ? true : (v === 'drip' || v === 'director') ? v : false;
+        if (v === 'drip' || v === 'director') { const d = nnbDripState(st); d.activeId = null; d.shown = 0; }
+        if (v === 'director') nnbDirector(st);
+        renderPanel();
         ctx().saveMetadata();
         updateInjection();
         toastr.info(v === 'full' ? '🪶 Весь список задумок идёт в каждый ответ' : v === 'drip' ? '💧 Рассказчик всегда держит в уме одну задумку, смена раз в 3 ответа' : '💤 Задумки выключены (экономия токенов)', 'Блокнот рассказчика');
     });
     list.append(notesToggle);
+    if (st.direction?.notes === 'director') {
+        const dir = nnbDirector(st);
+        const dBox = $('<details class="nnb-section" open style="margin-bottom:8px;"><summary style="font-weight:700; cursor:pointer;">🎬 Баланс сюжетных линий</summary></details>');
+        const inner = $('<div style="margin-top:6px; font-size:0.85em;"></div>');
+        for (const b of nnbDirectorBalance(st)) {
+            const row = $(`<div style="margin-bottom:6px;">
+                <div style="display:flex; gap:6px; align-items:center;">
+                  <span style="color:${escapeHtml(b.color)}">●</span>
+                  <input class="text_pole nnb-dl-name" style="flex:1; margin:0; padding:2px 6px;">
+                  <span>${b.count} сц. · ${b.pct}% / цель</span>
+                  <input class="text_pole nnb-dl-target" type="number" min="0" max="100" style="width:56px; margin:0; padding:2px 4px;">%
+                  <i class="fa-solid fa-trash" style="cursor:pointer; opacity:.6" title="Удалить линию"></i>
+                </div>
+                <div style="height:6px; background:rgba(127,127,127,.25); border-radius:9px; overflow:hidden; margin-top:3px;"><div style="height:100%; width:${Math.min(100, b.pct)}%; background:${escapeHtml(b.color)};"></div></div>
+              </div>`);
+            const line = dir.lines.find(l => l.id === b.id);
+            row.find('.nnb-dl-name').val(line.name).on('change', async function () { line.name = String($(this).val() || '').trim() || line.name; await commit(); });
+            row.find('.nnb-dl-target').val(line.target).on('change', async function () { line.target = Math.max(0, Math.min(100, Number($(this).val()) || 0)); await commit(); });
+            row.find('.fa-trash').on('click', async () => { if (dir.lines.length <= 1) return; dir.lines = dir.lines.filter(l => l.id !== line.id); await commit(); });
+            inner.append(row);
+        }
+        const btns = $('<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;"></div>');
+        btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">+ Линия</div>').on('click', async () => {
+            const name = await askText('Название новой линии', '');
+            if (!name || !name.trim()) return;
+            dir.lines.push({ id: 'line' + Date.now().toString(36), name: name.trim(), color: ['#22c55e', '#f59e0b', '#a855f7', '#14b8a6'][dir.lines.length % 4], target: 20 });
+            await commit();
+        }));
+        btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📥 Импорт JSON режиссёра</div>').on('click', async () => {
+            const txt = await askText('Вставь JSON из «ИИ-Режиссёр» (кнопка JSON → Копировать)', '');
+            if (!txt || !txt.trim()) return;
+            try { const n = nnbDirectorImport(st, txt); await commit(); toastr.success(`Импортировано идей: ${n}; линий: ${dir.lines.length}; сыгранных сцен: ${dir.history.length}`, '🎬 Режиссёр'); }
+            catch (e) { toastr.error(String(e?.message || e), 'Импорт не удался'); }
+        }));
+        btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📤 Экспорт JSON</div>').on('click', async () => {
+            const data = { lines: dir.lines, contextSummary: dir.summary || '', history: dir.history, ideas: st.notes.map(n => ({ id: 'i' + n.id, title: n.title || String(n.text).slice(0, 80), text: n.text, line: n.line || '', genre: n.genre || '', intensity: Number(n.intensity) || 3, characters: n.chars || [] })) };
+            try { await navigator.clipboard.writeText(JSON.stringify(data, null, 2)); toastr.success('JSON скопирован', '🎬 Режиссёр'); } catch (e) { await askText('Скопируй JSON', JSON.stringify(data, null, 2)); }
+        }));
+        inner.append(btns);
+        if (dir.history.length) {
+            const hDet = $(`<details style="margin-top:6px;"><summary>Сыгранные сцены (${dir.history.length})</summary><div></div></details>`);
+            [...dir.history].reverse().slice(0, 40).forEach(h => {
+                const ln = dir.lines.find(l => l.id === h.line);
+                hDet.find('div').append($('<div class="nnb-note nnb-archived"><div class="nnb-text"></div></div>').find('.nnb-text').text(`${h.date ? h.date + ' · ' : ''}${ln ? ln.name : h.line} · ${h.genre || ''} ${h.intensity ? `🔥${h.intensity}` : ''} — ${h.title}`).end());
+            });
+            inner.append(hDet);
+        }
+        dBox.append(inner);
+        list.append(dBox);
+    }
     list.append($('<div class="nnb-subhead"></div>').text(`🪶 Задумки (${st.notes.length})`));
     if (!st.notes.length) {
         list.append('<div class="nnb-empty">Пока пусто. Модель сама начнёт записывать задумки, или нажми 🪶 вверху, чтобы подумать сейчас.</div>');
@@ -18568,7 +19064,16 @@ function renderPanel(forceFull = false) {
               <i class="fa-solid fa-trash" title="Удалить"></i>
             </div>
           </div>`);
-        row.find('.nnb-meta').text(`#${n.id}${n.tag ? ` · ${n.tag}` : ''} · ${Math.max(0, len - n.at)} сообщ. назад${n.ff ? ' · ⏩ в работе' : ''}`);
+        const dLine = n.line && st.director ? (st.director.lines || []).find(l => l.id === n.line) : null;
+        const dActive = st.notesDrip?.activeId === n.id && ['drip', 'director'].includes(st.direction?.notes);
+        row.find('.nnb-meta').text(`#${n.id}${n.tag ? ` · ${n.tag}` : ''}${dLine ? ` · ${dLine.name}` : ''}${n.genre ? ` · ${n.genre}` : ''}${n.intensity ? ` · 🔥${n.intensity}/5` : ''} · ${Math.max(0, len - n.at)} сообщ. назад${n.ff ? ' · ⏩ в работе' : ''}${dActive ? ' · 👉 сейчас у рассказчика' : ''}`);
+        if (st.direction?.notes === 'director') {
+            const sel = $('<select class="text_pole" style="width:auto; margin:2px 0 0 0; padding:1px 4px; font-size:0.85em;"></select>');
+            sel.append('<option value="">— без линии —</option>');
+            (st.director?.lines || []).forEach(l => sel.append($('<option>').val(l.id).text(l.name)));
+            sel.val(n.line || '').on('change', async function () { n.line = String($(this).val() || ''); await commit(); });
+            row.find('.nnb-text').after(sel);
+        }
         row.find('.nnb-text').text(n.text);
         row.find('.fa-dice').on('click', () => rerollNote(n.id));
         row.find('.fa-check').on('click', () => closeNote(n.id, 'done'));
@@ -18906,40 +19411,40 @@ async function syncHeroFromChat(n, cardMode = 'auto') {
             const needFullRebuild = cardMode === 'rebuild' || !curCard || curCard.length < 60;
 
             const cardInstruction = needFullRebuild
-                ? `NPC [${n.name}]: развёрнутое, подробное досье персонажа в 8–16 предложений (БЕЗ сжатия до 2–4 предложений! Пиши всё в одну строку после двоеточия, разделяя смысловые абзацы знаком « // »: 1) кто это, возраст, профессия/статус, подробная внешность и манера держаться; 2) характер, привычки, прошлое и биография, включая ВСЕ факты, которые задавал игрок; 3) ключевые совместные события с ${names.user} за время ролевой и нынешнее отношение к ней)`
-                : `NPCFACT [${n.name}]: подробное дополнение к существующему описанию (3–10 предложений в одну строку, разделяя абзацы через « // ») — выпиши ВСЕ важные факты биографии, внешности, характера и значимые события из ролевой/саммари, которых ЕЩЁ НЕТ в текущем описании (старые факты не повторяй и мелкую разовую бытовуху не пиши; если абсолютно всё важное уже записано — напиши «нет»)`;
+                ? `NPC [${n.name}]: a full, detailed dossier of the character in 8–16 sentences in Russian (do NOT compress it to 2–4 sentences! Write it all on one line after the colon, separating paragraphs with « // »: 1) who they are, age, profession/status, detailed looks and manner; 2) personality, habits, past and biography, including ALL facts the player gave; 3) key shared events with ${names.user} during the roleplay and their current attitude to her)`
+                : `NPCFACT [${n.name}]: a detailed addition to the existing description in Russian (3–10 sentences on one line, paragraphs separated by « // ») — write out ALL important facts of biography, looks, personality and significant events from the roleplay/summary that are NOT YET in the current description (don't repeat old facts and don't record one-off everyday trivia; if absolutely everything important is already recorded — write «нет»)`;
 
             const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
-[OOC: Пауза в ролевой игре. Проанализируй персонажа «${n.name}» по всей истории ролевой, Саммари прошлых глав и последним сценам:
+[OOC: Roleplay paused. Analyse the character «${n.name}» across the whole roleplay, the summary of previous chapters and the latest scenes:
 
-Текущее описание персонажа в Блокноте (его факты святы, ничего из них терять нельзя!):
-${curCard || '(пока пусто или обрезано)'}
-${charCardDesc ? `\nОписание из карточки чата:\n${charCardDesc}` : ''}
+The character's current description in the Notebook (its facts are sacred — nothing may be lost):
+${curCard || '(empty or truncated so far)'}
+${charCardDesc ? `\nDescription from the chat card:\n${charCardDesc}` : ''}
 
-${digest.summaryBlock ? `${digest.summaryBlock}\n` : ''}${digest.timelineHits ? `[События из Календаря с участием ${n.name}]:\n${digest.timelineHits}\n` : ''}${digest.archiveHits ? `[Свершившиеся вехи из Архива]:\n${digest.archiveHits}\n` : ''}
-[Выборка сцен с участием и упоминанием ${n.name} по всему чату]:
-${digest.mentionsText || '(прямых упоминаний в тексте мало)'}
+${digest.summaryBlock ? `${digest.summaryBlock}\n` : ''}${digest.timelineHits ? `[Calendar events involving ${n.name}]:\n${digest.timelineHits}\n` : ''}${digest.archiveHits ? `[Milestones fulfilled, from the Archive]:\n${digest.archiveHits}\n` : ''}
+[A selection of scenes featuring or mentioning ${n.name} across the whole chat]:
+${digest.mentionsText || '(few direct mentions in the text)'}
 
-[Последние сообщения текущей сцены (для определения NPCSTATE и SCALE прямо сейчас)]:
+[The latest messages of the current scene (to determine NPCSTATE and SCALE right now)]:
 ${digest.lastSceneLines}
 
-ВАЖНЫЕ ПРАВИЛА ДЛЯ ПОЛЕЙ PROFILE И KEYS:
-— В полях «заноза», «ревность», «цепляет», «охлаждает», «мечта», «страх», «любит», «не_любит» пиши ТОЛЬКО ОБЩИЕ, ПОСТОЯННЫЕ черты характера персонажа В ЦЕЛОМ!
-— КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО записывать в «занозу» или «ревность» разовые ситуации, предметы одежды или конкретные имена из последних постов (например, НЕ пиши «требует отдать кардиган» или «переписка с Этель вечером» — вместо этого формулируй общие направления характера).
+IMPORTANT RULES FOR THE PROFILE AND KEYS FIELDS (values in Russian, keys exactly as given):
+— In the fields «заноза», «ревность», «цепляет», «охлаждает», «мечта», «страх», «любит», «не_любит» write ONLY GENERAL, PERMANENT traits of the character AS A WHOLE!
+— It is STRICTLY FORBIDDEN to put one-off situations, items of clothing or specific names from the latest posts into «заноза» or «ревность» (e.g. do NOT write «требует отдать кардиган» or «переписка с Этель вечером» — phrase general tendencies of character instead).
 
-ВАЖНО — КАЛИБРОВКА «тело=0..100» (состояние тела ПРЯМО СЕЙЧАС в последнем сообщении чата):
-— 0–14 = спокойное тело (обычный разговор, дела, сон или отдых ПОСЛЕ близости);
-— 15–34 = лёгкий ветерок (мимолётный флирт);
-— 35–59 = мягкое тепло (нежные объятия);
-— 60–84 = сильное волнение (страстные поцелуи, откровенные ласки);
-— 85–100 = НА ГРАНИ / ПИК ЖЕЛАНИЯ (разгар интимной близости).
+IMPORTANT — CALIBRATION OF «тело=0..100» (the body's state RIGHT NOW in the last chat message):
+— 0–14 = calm body (ordinary talk, chores, sleep or rest AFTER intimacy);
+— 15–34 = a light breeze (fleeting flirting);
+— 35–59 = soft warmth (tender hugs);
+— 60–84 = strong excitement (passionate kisses, explicit caresses);
+— 85–100 = ON THE EDGE / PEAK OF DESIRE (the height of intimacy).
 
-Ответь строками по шаблону без пояснений (каждая команда строго на одной строке):
+Reply with lines by the template, no explanations (each command strictly on one line):
 ${cardInstruction}
-NPCSTATE [${n.name}]: где он и что делает ПРЯМО СЕЙЧАС в последнем сообщении (1 короткая фраза)
-PROFILE [${n.name}]: внешность_en=точные английские теги внешности для Danbooru/NovelAI (если персонаж из известного аниме/игры — начни с каноничного тега фамилия имя, тайтл на английском!) | мечта=его глобальная жизненная цель или стремление в жизни (без зацикливания на одном месте отдыха) | страх=глубинный страх или уязвимость характера | любит=любимые вещи, стиль, еда, привычки в целом | не_любит=что не любит в целом в жизни и людях
-${isRom ? `KEYS [${n.name}]: цепляет=общие черты поведения и ласки, которые его цепляют в целом | охлаждает=общие стоп-факторы характера | заноза=в чём он обычно упрямится или ворчит по характеру В ЦЕЛОМ (без разовых мелочей из последнего поста!) | ревность=что вызывает у него ревность В ЦЕЛОМ по характеру (без конкретных переписок/имён из последнего поста!) | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
-SCALE [${n.name}]: дружба=точное_число_от_-100_до_100 | романтика=точное_число_от_0_до_100 | тело=точное_число_от_0_до_100_по_последнему_посту` : `SCALE [${n.name}]: дружба=точное_число_от_-100_до_100`}]`;
+NPCSTATE [${n.name}]: where they are and what they are doing RIGHT NOW in the last message (1 short phrase)
+PROFILE [${n.name}]: внешность_en=exact English appearance tags for Danbooru/NovelAI (if the character is from a known anime/game, start with the canonical tag surname name, title in English!) | мечта=their global life goal or aspiration (don't fixate on one holiday spot) | страх=a deep fear or vulnerability of character | любит=favourite things, style, food, habits in general | не_любит=what they dislike in life and people in general
+${isRom ? `KEYS [${n.name}]: цепляет=general behaviour and caresses that hook them | охлаждает=general turn-offs of character | заноза=what they usually get stubborn or grumble about BY CHARACTER (no one-off trivia from the last post!) | ревность=what makes them jealous BY CHARACTER (no specific chats/names from the last post!) | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
+SCALE [${n.name}]: дружба=exact_number_from_-100_to_100 | романтика=exact_number_from_0_to_100 | тело=exact_number_from_0_to_100_by_the_last_post` : `SCALE [${n.name}]: дружба=exact_number_from_-100_to_100`}]`;
             const raw = await quietGenerate(prompt);
             const wasLocked = n.locked;
             n.locked = false;
@@ -19713,50 +20218,50 @@ async function generateMigrationStorySummary(st) {
         return `• Тайна «${it.text}»${cluesTxt ? ` (улики: ${cluesTxt})` : ''}`;
     }).join('\n');
 
-    const prevSum = st?.storySummary ? `[Предыдущая сводка прошлых глав (обязательно сохрани важные факты из неё!)]:\n${st.storySummary}\n\n` : '';
+    const prevSum = st?.storySummary ? `[Previous summary of past chapters (be sure to keep its important facts!)]:\n${st.storySummary}\n\n` : '';
     const npcInfo = formatNpcs(st.npcs || [], false, st);
     const relInfo = formatRelationships(st);
-    const timeInfo = st.time?.date ? `Текущая дата и место: ${curDateStr}, ${placeLine(st) || ''}` : '';
+    const timeInfo = st.time?.date ? `Current date and place: ${curDateStr}, ${placeLine(st) || ''}` : '';
     const wornInfo = st.wardrobe?.active?.status === 'worn' && st.wardrobe.active.look
-        ? `Сейчас на ${names.user} надето: «${st.wardrobe.active.look.title}» (${st.wardrobe.active.look.desc})`
+        ? `Now ${names.user} is wearing: «${st.wardrobe.active.look.title}» (${st.wardrobe.active.look.desc})`
         : '';
 
     const prompt = `${SELF_CONTAINED_PROMPT_MARKER}
-[OOC: Пауза в ролевой игре. Мы переносим эту историю (${total} сообщений) в новый чистый чат. Составь ПОДРОБНОЕ, ОБЪЁМНОЕ И ПОЛНОЕ САММАРИ (Летопись всей истории) на русском языке (не менее 500–900 слов), охватывающее ВСЮ ролевую от завязки и до ВСЕХ СОБЫТИЙ ПОСЛЕДНЕГО ДНЯ включительно!
-ВАЖНО: события текущего/последнего дня (${curDateStr}) ещё НЕ записаны в календарь ниже — они находятся в блоке «СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (посты ${total - recentCount + 1}–${total})»! Обязательно подробно прочитай и включи в сводку ВСЁ, что произошло за последний день!
+[OOC: Roleplay paused. We are moving this story (${total} messages) into a new clean chat. Write a DETAILED, EXTENSIVE AND COMPLETE SUMMARY (a chronicle of the whole story) in Russian (at least 500–900 words), covering the WHOLE roleplay from the beginning up to and including ALL EVENTS OF THE LAST DAY!
+IMPORTANT: the events of the current/last day (${curDateStr}) are NOT yet recorded in the calendar below — they are in the block «СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (посты ${total - recentCount + 1}–${total})»! Be sure to read it carefully and include EVERYTHING that happened during the last day in the summary!
 
 ${prevSum}${timeInfo}
 ${wornInfo}
 
-[ЛЕТОПИСЬ ПРЕДЫДУЩИХ ДНЕЙ ИЗ КАЛЕНДАРЯ]:
-${timelineLines || '(записей календаря нет)'}
+[CHRONICLE OF PREVIOUS DAYS FROM THE CALENDAR]:
+${timelineLines || '(no calendar entries)'}
 
-[АРХИВ УЖЕ СВЕРШИВШИХСЯ СОБЫТИЙ И СЮЖЕТНЫХ ВЕХ]:
-${archiveLines || '(пока пусто)'}
+[ARCHIVE OF EVENTS AND PLOT MILESTONES ALREADY FULFILLED]:
+${archiveLines || '(empty so far)'}
 
-[КАК ИЗМЕНИЛИСЬ ГЕРОИ ПО ХОДУ ИСТОРИИ]:
-${evolvedLines || '(без завершённых сдвигов)'}
+[HOW THE CHARACTERS CHANGED OVER THE STORY]:
+${evolvedLines || '(no completed shifts)'}
 
-[ИЗВЕСТНЫЕ ГЕРОИ И ИХ СТАТУС]:
+[KNOWN CHARACTERS AND THEIR STATUS]:
 ${npcInfo}
-[СВЯЗИ]:
+[TIES]:
 ${relInfo}
 
-[АКТИВНЫЕ ЗАДУМКИ И ТАЙНЫ]:
+[ACTIVE IDEAS AND SECRETS]:
 ${activeNotesLines}
 ${intriguesLines}
 ${earlierDigest ? `\n${earlierDigest}\n` : ''}
-=== КУЛЬМИНАЦИЯ И ВСЕ СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}, последние посты ${total - recentCount + 1}–${total} из ${total}) — ПРОЧИТАЙ ВНИМАТЕЛЬНО И ОБЯЗАТЕЛЬНО ПОДРОБНО ОПИШИ В РАЗДЕЛЕ 2 И 4! ===
+=== КУЛЬМИНАЦИЯ И ВСЕ СОБЫТИЯ ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}, last posts ${total - recentCount + 1}–${total} из ${total}) — READ IT CAREFULLY AND BE SURE TO DESCRIBE IT IN DETAIL IN SECTIONS 2 AND 4! ===
 ${latestDayDigest}
 ${lastPostFull ? `
-=== САМЫЙ ПОСЛЕДНИЙ ПОСТ СЦЕНЫ (ФИНАЛЬНАЯ ТОЧКА — ОБЯЗАТЕЛЬНО ВКЛЮЧИ ЕГО СОБЫТИЯ, РЕПЛИКИ И КОНЦОВКУ В РАЗДЕЛЫ 2 И 4!) ===
+=== THE VERY LAST POST OF THE SCENE (THE FINAL POINT — BE SURE TO INCLUDE ITS EVENTS, LINES AND ENDING IN SECTIONS 2 AND 4!) ===
 ${lastPostFull}` : ''}
 
-Напиши подробную летопись в 4 развёрнутых разделах (перечисляй конкретные сцены, диалоги, поступки, подарки, споры, примирения и важные детали без пропусков):
-1. ЗАВЯЗКА И ПРЕДЫДУЩИЕ ДНИ ИСТОРИИ: с чего всё началось и какие ключевые события, поездки, встречи и повороты произошли в предыдущие дни ролевой.
-2. ПОДРОБНАЯ ХРОНИКА ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}): детально и по шагам опиши ВСЕ сцены, разговоры, события и действия, которые произошли за последний игровой день (по постам ${total - recentCount + 1}–${total}).
-3. ОТНОШЕНИЯ ГЕРОЕВ И КАНОНИЧНЫЕ ДЕТАЛИ: что сейчас между ${names.user}, ${names.char} и каждым важным NPC, какие есть общие секреты, договорённости, подарки и привычки.
-4. ТОЧКА ОСТАНОВКИ (ПРЯМО СЕЙЧАС): точная дата (${curDateStr}), локация, обстановка, во что одеты герои и на какой именно реплике или действии остановилась самая последняя сцена.]`;
+Write a detailed chronicle in Russian in 4 extensive sections with exactly these Russian headings (list concrete scenes, dialogues, deeds, gifts, arguments, reconciliations and important details without gaps):
+1. ЗАВЯЗКА И ПРЕДЫДУЩИЕ ДНИ ИСТОРИИ: how it all began and what key events, trips, meetings and turns happened on the previous days of the roleplay.
+2. ПОДРОБНАЯ ХРОНИКА ПОСЛЕДНЕГО / СЕГОДНЯШНЕГО ДНЯ (${curDateStr}): describe in detail, step by step, ALL scenes, conversations, events and actions of the last in-game day (posts ${total - recentCount + 1}–${total}).
+3. ОТНОШЕНИЯ ГЕРОЕВ И КАНОНИЧНЫЕ ДЕТАЛИ: what is now between ${names.user}, ${names.char} and each important NPC, what shared secrets, agreements, gifts and habits there are.
+4. ТОЧКА ОСТАНОВКИ (ПРЯМО СЕЙЧАС): the exact date (${curDateStr}), location, setting, what the characters are wearing and at exactly which line or action the very last scene stopped.]`;
 
     startBackgroundGenerationKeepAlive();
     try {
@@ -19791,7 +20296,7 @@ ${lastPostFull}` : ''}
         };
         for (let part = 1; part <= 3 && looksCut(out); part++) {
             const tail = out.slice(-1500);
-            const contPrompt = `${prompt}\n\n[ТВОЙ ОТВЕТ ОБОРВАЛСЯ НА ПОЛУСЛОВЕ. Вот его конец:\n«…${tail}»\nПРОДОЛЖИ ровно с места обрыва (с того же слова/предложения) и допиши саммари до конца, включая все оставшиеся разделы до 4-го. Не повторяй уже написанное, не начинай заново, без вступлений.]`;
+            const contPrompt = `${prompt}\n\n[YOUR REPLY WAS CUT OFF MID-WORD. Here is its end:\n«…${tail}»\nCONTINUE exactly from the cut (from the same word/sentence) and finish the summary, including all remaining sections up to the 4th. Don't repeat what is already written, don't start over, no intro.]`;
             const more = stripActionTags(cleanAnswer(await genSum(contPrompt, `📝 Саммари оборвалось — дописываю (часть ${part + 1})…`) || '')).trim();
             if (!more) break;
             out = `${out}${/[\s\n]$/.test(out) || /^[,.;:!?…)]/.test(more) ? '' : ' '}${more}`;
@@ -20261,9 +20766,9 @@ function renderNpcs(st) {
         const who = await askText(`Кому снится сон или кошмар? (${names.user}, ${names.char} или имя NPC)`, names.char);
         if (!who || !who.trim()) return;
         await withBusy('🌙 Модель плетёт сновидение…', async s2 => {
-            const prompt = `[OOC: Пауза в ролевой игре. Придумай один атмосферный, образный сон или тревожный кошмар, который приснился персонажу «${who.trim()}» этой ночью (свяжи его со скрытыми страхами, мечтами или последними событиями чата).
-Ответь одной строкой:
-DREAM [${who.trim()}]: сон|кошмар | описание сна в 2–3 предложениях и с каким чувством персонаж просыпается]`;
+            const prompt = `[OOC: Roleplay paused. Invent one atmospheric, vivid dream or disturbing nightmare that the character «${who.trim()}» had last night (tie it to hidden fears, dreams or the latest chat events). Write it in Russian.
+Reply with one line:
+DREAM [${who.trim()}]: сон|кошмар | the dream in 2–3 sentences and the feeling the character wakes up with]`;
             const raw = await quietGenerate(prompt);
             parseAndApply(raw);
             await commit();
@@ -21004,6 +21509,7 @@ async function closeNote(id, status) {
     if (status !== 'deleted') {
         n.status = status;
         n.closedAt = ctx().chat.length;
+        if (status === 'done') nnbDirectorRecord(st, n);
         st.archive.push(n);
     }
     await commit();
@@ -22746,6 +23252,8 @@ jQuery(async () => {
     });
 
     $('#nnb_think_now').on('click', () => think(true));
+    $('#nnb_stop_all').on('click', () => nnbStopAll());
+    $('#nnb_compress_now').on('click', () => nnbCompressNotebook());
     $('#nnb_world_now, #nnb_create_world_btn, #nnb_open_world').on('click', () => { closeBook(); openWorldOverviewOrCreator(); });
     addMenuItems();
     placeFfButton();
@@ -22755,7 +23263,7 @@ jQuery(async () => {
         const t = await askText('Новая запись (можно начать с [тег])');
         if (!t || !t.trim()) return;
         const m = t.trim().match(/^\[([^\]]{1,40})\]\s*(.+)$/s);
-        st.notes.push({ id: st.nextId++, tag: m ? m[1] : '', text: m ? m[2] : t.trim(), at: ctx().chat.length });
+        st.notes.push({ id: st.nextId++, tag: m ? m[1] : '', text: m ? m[2] : t.trim(), at: ctx().chat.length, manual: true });
         await commit();
     });
     $('#nnb_clear').on('click', async () => {
