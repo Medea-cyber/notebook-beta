@@ -278,7 +278,7 @@ const ARC_MAX = 4;
 
 const ARC_INJECT_HEADER = '[Развитие персонажей (приоритетнее стартовой карточки; ядро личности сохраняется, изменения — строго по стадии):]';
 
-const NPC_INJECT_HEADER = `[Канон персонажей в текущей сцене: аксессуары, напитки и привычки из карточек — пассивный справочник, не повторяй одни и те же мелочи в каждом посте подряд.]`;
+const NPC_INJECT_HEADER = `[Канон персонажей в текущей сцене: аксессуары, напитки и привычки из карточек — пассивный справочник, не повторяй одни и те же мелочи в каждом посте подряд. Отношения к {{user}} показывай поведением; никаких шкал, очков, цифр и пометок вида «+1 к симпатии» в тексте ответа.]`;
 
 const INTRIGUE_INJECT_HEADER = '[Тайны и интриги (секрет автора): раскрывай постепенно через намёки, улики и слухи, не выдавай правду раньше времени.]';
 
@@ -1923,8 +1923,17 @@ function ensureMainCharCard(st) {
     return st.mainCharCard;
 }
 
-function formatNpcScaleSummary(n) {
+// Для рассказчика — без цифр: голое «дружба 45/100» модели переписывают прямо в пост. Цифры нужны только размышлению блокнота.
+function nnbTierWords(label) { return String(label || '').replace(/^[^\p{L}]+/u, '').trim().toLowerCase(); }
+function formatNpcScaleSummary(n, forThink = false) {
     ensureNpcScales(n);
+    if (!forThink) {
+        const rel = isRomanticTarget(n)
+            ? `${nnbTierWords(friendshipTierLabel(n.friendship))}; романтически — ${nnbTierWords(romanceTierLabel(n.romance))}`
+            : nnbTierWords(friendshipTierLabel(n.friendship));
+        const moodObj = isRomanticTarget(n) && n.dailyMood && n.dailyMood !== 'off' ? DAILY_MOOD_OPTIONS[n.dailyMood] : null;
+        return `(служебно, в текст не выносить) с {{user}}: ${rel}.${moodObj?.label ? ` Тонус: ${nnbTierWords(moodObj.label)}.` : ''}`;
+    }
     if (!isRomanticTarget(n)) {
         return `Отношение к {{user}}: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)}).`;
     }
@@ -1954,12 +1963,12 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
         ensureNpcScales(n, st);
         const isActive = !useSmartFocus || n.isMainChar || n.favorite || isHeroActiveInCurrentScene(n.name, activeSet, st);
         if (isActive) {
-            const favTag = n.favorite ? ' [❤️ ГЛАВНЫЙ ФАВОРИТ ИГРОКА]' : '';
+            const favTag = n.favorite ? ' (главный фаворит игрока)' : '';
             const formattedCard = String(n.card || '').trim().replace(/\n+/g, '\n   ');
             let line = `— ${n.name}${favTag}: ${formattedCard}`;
             if (forThink) line += ' (существующий текст описания НЕ сокращай и НЕ переписывай — если в чате открылись важные новые факты об этом герое, добавь их через NPCFACT)';
             if (n.status) line += `\n   Сейчас: ${n.status}`;
-            line += `\n   ${formatNpcScaleSummary(n)}`;
+            line += `\n   ${formatNpcScaleSummary(n, forThink)}`;
             fullLines.push(line);
         } else {
             // Если карточка короткая (до 420 символов) — не режем её вообще! Сжимаем только огромные многоабзацные досье отсутствующих за кадром НПС,
@@ -1973,7 +1982,7 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
             }
             const extraTraits = [
                 n.status ? `Сейчас: ${n.status}` : '',
-                `Дружба: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)})`,
+                forThink ? `Дружба: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)})` : `с {{user}}: ${nnbTierWords(friendshipTierLabel(n.friendship))}`,
                 n.dream ? `Мечта: ${n.dream}` : '',
                 n.likes ? `Любит: ${n.likes}` : '',
             ].filter(Boolean).join(' | ');
@@ -15544,6 +15553,18 @@ async function processReplyTags() {
 
     let modified = false;
 
+    let relLineCut = false;
+    // 0. Модель иногда дописывает в конец поста «счётчик отношений»: [❤️ Кайлар: дружба 11/100 (+1 — …), романтика 0/100].
+    // Шкалы ведёт сам блокнот, в тексте ролевой им не место — вырезаем строку (и оставшийся после неё разделитель).
+    {
+        const relLineRe = /^[ \t]*\[?[^\n\[\]]{0,40}?(?:дружб|романтик|симпати|доверие|отношени)[^\n]*?\d{1,3}\s*\/\s*100[^\n]*$/gim;
+        if (relLineRe.test(msg.mes)) {
+            msg.mes = msg.mes.replace(relLineRe, '').replace(/\n[ \t]*(?:-{3,}|\*{3,}|_{3,}|—{2,})[ \t]*\s*$/, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+            modified = true;
+            relLineCut = true;
+        }
+    }
+
     // 1. Process ACTIONS tags (<!--ACTIONS: ...-->, [ACTIONS: ...], or ACTIONS: ...)
     const actMatch = msg.mes.match(/<!--\s*ACTIONS\s*[:：]\s*([\s\S]+?)\s*-->/i)
         || msg.mes.match(/\[\s*(?:ACTIONS|Варианты действий)\s*[:：]\s*([\s\S]+?)\s*\]/i)
@@ -15639,7 +15660,7 @@ async function processReplyTags() {
         try {
             // Перестраиваем DOM-блок сообщения только если вырезались видимые текстовые метки [ACTIONS: ...],
             // а для невидимых HTML-комментариев <!--SPARK:...--> не дёргаем тяжёлый updateMessageBlock!
-            if (hadVisibleActionsText && typeof c.updateMessageBlock === 'function') {
+            if ((hadVisibleActionsText || relLineCut) && typeof c.updateMessageBlock === 'function') {
                 c.updateMessageBlock(id, msg);
             }
             if (typeof c.saveMetadataDebounced === 'function') c.saveMetadataDebounced();
