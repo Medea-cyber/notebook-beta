@@ -592,6 +592,13 @@ const GENRE_HINTS = {
               if (mi >= 0) { d = Number(mm[1]); m = mi + 1; if (mm[3]) y = Number(mm[3]); }
           }
       }
+      if (!m) {
+          // английские месяцы: «March 31, 2025», «31 March 2025», «March 31st»
+          const EN_M = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+          let em = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?/);
+          if (em) { m = EN_M.indexOf(em[1]) + 1; d = Number(em[2]); if (em[3]) y = Number(em[3]); }
+          else if ((em = t.match(/\b(\d{1,2})(?!\d)(?:st|nd|rd|th)?\s+(?:of\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:,?\s+(\d{4}))?/))) { d = Number(em[1]); m = EN_M.indexOf(em[2]) + 1; if (em[3]) y = Number(em[3]); }
+      }
       if (!m || !d || m > 12 || d > 31) return null;
       if (!y) {
           // год не указан — берём год, при котором дата БЛИЖЕ ВСЕГО к текущей дате истории
@@ -766,7 +773,7 @@ const GENRE_HINTS = {
   function nnbHeaderMode(st) {
       const hs = st?.time?.headerSeen;
       const len = ctx().chat?.length ?? 0;
-      return !!(hs && len - hs.idx <= 12);
+      return !!(hs && hs.idx < len && len - hs.idx <= 12);
   }
   // Берём последнюю шапку из последних сообщений; применяем, только если появилась НОВАЯ шапка (ручная правка даты в блокноте живёт до следующей)
   function nnbSyncFromHeaders(st) {
@@ -778,7 +785,7 @@ const GENRE_HINTS = {
           const h = nnbParseStoryHeader(m.mes);
           if (!h.dateText && !h.location) continue;
           const iso = h.dateText ? parseDateText(h.dateText, st.time.date || undefined) : null;
-          const key = `${i}|${iso || ''}|${h.location || ''}|${h.clock || ''}`;
+          const key = `${i}|${iso || ''}|${h.location || ''}|${h.clock || ''}|${st.direction?.time ? 1 : 0}`;
           if (st.time.headerSeen?.key === key) return false;
           st.time.headerSeen = { idx: i, key, date: iso || '', location: h.location || '', clock: h.clock || '' };
           let changed = false;
@@ -999,10 +1006,10 @@ const GENRE_HINTS = {
 
   // Настроение секретной задачи — выбирается на удачу
   var MOODS = {
-    warm: { icon: '🌟', name: 'тёплый сюрприз', rule: 'особенный момент, который сделает праздник запоминающимся в хорошем смысле или продвинет вперёд отношения и линии персонажей: неожиданная приятность, совпадение, маленькое чудо, жест заботы' },
-    chaos: { icon: '🔥', name: 'весёлый хаос', rule: 'забавное происшествие в рамках жанра истории: что-то идёт не по плану, неловкость или суматоха, которую потом будут вспоминать со смехом' }
+    warm: { icon: '🌟', name: 'тёплый сюрприз', rule: 'a special moment that makes the holiday memorable in a good way or moves the characters\' relationships and lines forward: an unexpected pleasure, a coincidence, a small miracle, a caring gesture' },
+    chaos: { icon: '🔥', name: 'весёлый хаос', rule: 'a funny mishap within the story\'s genre: something goes off plan, an awkwardness or a commotion that will later be remembered with laughter' }
   };
-  var SECRET_RULES = 'Это ситуация или событие, а не сценарий: опиши, что произойдёт или что нужно устроить. Не диктуй персонажам реплики, признания и чувства (никаких «заставить X признаться», «X скажет вслух») — как они отреагируют, решится в сцене.';
+  var SECRET_RULES = 'It is a situation or an event, not a script: describe what will happen or what needs to be arranged. Don\'t dictate the characters\' lines, confessions and feelings (no «make X confess», «X will say out loud») — how they react will be decided in the scene. Write it in Russian.';
 
   function newHoliday(found) {
     var classic = shuffle(found.tr.tasks).slice(0, 2).map(function (text) { return { text: text, done: false, hidden: false, kind: 'classic' }; });
@@ -1434,6 +1441,9 @@ MAIN RULES FOR SCENES AND COMICS IN NOVELAI V5:
    — It is STRICTLY FORBIDDEN to translate Russian metaphors literally: do NOT write "lion mane" for a person's bushy hair (NovelAI will draw a furry lion head! Write: thick messy greying hair, voluminous wild hair); do NOT write "greenish-pale" or "green face" for nausea/pallor (the skin turns zombie-green! Write: pale skin, unwell, exhausted, sweatdrop).
    — Don't use "no ..." in the positive prompt and don't put generic style words (anime style, masterpiece) at the start.`;
 
+// 2.3.0: прежние русские встроенные тексты — по ним узнаём нетронутые копии в настройках и заменяем на английские
+const NNB_OLD_RU_WRITER = "ТВОЯ ЕДИНСТВЕННАЯ ЗАДАЧА — составить чистый визуальный промпт из коротких тегов Danbooru для NovelAI V5 без рассуждений и комментариев.\n— Если запрошена обычная сцена (1 кадр): выдай ТОЛЬКО строки CAST, SCENE и (при 2+ людях в кадре) CHAR1, CHAR2.\n— Если запрошен КОМИКС (PANEL1, PANEL2, PANEL3): выдай ТОЛЬКО строки CAST, PANEL1, PANEL2, PANEL3 и QUOTE1, QUOTE2, QUOTE3 (БЕЗ строки SCENE!).\n\nГЛАВНЫЕ ПРАВИЛА ДЛЯ СЦЕН И КОМИКСОВ В NOVELAI V5:\n1. ПРАВИЛО РАСКАДРОВКИ КОМИКСА (PANEL1, PANEL2, PANEL3) — РАЗНЫЕ МОМЕНТЫ И НЕ БОЛЕЕ 1–2 ГЕРОЕВ В КАДРЕ:\n   — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО пихать в один кадр комикса толпу из 4–7 человек (4boys, 2girls, six people)! В одном фрейме комикса NovelAI может чисто нарисовать ТОЛЬКО 1 или 2 персонажей (максимум 3 на общем плане), которые непосредственно говорят реплику (QUOTE) или действуют ИМЕННО В ЭТОТ МОМЕНТ!\n   — Привязывай каждый кадр к своей реплике и своему микро-эпизоду поста:\n     • PANEL1 (Момент 1 под QUOTE1, средний план medium shot / cowboy shot): 1–2 персонажа из начала поста (кто произносит QUOTE1 и кому). Если их двое — в конце строки обязательно добавь: || CHAR1: пол, внешность, одежда и поза 1-го || CHAR2: пол, внешность, одежда и поза 2-го.\n     • PANEL2 (Момент 2 под QUOTE2, другой ракурс dynamic angle / medium close-up): ДРУГИЕ 1–2 персонажа (или другая поза и действие из середины поста, кто произносит QUOTE2 и кто реагирует). НЕ повторяй описание и позы из PANEL1! Добавь в конце || CHAR1: ... || CHAR2: ... (если в кадре двое).\n     • PANEL3 (Момент 3 под QUOTE3, крупный эмоциональный план close-up / portrait): СОЛЬНЫЙ крупный план (1boy, solo, close-up ИЛИ 1girl, solo, close-up) того персонажа, который произносит QUOTE3 или ярко реагирует в финале! В PANEL3 ЗАПРЕЩЕНО писать wide shot, full body или 2boys/4boys!\n\n2. КАЛИБРОВКА ПРОПОРЦИЙ И ЗАПРЕТ БУКВАЛЬНЫХ МЕТАФОР:\n   — Если в кадре мужчина и женщина (1boy, 1girl), фиксируй взрослые пропорции: 1.2::tall lean adult man, adult male proportions, man slightly taller than woman, wider male shoulders::. Внутри фраз называй мужчину adult man / male (слово boy используй только в счётчике 1boy/2boys).\n   — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО переводить русские метафоры дословно: НЕ пиши \"lion mane\" про пышную шевелюру человека (иначе NovelAI нарисует голову льва-фурри! Пиши: thick messy greying hair, voluminous wild hair); НЕ пиши \"greenish-pale\" или \"green face\" про тошноту/бледность (иначе кожа станет зелёной как у зомби! Пиши: pale skin, unwell, exhausted, sweatdrop).\n   — Не используй частицу \"no ...\" в позитиве и не пиши общие слова стиля (anime style, masterpiece) в начале.";
+const NNB_OLD_RU_WRITER_SHORT = "Пиши промпт для NovelAI на английском языке через запятую (70–110 тегов).\n— Начинай с количества персонажей (1girl, 1boy).\n— Прописывай естественные взрослые пропорции тела (adult body proportions, anatomically correct hands and fingers, natural posture).\n— Чётко указывай положение каждой руки и кисти, направление взгляда и мимику каждого персонажа отдельно.\n— Сохраняй одежду и обстановку из предыдущих промптов сцены, если сюжет их не менял.";
 const BUILTIN_NAI_WRITER_PRESETS = [
     {
         name: '✨ V5: Взрослые пропорции и блочная формула (рекомендуется)',
@@ -1453,11 +1463,11 @@ Rules:
     },
     {
         name: '🌿 Короткий универсальный (чистые теги и анатомия рук)',
-        value: `Пиши промпт для NovelAI на английском языке через запятую (70–110 тегов).
-— Начинай с количества персонажей (1girl, 1boy).
-— Прописывай естественные взрослые пропорции тела (adult body proportions, anatomically correct hands and fingers, natural posture).
-— Чётко указывай положение каждой руки и кисти, направление взгляда и мимику каждого персонажа отдельно.
-— Сохраняй одежду и обстановку из предыдущих промптов сцены, если сюжет их не менял.`,
+        value: `Write a NovelAI prompt in English, comma-separated (70–110 tags).
+— Start with the number of characters (1girl, 1boy).
+— Give natural adult body proportions (adult body proportions, anatomically correct hands and fingers, natural posture).
+— State clearly the position of each arm and hand, the gaze direction and the facial expression of each character separately.
+— Keep the clothes and setting from the scene's previous prompts unless the story changed them.`,
     },
 ];
 
@@ -1655,13 +1665,13 @@ function buildGenreDirection(st) {
 }
 
 function formatIntrigues(list) {
-    if (!list.length) return '(пока нет)';
+    if (!list.length) return '(none yet)';
     const len = ctx().chat?.length ?? 0;
     return list.map(it => {
-        let line = `T${it.id}${it.tag ? ` [${it.tag}]` : ''} (заведено ${Math.max(0, len - it.at)} сообщ. назад): ${it.text}`;
+        let line = `T${it.id}${it.tag ? ` [${it.tag}]` : ''} (started ${Math.max(0, len - it.at)} msgs ago): ${it.text}`;
         line += it.clues.length
-            ? '\n   Уже открылось игроку: ' + it.clues.map(c => c.text).join('; ')
-            : '\n   Игрок пока ничего об этом не знает.';
+            ? '\n   Already revealed to the player: ' + it.clues.map(c => c.text).join('; ')
+            : '\n   The player knows nothing about it yet.';
         return line;
     }).join('\n');
 }
@@ -1757,13 +1767,13 @@ function isHeroActiveInCurrentScene(heroName, activeSet, st) {
 
 function formatRelationships(st, forThink = false) {
     const list = st?.relationships || [];
-    if (!list.length) return '(пока нет)';
+    if (!list.length) return '(none yet)';
     return list.map(r => {
         const arrow = r.arrow || '↔';
         const typeStr = r.type ? ` [${r.type}]` : '';
         if (forThink) {
             let line = `R${r.id} ${r.a} ${arrow} ${r.b}${typeStr}: ${r.desc || ''}`;
-            if (r.locked) line += ' (правлено вручную — не меняй)';
+            if (r.locked) line += ' (edited by hand — don\'t change)';
             return line;
         }
         return `— ${r.a} ${arrow} ${r.b}${typeStr}: ${r.desc || ''}`;
@@ -2069,7 +2079,7 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
     }
     const sorted = [...(list || [])].sort((a, b) => (!!b.favorite - !!a.favorite) || a.id - b.id);
     all.push(...sorted);
-    if (!all.length) return (mode === 'active' || mode === 'sleeping') ? '' : '(пока нет)';
+    if (!all.length) return (mode === 'active' || mode === 'sleeping') ? '' : '(none yet)';
     const useSmartFocus = !forThink && settings().tokenSaverMode !== false && all.length > 3;
     const activeSet = useSmartFocus ? getActiveSceneHeroSet(st) : null;
     const fullLines = [];
@@ -2097,10 +2107,10 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
                 shortBio = (lastDot > 180 ? cut.slice(0, lastDot + 1) : cut + '…');
             }
             const extraTraits = [
-                n.status ? `Сейчас: ${n.status}` : '',
+                n.status ? `${forThink ? 'Сейчас' : 'Now'}: ${n.status}` : '',
                 forThink ? `Дружба: ${n.friendship}/100 (${friendshipTierLabel(n.friendship)})` : `with {{user}}: ${nnbTierWords(friendshipTierLabel(n.friendship))}`,
-                n.dream ? `Мечта: ${n.dream}` : '',
-                n.likes ? `Любит: ${n.likes}` : '',
+                n.dream ? `${forThink ? 'Мечта' : 'Dream'}: ${n.dream}` : '',
+                n.likes ? `${forThink ? 'Любит' : 'Likes'}: ${n.likes}` : '',
             ].filter(Boolean).join(' | ');
             sleepingLines.push(`— ${n.name}: ${shortBio}${extraTraits ? ` [${extraTraits}]` : ''}`);
         }
@@ -2115,7 +2125,7 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
             : '';
     }
     if (sleepingLines.length) {
-        fullLines.push(`\n[Второстепенные знакомые за кадром (сейчас не в сцене — краткая справка):\n${sleepingLines.join('\n')}]`);
+        fullLines.push(`\n[Secondary acquaintances off-screen (not in the scene now — short reference):\n${sleepingLines.join('\n')}]`);
     }
     return fullLines.join('\n');
 }
@@ -2144,17 +2154,17 @@ function formatArcs(st, forThink = false, includeEvolved = true) {
     const lines = st.arcs.map(a => {
         const stg = ARC_STAGES[a.stage];
         let line = forThink
-            ? `A${a.id} ${a.who}: ${a.text}. Стадия ${a.stage}/${ARC_MAX} (${stg.name}).`
+            ? `A${a.id} ${a.who}: ${a.text}. Stage ${a.stage}/${ARC_MAX} (${stg.name}).`
             : `${a.who} — ${a.text} [${a.stage}/${ARC_MAX} «${stg.name}»].`;
-        if (a.current) line += ` Сейчас: ${a.current}`;
+        if (a.current) line += ` Now: ${a.current}`;
         if (forThink) {
-            line += `\n   Стимулов с прошлого сдвига: ${a.sinceShift} из ${need} нужных.`;
-            if (a.stimuli.length) line += '\n   Стимулы: ' + a.stimuli.map(x => x.text).join('; ');
+            line += `\n   Stimuli since the last shift: ${a.sinceShift} of ${need} needed.`;
+            if (a.stimuli.length) line += '\n   Stimuli: ' + a.stimuli.map(x => x.text).join('; ');
         }
         return line;
     });
     if (includeEvolved && st.evolved.length) {
-        lines.push('Закреплённые изменения:\n' + st.evolved.map(e => `— ${e.who}: ${e.text}`).join('\n'));
+        lines.push('Settled changes:\n' + st.evolved.map(e => `— ${e.who}: ${e.text}`).join('\n'));
     }
     return lines.length ? lines.join('\n') : '(none yet)';
 }
@@ -2287,7 +2297,7 @@ function buildLivingWorldInjection(st, includeWorldProfile = true) {
         lwBlock = `[Living world — first impression of the location:
 ${locLine}On entering, weave 1–2 lively details or points of interest from the place's hooks into the scene so the location feels alive. After the first mention do NOT repeat the same hooks in the following replies unless the player draws attention to them.${compRule}]`;
     } else if (curPlace) {
-        lwBlock = `[Текущая локация: «${curPlace.title}». Не повторяй фоновые мелочи и крючки локации из поста в пост.]`;
+        lwBlock = `[Current location: «${curPlace.title}». Don't repeat the location's background details and hooks from post to post.]`;
     } else {
         lwBlock = '';
     }
@@ -2706,16 +2716,16 @@ function buildStandaloneContextPrompt(taskPrompt) {
     // 1. Краткая справка о персонажах чата и Саммари предыдущих глав (чтобы отдельная быстрая модель Блокнота помнила весь канон!)
     const st = store();
     if (st?.storySummary?.trim()) {
-        parts.push(`[📜 Краткое содержание предыдущих глав истории:\n${String(st.storySummary).trim().slice(0, 3500)}]`);
+        parts.push(`[📜 Summary of the previous chapters:\n${String(st.storySummary).trim().slice(0, 3500)}]`);
     }
     const ch = (c.characterId !== undefined && c.characters?.[c.characterId]) ? c.characters[c.characterId] : null;
     if (ch) {
         const desc = [ch.description, ch.personality, ch.scenario].filter(Boolean).join('\n').slice(0, 2600);
-        if (desc) parts.push(`[Описание персонажа ${names.char}:\n${c.substituteParams(desc)}]`);
+        if (desc) parts.push(`[Character description of ${names.char}:\n${c.substituteParams(desc)}]`);
     }
     const personaDesc = c.powerUserSettings?.persona_description || c.extensionSettings?.persona?.description || '';
     if (personaDesc) {
-        parts.push(`[Описание игрока ${names.user}:\n${c.substituteParams(String(personaDesc).slice(0, 1600))}]`);
+        parts.push(`[Player description of ${names.user}:\n${c.substituteParams(String(personaDesc).slice(0, 1600))}]`);
     }
 
     // 2. Последние сообщения чата (для последних 6 постов сохраняем до 3600 символов и обязательно концовку поста, чтобы модель Блокнота видела финал сцены!)
@@ -2733,7 +2743,7 @@ function buildStandaloneContextPrompt(taskPrompt) {
                 : `${rawClean.slice(0, Math.floor(limit * 0.45))} … ${rawClean.slice(-Math.floor(limit * 0.55))}`;
             return `${speaker}: ${clean}`;
         });
-        parts.push(`[Последние сообщения ролевой (контекст чата):\n${lines.join('\n\n')}]`);
+        parts.push(`[Latest roleplay messages (chat context):\n${lines.join('\n\n')}]`);
     }
 
     // 3. Само задание блокнота
@@ -3024,7 +3034,9 @@ ${writerNote}]
     );
 }
 
-async function quietGenerateImagePrompt(prompt) {
+// maxTokens: свой лимит длины ответа. Без него основное подключение берёт «Длину ответа» из пресета (часто 300–1000),
+// и модель с размышлениями (GLM и т.п.) тратит его целиком на размышление — ответ приходит пустым.
+async function quietGenerateImagePrompt(prompt, maxTokens = 4096) {
     const s = settings();
     if (s.imgPromptSource) {
         try {
@@ -3041,18 +3053,26 @@ async function quietGenerateImagePrompt(prompt) {
     const isComicStripTask = /\bPANEL1\s*:/i.test(String(prompt || ''));
     const writerNote = adaptWriterNoteForTask(rawWriterNote, isComicStripTask);
     const writerPrefix = writerNote
-        ? `[Авторская инструкция составителю промптов картинок (соблюдай обязательно!):
+        ? `[The author's instruction to the image prompt writer (follow it strictly!):
 ${writerNote}]
 
 `
         : '';
-    return quietGenerate(writerPrefix + prompt);
+    return quietGenerate(writerPrefix + prompt, maxTokens);
 }
 
 // При ошибке лимита (429) ждём и пробуем ещё раз
 async function quietGenerateRetry(prompt, maxTokens = 0) {
     try {
-        return await quietGenerateOnce(prompt, maxTokens);
+        const res = await quietGenerateOnce(prompt, maxTokens);
+        // Пустой ответ при живом подключении — почти всегда модель с размышлениями (GLM, DeepSeek R1 и т.п.)
+        // потратила весь лимит длины на размышление. Повторяем один раз с большим лимитом.
+        if (!String(res ?? '').trim() && maxTokens < 8192 && !nnbStopActive()) {
+            console.warn('[npc_notebook] empty answer, retrying with bigger responseLength');
+            setStatus('Модель вернула пустой ответ — повторяю с бо́льшим лимитом длины…');
+            return await quietGenerateOnce(prompt, 8192);
+        }
+        return res;
     } catch (err) {
         const msg = String(err?.message || err);
         if (nnbIsStopError(err) || !/429|too many|rate|exhausted|quota/i.test(msg)) throw err;
@@ -3189,7 +3209,8 @@ function parseAndApply(raw) {
         }
         const mh = line.match(/^HERE\s*[:：—–-]\s*(.+)$/i);
         if (mh) {
-            if (st.direction.map && nnbHeaderMode(st) && st.time?.headerSeen?.location) continue; // место ведёт шапка поста
+            // место ведёт шапка поста — если она совпала с местом на карте; иначе (шапка на другом языке и т.п.) слушаем HERE
+            if (st.direction.map && nnbHeaderMode(st) && st.time?.headerSeen?.location && st.map.current) continue;
             if (st.direction.map && /^(?:нигде|нет|—|-|none|не на карте)(?![а-яёa-z])/i.test(mh[1].trim())) { st.map.current = null; continue; }
             if (st.direction.map) {
                 const pl = findPlace(st, mh[1].split('|')[0]);
@@ -3217,7 +3238,7 @@ function parseAndApply(raw) {
                 // ADD [линия]: суть (жанр, накал N/5)
                 const ln = nnbDirectorLineOf(st, note.tag);
                 if (ln) note.line = ln.id;
-                const gm = note.text.match(/\(\s*([a-z]+)\s*,?\s*(?:накал\s*)?(\d)\s*\/\s*5\s*\)\s*$/i);
+                const gm = note.text.match(/\(\s*(?:genre\s*:?\s*|жанр\s*:?\s*)?([a-z]+)\s*[,;]?\s*(?:накал|intensity)?\s*:?\s*(\d)\s*\/\s*5\s*\)\s*\.?\s*$/i);
                 if (gm) { if (NNB_DIR_GENRES.includes(gm[1].toLowerCase())) note.genre = gm[1].toLowerCase(); note.intensity = Number(gm[2]); note.text = note.text.slice(0, gm.index).trim(); }
             }
             st.notes.push(note);
@@ -3757,6 +3778,7 @@ async function think(manual = false) {
 
     const chatIdAtStart = ctx().chatId;
     try { nnbSyncFromHeaders(st); } catch (e) { /* ignore */ }
+    let thinkStopped = false;
     busy = true;
     let afterBusy = null;
     setStatus('Модель листает блокнот…');
@@ -3777,7 +3799,8 @@ async function think(manual = false) {
         } else if (dripD) dripD.sinceThink = false;
         if (notesInThink && st.direction?.notes === 'director') {
             const bal = nnbDirectorBalance(st).map(b => `${b.id} «${b.name}»: played ${b.pct}%, target ${b.target}%`).join('; ');
-            const dirCmd = `Director: story lines — ${bal}. Invent new ideas first of all for the lines that lag behind their target. Format: ADD [line id]: the gist of the scene (genre, intensity N/5); genres: ${NNB_DIR_GENRES.join('/')}. A played idea — DONE #number.`;
+            const dirSum = String(nnbDirector(st).summary || '').trim();
+            const dirCmd = `${dirSum ? `Director's note on where the story stands: ${dirSum.slice(0, 900)}\n` : ''}Director: story lines — ${bal}. Invent new ideas first of all for the lines that lag behind their target. Format: ADD [line id]: the gist of the scene (genre, intensity N/5); genres: ${NNB_DIR_GENRES.join('/')}. A played idea — DONE #number.`;
             tpl = /(?:Команды|Commands): ADD \[план\|вопрос\|идея\]: (?:текст|text)[^\n]*/.test(tpl)
                 ? tpl.replace(/(?:Команды|Commands): ADD \[план\|вопрос\|идея\]: (?:текст|text)[^\n]*/, `${dirCmd}\nCommands: ADD [line id]: text | DONE #number | DROP #number`)
                 : tpl.replace('{{notes}}', `{{notes}}\n${dirCmd}`);
@@ -3817,10 +3840,11 @@ async function think(manual = false) {
         }
     } catch (err) {
         console.error('[npc_notebook]', err);
-        toastr.error(String(err?.message || err), 'Блокнот рассказчика: ошибка');
+        if (!nnbIsStopError(err)) toastr.error(String(err?.message || err), 'Блокнот рассказчика: ошибка');
+        else thinkStopped = true;
     } finally {
         if (ctx().chatId === chatIdAtStart) {
-            st.lastThinkAt = ctx().chat.length;
+            if (!thinkStopped) st.lastThinkAt = ctx().chat.length; // остановили вручную — эти сообщения обдумаем в следующий раз
             await ctx().saveMetadata();
         }
         busy = false;
@@ -4932,7 +4956,7 @@ function nnbNewAbort() {
     return { signal: ctrl.signal, ctrl, done: () => NNB_STOP.ctrls.delete(ctrl) };
 }
 function nnbStopAll() {
-    NNB_STOP.until = Date.now() + 5000; // повторы и следующие страницы главы в эти секунды тоже не стартуют
+    NNB_STOP.until = Date.now() + 2500; // повторы и следующие страницы главы в эти секунды тоже не стартуют
     NNB_STOP.epoch++;
     for (const c of NNB_STOP.ctrls) { try { c.abort(); } catch (e) { /* ignore */ } }
     NNB_STOP.ctrls.clear();
@@ -4941,7 +4965,6 @@ function nnbStopAll() {
     // фоновые генерации через основное подключение
     try { ctx().stopGeneration?.(); } catch (e) { /* ignore */ }
     try { if (typeof sceneDrawing !== 'undefined') sceneDrawing = false; } catch (e) { /* ignore */ }
-    try { if (typeof thinking !== 'undefined') thinking = false; } catch (e) { /* ignore */ }
     try { setStatus?.('⏹ Остановлено'); } catch (e) { /* ignore */ }
     try { toastr.info('Все генерации блокнота остановлены', 'Блокнот рассказчика'); } catch (e) { /* ignore */ }
 }
@@ -5025,6 +5048,7 @@ async function imagesFetch(url, init) {
     try {
         return await fetch(url, init);
     } catch (e) {
+        if (e?.name === 'AbortError' || init?.signal?.aborted) throw nnbStopError(); // отменили (⏹ или таймаут) — не идём в прокси
         const viaProxy = '/proxy/' + url;
         // Прокси Таверны — это запрос к самой Таверне: без её CSRF-токена сервер отвечает «Invalid CSRF token»
         let csrf = {};
@@ -5542,8 +5566,10 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
                     action: 'generate',
                     parameters: pObj,
                 };
+                const abN = nnbNewAbort();
                 const res = await withTimeout(
                     imagesFetch('https://image.novelai.net/ai/generate-image', {
+                        signal: abN.signal,
                         method: 'POST',
                         headers: {
                             Authorization: `Bearer ${token}`,
@@ -5554,7 +5580,7 @@ async function drawViaNovelAi(prompt, orient = 'portrait', refs = null) {
                     }),
                     90000,
                     'NovelAI рисунок'
-                );
+                ).catch(e => { try { abN.ctrl.abort(); } catch (x) { /* ignore */ } throw e; }).finally(() => abN.done());
                 return await parseNovelAiResponse(res);
             }, 'NovelAI кадр', 2, 3500);
         };
@@ -8803,21 +8829,26 @@ function nnbIsNsfwActPrompt(p) {
 function nnbNsfwCloseupAsScene(rawPrompt) {
     let p = String(rawPrompt || '');
     if (!nnbIsNsfwActPrompt(p)) return p;
+    // был ли это «кадр-деталь» (часть тела отдельно) — только тогда переделываем в близкий план сцены
+    const wasDetail = /\b(head out of frame|face out of frame|cropped head|headless|cropped|intimate close-up|penetration close-up|sex close-up|extreme close-up|macro shot|macro|no humans|object focus|still life|(?:groin|pelvic|crotch|genitals?|penis|pussy|breasts?|ass|butt|thighs?) focus|focus on [^,]+)\b/i.test(p);
     p = p.replace(/\b(?:head out of frame|face out of frame|cropped head|headless|cropped|intimate close-up|penetration close-up|sex close-up|extreme close-up|macro shot|macro|no humans|object focus|still life|disembodied[a-z ]*|(?:groin|pelvic|crotch|lower body|genitals?|penis|pussy|breasts?|ass|butt|thighs?) focus|focus on [^,]+)\b\s*,?/gi, '');
     const low = p.toLowerCase();
     const hasBoy = /\b(1boy|[2-6]boys|male)\b/.test(low);
     const hasGirl = /\b(1girl|[2-6]girls|female)\b/.test(low);
     const needBoy = /\b(penis|erection|testicles|fellatio|blowjob|handjob|paizuri|ejaculation|cum)\b/.test(low);
     const needGirl = /\b(pussy|vagina|clitoris|labia|vaginal|cunnilingus|paizuri|breasts|nipples|areolae)\b/.test(low);
+    const pair = /\b(hetero|vaginal|penetration|sex|missionary|cowgirl position|doggystyle)\b/.test(low);
     const add = [];
-    if (!hasBoy && (needBoy || (!hasGirl && !needGirl))) add.push('1boy');
-    if (!hasGirl && (needGirl || /\b(hetero|vaginal|penetration|sex)\b/.test(low))) add.push('1girl');
-    if ((hasBoy || add.includes('1boy')) && (hasGirl || add.includes('1girl')) && !/\bhetero\b/.test(low)) add.push('hetero');
-    // кадр близкий, но это СЦЕНА: оба тела целиком связаны, лица могут быть частично в кадре
-    const framing = /\b(close-up|upper body|lower body|cowboy shot|medium shot)\b/.test(low) ? [] : ['close-up'];
+    if (!hasBoy && (needBoy || (pair && !/\byuri\b/.test(low)))) add.push('1boy');
+    if (!hasGirl && (needGirl || (pair && !/\byaoi\b/.test(low)))) add.push('1girl');
+    const boy = hasBoy || add.includes('1boy');
+    const girl = hasGirl || add.includes('1girl');
+    if (boy && girl && !/\bhetero\b/.test(low)) add.push('hetero');
+    const twoPlus = (boy && girl) || /\b[2-6](?:boys|girls)\b/.test(low);
+    const framing = wasDetail && !/\b(close-up|upper body|lower body|cowboy shot|medium shot)\b/.test(low) ? ['close-up'] : [];
     p = ['nsfw', 'explicit', ...add, ...framing, p.replace(/\b(?:nsfw|explicit)\b\s*,?/gi, '')].join(', ');
-    if (!/\b(from side|from above|from below|from behind|pov|dutch angle)\b/i.test(p)) p += ', from side';
-    p += ', anatomically correct, connected bodies';
+    if (wasDetail && !/\b(from side|from above|from below|from behind|pov|dutch angle)\b/i.test(p)) p += ', from side';
+    if (twoPlus && !/connected bodies/.test(p)) p += ', anatomically correct, connected bodies';
     return p.replace(/,\s*,+/g, ', ').replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
@@ -9047,6 +9078,8 @@ function nnbEnforcePageCastOnFrame(desc, caps, pageCast, panelSpeakers = [], st 
     let d = nnbDropRemovedItemTags(desc);
     let slots = Array.isArray(caps) ? caps.filter(Boolean).map(c => nnbDropRemovedItemTags(c)) : [];
     if (!pageCast || !pageCast.length) return { desc: d, caps: slots };
+    // интимная сцена — одежду из памяти НЕ добавляем (оставляем только то, что модель сама написала: open shirt и т.п.)
+    if (nnbIsNsfwActPrompt(d) || /\b(nude|naked|completely nude|topless|undressing)\b/i.test(d)) lockClothes = false;
     const headless = /\b(head out of frame|face out of frame|cropped head|headless)\b/i.test(d);
     if (slots.length) {
         const used = new Set();
@@ -9285,12 +9318,6 @@ function nnbPromptAnswerHasReasoning(raw, isComicMode) {
 function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     let p = sanitizeLiteralMetaphorTags(String(rawPrompt || '').trim());
     if (!p) return '';
-    // NSFW: даже если модель пометила кадр [DETAIL]/[HANDS] — рисуем сцену двоих близким планом
-    if (nnbIsNsfwActPrompt(p)) {
-        const tagM = p.match(/^\[(OBJECT|HANDS|DETAIL|REACTION)\]\s*/i);
-        if (tagM) p = p.slice(tagM[0].length);
-        return nnbNsfwCloseupAsScene(p);
-    }
 
     // 0) Убираем текстовые звуки и облачка из позитива, чтобы текст не плыл в картинку
     p = p
@@ -9303,6 +9330,8 @@ function cleanSingleComicPanelPrompt(rawPrompt, panelIdx = 0) {
     if (p2ModeMatch) {
         p = p.slice(p2ModeMatch[0].length).trim();
     }
+    // NSFW: даже если модель пометила кадр [DETAIL]/[HANDS] — рисуем сцену двоих близким планом
+    if (nnbIsNsfwActPrompt(p)) return nnbNsfwCloseupAsScene(p).replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
     if (p2Mode === 'OBJECT') {
         p = p.replace(/\b(?:1girl|1boy|solo|bare hands|male hands|female hands|two hands only|head out of frame|face out of frame|cropped head)\b\s*,?/gi, '')
              .replace(/,\s*,+/g, ', ').replace(/^,\s*|,\s*$/g, '').trim();
@@ -10312,13 +10341,29 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
             await nnbAutoFillCastAppearance(st, mesId, comicOpts);
             const basePromptReq = scenePromptRequest(st, mesId, camMode, forcedCast, directorWhisper, comicOpts);
             let raw = '';
+            let lastWasEmpty = false;
+            let lastHadNoPanels = false;
             for (let attempt = 1; attempt <= 3; attempt++) {
-                const req = attempt === 1 ? basePromptReq
-                    : `${basePromptReq}\n\n[IMPORTANT: last time your reply contained reasoning. Don't reason or explain — output the finished lines in the required format RIGHT AWAY; PANEL/SCENE lines contain only English comma-separated tags.]`;
-                raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(req));
+                let req = basePromptReq;
+                if (attempt > 1 && lastHadNoPanels) req = `${basePromptReq}\n\n[IMPORTANT: your previous reply had no PANEL lines. Output the storyboard RIGHT AWAY in the required format: CAST:, then PANEL1:, PANEL2:, PANEL3: (PANEL4: if 4 frames are requested), each with English comma-separated tags, then the QUOTE lines. No reasoning, no explanations.]`;
+                else if (attempt > 1 && !lastWasEmpty) req = `${basePromptReq}\n\n[IMPORTANT: last time your reply contained reasoning. Don't reason or explain — output the finished lines in the required format RIGHT AWAY; PANEL/SCENE lines contain only English comma-separated tags.]`;
+                // пустой ответ — чаще всего размышление модели съело лимит длины: даём больше места
+                const budget = lastWasEmpty ? 8192 : 4096;
+                raw = await withBusy(isComicMode ? '💬 Модель составляет раскадровку комикса и проверяет реплики…' : '🎬 Модель составляет промпт для картинки…', () => quietGenerateImagePrompt(req, budget));
                 lastPromptRaw = raw;
-                if (!nnbPromptAnswerHasReasoning(raw, isComicMode) || attempt === 3 || nnbStopActive()) break;
-                logImageDiag(`🔁 В ответе модели промптов рассуждения вместо тегов — автоматически запрашиваю заново (попытка ${attempt + 1}/3)`, String(raw || '').slice(0, 300));
+                lastWasEmpty = !String(raw || '').trim();
+                if (!lastWasEmpty && !nnbPromptAnswerHasReasoning(raw, isComicMode)) break;
+                if (attempt === 3 || nnbStopActive()) break;
+                if (lastWasEmpty) {
+                    lastHadNoPanels = false;
+                    logImageDiag(`🔁 Модель промптов вернула пустой ответ (обычно размышление модели съедает лимит длины) — запрашиваю заново с бо́льшим лимитом (попытка ${attempt + 1}/3)`);
+                } else {
+                    const hasPanels = (answerLines(raw).filter(l => /^(?:\d+[.)]\s*)?(?:PANEL|FRAME|КАДР|ФРЕЙМ)\s*[_#№]?\s*\d/i.test(l.replace(/^[\s>*_#-]+/, ''))).length >= 2);
+                    lastHadNoPanels = isComicMode && !hasPanels;
+                    logImageDiag(lastHadNoPanels
+                        ? `🔁 В ответе модели промптов нет строк PANEL — автоматически запрашиваю заново (попытка ${attempt + 1}/3)`
+                        : `🔁 В ответе модели промптов рассуждения вместо тегов — автоматически запрашиваю заново (попытка ${attempt + 1}/3)`, String(raw || '').slice(0, 300));
+                }
             }
             logImageDiag('Ответ модели промптов получен', raw ? String(raw).slice(0, 500) : '(пусто)');
             // Поддержка ответа в формате <nai_imagen> (если пользователь вставил промпт из ext-blocks-custom) и многострочного SCENE:
@@ -10431,6 +10476,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
                     }
                 });
             }
+            if (!desc && lastWasEmpty) throw new Error('модель промптов три раза подряд вернула пустой ответ — подключение отвечает, но текста нет (проверь, не закончился ли лимит у провайдера)');
             if (!desc) throw new Error('модель не описала сцену (в ответе нет строки SCENE) — открой лог диагностики в настройках блокнота');
         }
 
@@ -10882,6 +10928,7 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         renderPanel();
         return { url, sceneMeta };
     } catch (err) {
+        if (nnbIsStopError(err)) { logImageDiag('⏹ Рисование остановлено вручную'); return null; }
         console.warn('[npc_notebook] scene', err);
         logImageDiag('ОШИБКА генерации сцены', err?.message || String(err));
         toastr.warning(`Сцену нарисовать не вышло: ${escapeHtml(err?.message || err)}<br><small>Нажми «📋 Диагностика и лог картинок» в настройках блокнота для подробностей.</small>`, '🎬 Сцена', { escapeHtml: false, timeOut: 10000 });
@@ -11657,7 +11704,7 @@ async function showScenePopup(mesId, forceAsk = false) {
                 let pageRes = null;
                 for (let pageAttempt = 1; pageAttempt <= 4; pageAttempt++) {
                     pageRes = await drawScene(null, mesId, camMode, null, forcedCast, whisper, chunkComicOpts);
-                    if (pageRes?.url) break;
+                    if (pageRes?.url || NNB_STOP.epoch !== stopEpoch0) break;
                     if (pageAttempt < 4) {
                         const waitSec = 5 + pageAttempt * 2;
                         toastr.warning(`⏳ Ключ был занят на странице ${i + 1} из ${chunks.length} — ждём ${waitSec} сек. и повторяем эту страницу…`, '🔄 Очередь страниц манхвы', { timeOut: waitSec * 1000 });
@@ -14627,8 +14674,8 @@ async function finalizeTravel(pl, { skipDays = 0, companion = '' } = {}) {
 
     const names = storyNames();
     const when = moved
-        ? (moved === 1 ? ' Наступил следующий день.' : ` Прошло ${daysWord(moved)}.`) +
-          (st.direction.time && st.time.date ? ` Сейчас ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` : '')
+        ? (moved === 1 ? ' The next day has come.' : ` ${daysWord(moved)} passed.`) +
+          (st.direction.time && st.time.date ? ` Now it is ${weekday(st.time.date)}, ${formatDate(st.time.date)}.` : '')
         : '';
     const isSolo = !companion || !companion.trim() || /^в одиночку$/i.test(companion.trim());
     st.map.currentCompanion = isSolo ? 'solo' : companion.trim();
@@ -15316,7 +15363,7 @@ function renderBox(st) {
                 });
                 const playBtn = $('<i class="fa-solid fa-wand-magic-sparkles" title="Отыграть в следующей сцене"></i>').on('click', async () => {
                     const names = storyNames();
-                    const text = `${FF_MARKER} ${names.user} решает воплотить выбранный вариант (${c.topic || 'выбор'}): «${c.title}»${c.detail ? ` (${c.detail})` : ''}${c.desc ? ` — ${c.desc}` : ''}.${c.hook ? ` Сюжетный крючок: ${c.hook}.` : ''} Естественно вплети это в сцену. Пиши как обычный ответ.]`;
+                    const text = `${FF_MARKER} ${names.user} decides to act on the chosen option (${c.topic || 'выбор'}): «${c.title}»${c.detail ? ` (${c.detail})` : ''}${c.desc ? ` — ${c.desc}` : ''}.${c.hook ? ` Plot hook: ${c.hook}.` : ''} Weave it into the scene naturally. Write it as a normal reply.]`;
                     setSceneAdvancePrompt(text);
                     closeBook();
                     toastr.info(`Отыгрываем: «${escapeHtml(c.title)}»`, '✨ Варианты', { escapeHtml: false });
@@ -15871,9 +15918,13 @@ async function processReplyTags() {
     // 0. Модель иногда дописывает в конец поста «счётчик отношений»: [❤️ Кайлар: дружба 11/100 (+1 — …), романтика 0/100].
     // Шкалы ведёт сам блокнот, в тексте ролевой им не место — вырезаем строку (и оставшийся после неё разделитель).
     {
-        const relLineRe = /^[ \t]*\[?[^\n\[\]]{0,40}?(?:дружб|романтик|симпати|доверие|отношени)[^\n]*?\d{1,3}\s*\/\s*100[^\n]*$/gim;
-        if (relLineRe.test(msg.mes)) {
-            msg.mes = msg.mes.replace(relLineRe, '').replace(/\n[ \t]*(?:-{3,}|\*{3,}|_{3,}|—{2,})[ \t]*\s*$/, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+        const relLineRe = /^[ \t]*\[?[^\n\[\]]{0,40}?(?:дружб|романтик|симпати|доверие|отношени|friendship|romance|affection|affinity|trust|relationship)[^\n]*?\d{1,3}\s*\/\s*100[^\n]*$/gim;
+        // вырезаем только «табличку»: строка в скобках, или с двумя шкалами X/100, или вида «Имя: дружба …», и не длиннее 260 знаков — обычную прозу не трогаем
+        const isStatusLine = line => line.length <= 260 && (/^\s*\[/.test(line) || (line.match(/\d{1,3}\s*\/\s*100/g) || []).length >= 2 || /^\s*[^\s:]{1,30}(?:\s[^\s:]{1,30})?\s*:\s*(?:дружб|романтик|симпати|friendship|romance|affection|affinity)/i.test(line));
+        let cutAny = false;
+        const cleaned = msg.mes.replace(relLineRe, line => { if (isStatusLine(line)) { cutAny = true; return ''; } return line; });
+        if (cutAny) {
+            msg.mes = cleaned.replace(/\n[ \t]*(?:-{3,}|\*{3,}|_{3,}|—{2,})[ \t]*\s*$/, '').replace(/\n{3,}/g, '\n\n').trimEnd();
             modified = true;
             relLineCut = true;
         }
@@ -17284,7 +17335,7 @@ function buildStrictPersonalContextForDiary(n, st, useDate = '') {
         if (isHeroPhysicallyPresentInMessage(n, m)) {
             const who = m.is_user ? names.user : (m.name || names.char);
             const clean = stripTags(stripActionTags(String(m.mes || ''))).replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            personalPosts.push(`[Пост #${i + 1}, где ${n.name} присутствовал(а) лично] ${who}: ${clean.slice(0, 1600)}`);
+            personalPosts.push(`[Post #${i + 1}, where ${n.name} was personally present] ${who}: ${clean.slice(0, 1600)}`);
         }
     }
     const recent8 = allChat.slice(-8);
@@ -18837,6 +18888,14 @@ async function nnbCompressNotebook() {
         const t = String(r.desc || '').trim();
         if (t.length > 220) items.push({ kind: 'rel', ref: r, label: `СВЯЗЬ ${r.a} ${r.arrow || '↔'} ${r.b}`, text: t });
     }
+    for (const it of (st.intrigues || [])) {
+        const t = String(it.text || '').trim();
+        if (t.length > 300) items.push({ kind: 'intr', ref: it, label: `ТАЙНА T${it.id}`, text: t });
+    }
+    for (const a of (st.arcs || [])) {
+        const t = String(a.text || '').trim();
+        if (t.length > 250) items.push({ kind: 'arc', ref: a, label: `АРКА ${a.who}`, text: t });
+    }
     if (String(st.storySummary || '').trim().length > 2500) items.push({ kind: 'sum', ref: st, label: 'ЛЕТОПИСЬ', text: String(st.storySummary).trim() });
     if (!items.length) { toastr.info('Сжимать нечего: записи и так короткие (защищённые 🔒 карточки не трогаю)', 'Блокнот рассказчика'); return; }
     const before = items.reduce((a, x) => a + x.text.length, 0);
@@ -18866,6 +18925,8 @@ ${items.map((x, i) => `=== ${i + 1}. ${x.label} ===\n${x.text}`).join('\n\n')}`;
         if (x.kind === 'npc') { backup.npcs[x.ref.name] = x.text; x.ref.card = nt; }
         if (x.kind === 'rel') { backup.rels[x.ref.id] = x.text; x.ref.desc = nt; }
         if (x.kind === 'sum') { backup.sum = x.text; st.storySummary = nt; }
+        if (x.kind === 'intr') { (backup.intr = backup.intr || {})[x.ref.id] = x.text; x.ref.text = nt; }
+        if (x.kind === 'arc') { (backup.arcs = backup.arcs || {})[x.ref.id] = x.text; x.ref.text = nt; }
         after += nt.length;
         applied++;
     });
@@ -18886,6 +18947,8 @@ async function nnbUndoCompress() {
     for (const [name, text] of Object.entries(b.npcs || {})) { const n = all.find(x => x.name === name); if (n) n.card = text; }
     for (const [id, text] of Object.entries(b.rels || {})) { const r = (st.relationships || []).find(x => String(x.id) === String(id)); if (r) r.desc = text; }
     if (b.sum) st.storySummary = b.sum;
+    for (const [id, text] of Object.entries(b.intr || {})) { const it = (st.intrigues || []).find(x => String(x.id) === String(id)); if (it) it.text = text; }
+    for (const [id, text] of Object.entries(b.arcs || {})) { const a = (st.arcs || []).find(x => String(x.id) === String(id)); if (a) a.text = text; }
     delete st.compressBackup;
     await ctx().saveMetadata();
     updateInjection();
@@ -18918,6 +18981,7 @@ const NNB_MODULES = [
     { scope: 'global', key: 'comicCaptionsRu', label: '🇷🇺 Облачка комиксов на русском' },
     { scope: 'global', key: 'tokenSaverMode', label: '💎 Экономия токенов (умный фокус сцены)' },
     { scope: 'global', key: 'showToasts', label: '🔔 Всплывающие уведомления' },
+    { scope: 'global', key: 'mesButtons', label: '🖼 Кнопки блокнота под сообщениями' },
 ];
 function nnbRenderModules() {
     const box = $('#nnb_modules_list');
@@ -18928,13 +18992,14 @@ function nnbRenderModules() {
     for (const m of NNB_MODULES) {
         const holder = m.scope === 'chat' ? st?.direction : s;
         if (!holder) continue;
-        const on = m.scope === 'global' && ['autoThink', 'tokenSaverMode', 'autoAppearance'].includes(m.key) ? holder[m.key] !== false : !!holder[m.key];
+        const on = m.scope === 'global' && ['autoThink', 'tokenSaverMode', 'autoAppearance', 'mesButtons'].includes(m.key) ? holder[m.key] !== false : !!holder[m.key];
         const row = $(`<label class="checkbox_label" style="margin:2px 0; font-size:0.86em;"><input type="checkbox"> ${escapeHtml(m.label)}${m.scope === 'chat' ? ' <small style="opacity:.6">(этот чат)</small>' : ''}</label>`);
         row.find('input').prop('checked', on).on('change', async function () {
             holder[m.key] = $(this).prop('checked');
             if (m.scope === 'chat') await ctx().saveMetadata(); else saveSettings();
             updateInjection();
             renderPanel();
+            if (m.key === 'mesButtons' || m.key === 'enabled') { try { placeMesButtons(); } catch (e) { /* ignore */ } }
         });
         box.append(row);
     }
@@ -19035,11 +19100,18 @@ function renderPanel(forceFull = false) {
             try { await navigator.clipboard.writeText(JSON.stringify(data, null, 2)); toastr.success('JSON скопирован', '🎬 Режиссёр'); } catch (e) { await askText('Скопируй JSON', JSON.stringify(data, null, 2)); }
         }));
         inner.append(btns);
+        const sumBox = $('<details style="margin-top:6px;"><summary>📝 Сводка режиссёра (где сейчас история — учитывается при придумывании задумок)</summary><textarea class="text_pole" rows="4" style="width:100%; margin-top:4px; font-size:0.9em;"></textarea></details>');
+        sumBox.find('textarea').val(dir.summary || '').on('change', async function () { dir.summary = String($(this).val() || ''); await commit(); });
+        if (dir.summary) sumBox.attr('open', false);
+        inner.append(sumBox);
         if (dir.history.length) {
             const hDet = $(`<details style="margin-top:6px;"><summary>Сыгранные сцены (${dir.history.length})</summary><div></div></details>`);
             [...dir.history].reverse().slice(0, 40).forEach(h => {
                 const ln = dir.lines.find(l => l.id === h.line);
-                hDet.find('div').append($('<div class="nnb-note nnb-archived"><div class="nnb-text"></div></div>').find('.nnb-text').text(`${h.date ? h.date + ' · ' : ''}${ln ? ln.name : h.line} · ${h.genre || ''} ${h.intensity ? `🔥${h.intensity}` : ''} — ${h.title}`).end());
+                const hRow = $('<div class="nnb-note nnb-archived" style="display:flex; gap:6px; align-items:flex-start;"><div class="nnb-text" style="flex:1;"></div><i class="fa-solid fa-trash" style="cursor:pointer; opacity:.6" title="Убрать из истории"></i></div>');
+                hRow.find('.nnb-text').text(`${h.date ? h.date + ' · ' : ''}${ln ? ln.name : h.line} · ${h.genre || ''} ${h.intensity ? `🔥${h.intensity}` : ''} — ${h.title}${(h.characters || []).length ? ` (${h.characters.join(', ')})` : ''}`);
+                hRow.find('.fa-trash').on('click', async () => { dir.history = dir.history.filter(x => x !== h); await commit(); });
+                hDet.find('div').first().append(hRow);
             });
             inner.append(hDet);
         }
@@ -19072,7 +19144,16 @@ function renderPanel(forceFull = false) {
             sel.append('<option value="">— без линии —</option>');
             (st.director?.lines || []).forEach(l => sel.append($('<option>').val(l.id).text(l.name)));
             sel.val(n.line || '').on('change', async function () { n.line = String($(this).val() || ''); await commit(); });
-            row.find('.nnb-text').after(sel);
+            const gSel = $('<select class="text_pole" style="width:auto; margin:2px 0 0 4px; padding:1px 4px; font-size:0.85em;"></select>');
+            gSel.append('<option value="">жанр</option>');
+            NNB_DIR_GENRES.forEach(g => gSel.append($('<option>').val(g).text(g)));
+            gSel.val(n.genre || '').on('change', async function () { n.genre = String($(this).val() || ''); await commit(); });
+            const iSel = $('<select class="text_pole" style="width:auto; margin:2px 0 0 4px; padding:1px 4px; font-size:0.85em;" title="Накал"></select>');
+            [1, 2, 3, 4, 5].forEach(v => iSel.append($('<option>').val(String(v)).text(`🔥${v}`)));
+            iSel.val(String(Number(n.intensity) || 3)).on('change', async function () { n.intensity = Number($(this).val()) || 3; await commit(); });
+            const cIn = $('<input class="text_pole" placeholder="участники через запятую" style="width:100%; margin:3px 0 0 0; padding:1px 6px; font-size:0.85em;">');
+            cIn.val((n.chars || []).join(', ')).on('change', async function () { n.chars = String($(this).val() || '').split(',').map(x => x.trim()).filter(Boolean); await commit(); });
+            row.find('.nnb-text').after($('<div></div>').append(sel, gSel, iSel, cIn));
         }
         row.find('.nnb-text').text(n.text);
         row.find('.fa-dice').on('click', () => rerollNote(n.id));
@@ -19370,12 +19451,12 @@ function collectHeroHistoryDigest(n, st) {
     ].join('\n');
     const diaryHits = (n?.diary || []).slice(-4).map(d => `• Запись дневника (${d.date || ''}): ${String(d.text || '').slice(0, 350)}`).join('\n');
     const extraMeta = [
-        relHits ? `[Связи и отношения ${n.name}]:\n${relHits}` : '',
-        arcHits ? `[Развитие и арки ${n.name}]:\n${arcHits}` : '',
-        diaryHits ? `[Из прошлых записей дневника ${n.name}]:\n${diaryHits}` : '',
+        relHits ? `[Ties and relationships of ${n.name}]:\n${relHits}` : '',
+        arcHits ? `[Development and arcs of ${n.name}]:\n${arcHits}` : '',
+        diaryHits ? `[From past diary entries of ${n.name}]:\n${diaryHits}` : '',
     ].filter(Boolean).join('\n');
     const summaryBlock = [
-        st?.storySummary ? `[Из Саммари прошлых глав]:\n${String(st.storySummary).slice(0, 3000)}` : '',
+        st?.storySummary ? `[From the summary of past chapters]:\n${String(st.storySummary).slice(0, 3000)}` : '',
         extraMeta,
     ].filter(Boolean).join('\n\n');
 
@@ -21626,6 +21707,14 @@ function ensurePresetArrays() {
     if (s.imgPromptWriterNote && /выдай\s+только\s+строки\s+CAST\s+и\s+SCENE\s+без\s+рассуждений/i.test(String(s.imgPromptWriterNote))) {
         s.imgPromptWriterNote = DEFAULT_NAI_WRITER_PROMPT;
     }
+    // 2.3.0: нетронутые копии старых русских встроенных промптов → английские версии (свои правленые не трогаем)
+    const same = (a, b) => String(a || '').trim() === String(b || '').trim();
+    if (same(s.imgPromptWriterNote, NNB_OLD_RU_WRITER)) s.imgPromptWriterNote = DEFAULT_NAI_WRITER_PROMPT;
+    if (same(s.imgPromptWriterNote, NNB_OLD_RU_WRITER_SHORT)) s.imgPromptWriterNote = BUILTIN_NAI_WRITER_PRESETS[2].value;
+    (s.imgWriterPresets || []).forEach((pr, i) => {
+        if (same(pr?.value, NNB_OLD_RU_WRITER)) s.imgWriterPresets[i] = { ...pr, value: DEFAULT_NAI_WRITER_PROMPT };
+        if (same(pr?.value, NNB_OLD_RU_WRITER_SHORT)) s.imgWriterPresets[i] = { ...pr, value: BUILTIN_NAI_WRITER_PRESETS[2].value };
+    });
 }
 
 function renderNaiStyleAndWriterPresets() {
@@ -21910,6 +21999,9 @@ function placeMesButtons() {
         const c = ctx();
         const mes = $('#chat .mes');
         if (!on || !st) { $('.nnb-mes-btn, .nnb-inline-scene-bar').remove(); return; }
+        // модуль «Кнопки под сообщениями»: прячем кнопки, картинки под постами остаются
+        if (!$('#nnb_hide_mesbtn_css').length) $('head').append('<style id="nnb_hide_mesbtn_css">body.nnb-hide-mesbtn .nnb-mes-btn{display:none !important}</style>');
+        $('body').toggleClass('nnb-hide-mesbtn', settings().mesButtons === false);
         mes.each(function () {
             const mesEl = $(this);
             const mId = Number(mesEl.attr('mesid'));
@@ -22831,6 +22923,7 @@ function addMenuItems() {
         const item = (id, icon, text, fn) => $(`<div id="${id}" class="list-group-item flex-container flexGap5 interactable" tabindex="0"><div class="fa-solid ${icon} extensionsMenuExtensionButton"></div><span></span></div>`)
             .find('span').text(text).end().on('click', fn);
         menu.append(item('nnb_menu_book', 'fa-book-open', 'Блокнот рассказчика', () => openBook()));
+        menu.append(item('nnb_menu_stop', 'fa-stop', '⏹ Остановить все генерации блокнота', () => nnbStopAll()));
         menu.append(item('nnb_menu_stats', 'fa-chart-column', 'Статистика: боты, соо и токены', () => openUsageStatsModal()));
         menu.append(item('nnb_menu_turbo', 'fa-bolt', 'Ускорение Таверны (Турбо-режим чата)', () => openChatTurboSettingsPopup()));
         menu.append(item('nnb_menu_migrate', 'fa-suitcase-rolling', 'Переезд в новый чат (саммари + блокнот)', () => openChatMigrationModal()));
