@@ -1293,7 +1293,7 @@ const GENRE_HINTS = {
     var name = typeof nameOrNpc === 'string' ? nameOrNpc : (nameOrNpc.name || '');
     if (INAPPROPRIATE_BDAY_RE.test(name)) return true;
     var norm = normNameB(name);
-    var npc = (st && st.npcs) ? st.npcs.find(function (n) { return normNameB(n.name) === norm || (typeof matchesCharacterName === 'function' && matchesCharacterName(n.name, name)); }) : (typeof nameOrNpc === 'object' ? nameOrNpc : null);
+    var npc = (st && st.npcs) ? (typeof findHeroOrNpc === 'function' ? findHeroOrNpc(st, name) : st.npcs.find(function (n) { return normNameB(n.name) === norm || (typeof matchesCharacterName === 'function' && matchesCharacterName(n.name, name)); })) : (typeof nameOrNpc === 'object' ? nameOrNpc : null);
     if (npc) {
       if (INAPPROPRIATE_BDAY_RE.test(npc.card || '') || INAPPROPRIATE_BDAY_RE.test(npc.status || '')) return true;
     }
@@ -1406,6 +1406,8 @@ const defaults = {
     comicStyleId: 'comicbright',
     comicLinesMode: 'auto',
     comicFramesPerPage: 3,
+    comicMinPages: 1,
+    comicMaxPages: 6,
     comicCaptionsRu: false,
     autoThink: true,
     externalMemory: false,
@@ -1719,7 +1721,7 @@ function findHeroOrNpc(st, name) {
     const exactNpc = st.npcs?.find(n => normName(n.name) === normName(name));
     if (exactNpc) return exactNpc;
     if (mc && (normName(mc.name) === normName(name) || matchesCharacterName(mc.name, name))) return mc;
-    return findNpc(st, name) || null;
+    return findNpc(st, name) || (nnbIsMainCharName(st, name, mc) ? mc : null);
 }
 
 function findRel(st, a, b) {
@@ -2046,7 +2048,109 @@ function ensureMainCharCard(st) {
     st.mainCharCard.isMainChar = true;
     st.mainCharCard.name = charName;
     ensureNpcScales(st.mainCharCard, st);
+    nnbMergeMainCharDuplicates(st, st.mainCharCard);
     return st.mainCharCard;
+}
+
+// Имя совпадает с основным персонажем («Карточка чата»)? В групповом чате карточка общая («A, B») — только точное совпадение.
+// Латинская форма имени для сравнения «Бруно» ↔ «Bruno» (карточка Таверны на английском, ролевая на русском)
+const NNB_RU_LAT = { а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ж:'zh', з:'z', и:'i', й:'y', к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r', с:'s', т:'t', у:'u', ф:'f', х:'kh', ц:'ts', ч:'ch', ш:'sh', щ:'shch', ъ:'', ы:'y', ь:'', э:'e', ю:'yu', я:'ya' };
+function nnbLatinName(name) {
+    return [...stripParenRole(name)].map(ch => NNB_RU_LAT[ch] ?? ch).join('');
+}
+function nnbSameHeroName(a, b) {
+    if (normName(a) === normName(b) || stripParenRole(a) === stripParenRole(b) || (!!nnbLatinName(a) && nnbLatinName(a) === nnbLatinName(b))) return true;
+    // одинаковое число слов и каждое совпало по латинице («Кайлар» ↔ «Kylar»)
+    const cnt = x => stripParenRole(x).split(/[\s-]+/).filter(t => t.length >= 2).length;
+    return cnt(a) > 0 && cnt(a) === cnt(b) && nnbLatinTokensMatch(a, b);
+}
+function nnbIsMainCharName(st, name, mc = st?.mainCharCard) {
+    if (!mc || !name) return false;
+    if (nnbSameHeroName(mc.name, name)) return true;
+    const isGroup = (storyNames().chars || []).length > 1;
+    return !isGroup && (matchesCharacterName(mc.name, name) || nnbLatinTokensMatch(mc.name, name));
+}
+// «Бруно Буччеллати» ↔ «Bruno»: все слова короткого имени совпадают со словами длинного (по латинице, целиком — без префиксов,
+// чтобы «Брунгильда» не стала «Bruno»)
+function nnbLatinTokensMatch(a, b) {
+    const toks = x => stripParenRole(x).split(/[\s-]+/).filter(t => t.length >= 2)
+        .map(t => new Set(/[а-я]/.test(t) ? [nnbLatinName(t), ...transliterateRuNameVariants(t)] : [t]));
+    const A = toks(a), B = toks(b);
+    if (!A.length || !B.length) return false;
+    const [sh, lg] = A.length <= B.length ? [A, B] : [B, A];
+    return sh.every(set => lg.some(set2 => [...set].some(v => v.length >= 3 && set2.has(v))));
+}
+
+const NNB_MC_DEFAULT_CARD_RE = /^Основной персонаж (?:карточки чата|истории \([^)]*\))\.$/;
+const NNB_MC_KEEP_KEYS = new Set(['appearanceEn', 'avatar', 'bodyStyle']); // то, что пользователь задаёт руками в «Карточке чата» (канон Danbooru, аватар)
+// то, что тег [SPARK…] в каждом ответе пишет прямо в «Карточку чата» — там оно свежее, чем в двойнике
+const NNB_MC_LIVE_KEYS = new Set(['status', 'spark', 'dailyMood']);
+
+// Переносит всё из NPC-двойника в «Карточку чата». Двойник был «живой» копией: размышление писало в него
+// (findHeroOrNpc отдаёт NPC раньше карточки чата), поэтому его шкалы, статус, профиль и дневник новее.
+// Внешность/аватар — из карточки чата, если там заполнено (туда ставят канон-тег через «Найти канон Danbooru»).
+function nnbMergeNpcIntoMainCard(st, mc, dup) {
+    const backup = JSON.parse(JSON.stringify(dup));
+    const mcCard = String(mc.card || '').trim();
+    const dCard = String(dup.card || '').trim();
+    if (!mcCard || NNB_MC_DEFAULT_CARD_RE.test(mcCard)) mc.card = dCard || mcCard;
+    else if (dCard && !mcCard.toLowerCase().includes(dCard.toLowerCase().slice(0, 60))) mc.card = `${mcCard}\n${dCard}`;
+    const empty = v => v === undefined || v === null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && !v.length);
+    for (const [k, v] of Object.entries(dup)) {
+        if (['id', 'name', 'isMainChar', 'card', 'at'].includes(k) || k.startsWith('_')) continue;
+        if (empty(v)) continue;
+        if (k === 'favorite' || k === 'locked') { mc[k] = !!(mc[k] || v); continue; }
+        if (NNB_MC_LIVE_KEYS.has(k)) {
+            const mcHas = k === 'spark' ? Number(mc.spark) > 0 : k === 'dailyMood' ? (mc.dailyMood && mc.dailyMood !== 'off') : !empty(mc[k]);
+            if (!mcHas) mc[k] = v;
+            continue;
+        }
+        if (NNB_MC_KEEP_KEYS.has(k)) {
+            const keepMc = !empty(mc[k]) && !(k === 'appearanceEn' && !parseCanonFromAppearance(mc[k]) && parseCanonFromAppearance(v));
+            if (!keepMc) mc[k] = v;
+            continue;
+        }
+        if (Array.isArray(v)) {
+            const base = Array.isArray(mc[k]) ? mc[k] : [];
+            const seen = new Set(base.map(x => JSON.stringify(x)));
+            mc[k] = base.concat(v.filter(x => !seen.has(JSON.stringify(x))));
+            continue;
+        }
+        mc[k] = v;
+    }
+    st.npcs = st.npcs.filter(x => x !== dup);
+    // имя двойника отличалось («Бруно» при карточке «Bruno») — переводим на имя карточки его связи и память одежды
+    if (normName(dup.name) !== normName(mc.name)) {
+        for (const r of (st.relationships || [])) {
+            if (normName(r.a) === normName(dup.name)) r.a = mc.name;
+            if (normName(r.b) === normName(dup.name)) r.b = mc.name;
+        }
+        const ko = x => String(x || '').toLowerCase().replace(/ё/g, 'е');
+        if (st.heroOutfits && st.heroOutfits[ko(dup.name)] && !st.heroOutfits[ko(mc.name)]) {
+            st.heroOutfits[ko(mc.name)] = st.heroOutfits[ko(dup.name)];
+            delete st.heroOutfits[ko(dup.name)];
+        }
+    }
+    if (!Array.isArray(st.mergedDuplicates)) st.mergedDuplicates = [];
+    st.mergedDuplicates.push({ at: Date.now(), into: mc.name, npc: backup });
+    st.mergedDuplicates = st.mergedDuplicates.slice(-5);
+    console.log(`[npc_notebook] merged duplicate NPC «${dup.name}» into the chat card`);
+}
+
+function nnbMergeMainCharDuplicates(st, mc) {
+    if (!st || !mc || !Array.isArray(st.npcs) || !st.npcs.length) return 0;
+    // строго: «Кайлар (молодой)» — возможно другой человек, такое только кнопкой «Это основной персонаж»
+    const paren = x => (normName(x).match(/\([^)]*\)|\[[^\]]*\]/g) || []).join(' ');
+    const dups = st.npcs.filter(x => x && !x.isMainChar && paren(x.name) === paren(mc.name) && nnbSameHeroName(x.name, mc.name));
+    if (!dups.length) return 0;
+    dups.forEach(d => nnbMergeNpcIntoMainCard(st, mc, d));
+    try {
+        const c = ctx();
+        if (typeof c.saveMetadataDebounced === 'function') c.saveMetadataDebounced();
+        else c.saveMetadata?.();
+    } catch (e) { /* ignore */ }
+    try { toastr.info(`Двойник «${mc.name}» объединён с «Карточкой чата»: всё перенесено, лишняя карточка убрана.`, 'Блокнот рассказчика'); } catch (e) { /* ignore */ }
+    return dups.length;
 }
 
 // Для рассказчика — без цифр: голое «дружба 45/100» модели переписывают прямо в пост. Цифры нужны только размышлению блокнота.
@@ -2133,21 +2237,22 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
 function buildNpcSection(st) {
     if (!st?.direction?.npcs) return '';
     const charName = storyNames().char;
-    return `Characters, their current state in the scene, and their ties. Write all command content in Russian.
+    const relsOn = st.direction.rels !== false; // модуль «🔗 Связи между героями» выключен — не просим и не показываем связи
+    return `Characters, their current state in the scene${relsOn ? ', and their ties' : ''}. Write all command content in Russian.
 
 Current cards and state:
 ${formatNpcs(st.npcs, true, st)}
-
+${relsOn ? `
 Ties and relationships between characters:
 ${formatRelationships(st, true)}
-
+` : ''}
 Commands for them (one per line, together with the rest):
 NPC [Name]: a full, detailed description for NEW characters not yet in the list above (put ALL important details of looks, biography, personality, profession and facts the player gave into one line, no limit on sentences).
 NPCFACT [Name]: a new important fact for an EXISTING character (1–4 sentences on one line). Use it ONLY when the latest messages revealed a significant detail of biography, looks, past, personality or an important turn in relationships that is not in the card yet. This also covers what came out about them personally: what really hooks them or, on the contrary, cools them and pushes them away, what they fear, dream of, love and can't stand (write it as a living fact about the character, not as a list). The old description is NOT erased — the new fact is appended to its end (don't record petty everyday trivia from a single scene!).
 NPCSTATE [Name]: what the character is doing RIGHT NOW in the last 1–2 chat messages (always update it for ${charName} and the NPCs present in the scene! If the previous scene — intimacy, an argument, a trip — ended several posts ago, replace the old status with what the character is doing now).
-SCALE [Name]: дружба=number_or_shift | романтика=number_or_shift — update the scales if the relationship noticeably changed (for ordinary NPCs — only «дружба=...»).
+SCALE [Name]: дружба=number_or_shift | романтика=number_or_shift — update the scales if the relationship noticeably changed (for ordinary NPCs — only «дружба=...»).${relsOn ? `
 REL [Name1 ↔ Name2]: type | how they feel about each other (or REL [Name1 → Name2]).
-DROP #R1 — if the tie fell apart.`;
+DROP #R1 — if the tie fell apart.` : ''}`;
 }
 function formatArcs(st, forThink = false, includeEvolved = true) {
     const need = Math.max(1, Number(settings().minStimuli) || 2);
@@ -3339,7 +3444,7 @@ function parseAndApply(raw) {
                 const name = (m[1] || m[2] || '').trim();
                 const incomingCard = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
                 if (!name || !incomingCard) continue;
-                const n = findHeroOrNpc(st, name);
+                const n = findHeroOrNpc(st, name) || (nnbIsMainCharName(st, name, ensureMainCharCard(st)) ? st.mainCharCard : null);
                 if (!n) {
                     if (st.npcs.length < (Number(s.maxNpcs) || 20)) {
                         st.npcs.push({ id: st.nextNpcId++, name, card: incomingCard, status: '', locked: true, at: len });
@@ -3440,7 +3545,7 @@ function parseAndApply(raw) {
                     const parts = m[2].split('|').map(x => x.trim());
                     parts.forEach(p => {
                         const aem = p.match(/^(?:внешность_?en|теги_?внешности|appearance_?en|tags)\s*[=:]\s*(.+)$/i);
-                        if (aem) { if (!String(n.appearanceEn || '').trim()) n.appearanceEn = aem[1].trim().replace(/\]$/, ''); return; } // не затираем уже заданные теги внешности (канон Danbooru) — менять их только вручную или кнопкой «Найти канон»
+                        if (aem) { if (settings().autoAppearance !== false && !String(n.appearanceEn || '').trim()) n.appearanceEn = aem[1].trim().replace(/\]$/, ''); return; } // не затираем уже заданные теги внешности (канон Danbooru) — менять их только вручную или кнопкой «Найти канон»
                         const dm = p.match(/^(?:мечта|цель|стремление)\s*[=:]\s*(.+)$/i);
                         if (dm && (!n.dream || n._allowOverwriteProfile)) { n.dream = dm[1].trim().replace(/\]$/, ''); return; }
                         const fm = p.match(/^(?:страх|боится)\s*[=:]\s*(.+)$/i);
@@ -3491,7 +3596,7 @@ function parseAndApply(raw) {
 
         m = line.match(/^REL(?=[\s\[:：])\s*[:：]?\s*\[?([^\[:：—–\n]+?)\s*(↔|<->|->|→|—|–|\+)\s*([^\]:：—–\n]+?)\]?\s*[:：—–-]\s*(.+)$/i);
         if (m) {
-            if (npcsOn) {
+            if (npcsOn && st.direction.rels !== false) {
                 const a = m[1].trim();
                 const arrow = (m[2] === '->' || m[2] === '→') ? '→' : '↔';
                 const b = m[3].trim();
@@ -3524,7 +3629,7 @@ function parseAndApply(raw) {
 
         m = line.match(/^DROP\s*#?\s*R\s*(\d+)/i);
         if (m) {
-            if (st.relationships) {
+            if (st.relationships && st.direction.rels !== false) {
                 const id = Number(m[1]);
                 st.relationships = st.relationships.filter(r => r.id !== id);
             }
@@ -6191,7 +6296,8 @@ function stripRoleplayHeaderBracketsAndWeirdSpaces(rawStr) {
         .trim();
 }
 
-function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
+// forcePages: ровно столько страниц (для дорисовки главы, начатой при других рамках «от … до …»)
+function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540, forcePages = 0) {
     const rawWithSceneMarkers = String(rawPostText || '')
         .replace(/<[^>]+>/g, '')
         .replace(/\r\n/g, '\n')
@@ -6202,7 +6308,18 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
         .replace(/\n\s*\[(?:Location|Локация|Место)\s*:[^\]\n]{1,260}\]\s*/gi, '\n[[SCENE_BREAK]]\n')
         .trim();
     if (!rawWithSceneMarkers) return [];
-    const maxPages = 10;
+    // Сколько страниц: по содержанию, а не по числу абзацев. Раньше каждый абзац становился страницей (8–10 стр. по 3 кадра
+    // на пост, где почти ничего не происходит → одинаковые кадры). Кадр ≈ один «момент» ≈ 2–3 предложения (~430 знаков),
+    // страница из 3 кадров ≈ 1300 знаков; реплик на странице помещается ~4. Плюс рамки пользователя «от … до …».
+    let sCfg = {};
+    try { sCfg = settings() || {}; } catch (e) { /* настройки недоступны — берём умолчания */ }
+    const userMax = Math.max(1, Math.min(10, Math.round(Number(sCfg.comicMaxPages) || 6)));
+    const userMin = Math.max(1, Math.min(userMax, Math.round(Number(sCfg.comicMinPages) || 1)));
+    const plainForCount = stripRoleplayHeaderBracketsAndWeirdSpaces(rawWithSceneMarkers.replace(/\[\[SCENE_BREAK\]\]/g, '\n'));
+    const quoteCount = (plainForCount.match(/[«“"][^«»“”"\n]{3,}[»”"]/g) || []).length;
+    const sceneCount = rawWithSceneMarkers.split(/\[\[SCENE_BREAK\]\]/).filter(b => b.trim()).length;
+    const byContent = Math.max(Math.round(plainForCount.length / 1300), Math.ceil(quoteCount / 4), Math.min(sceneCount, 3), 1);
+    const maxPages = Number(forcePages) > 0 ? Math.min(10, Math.round(Number(forcePages))) : Math.max(userMin, Math.min(userMax, byContent));
 
     const splitParagraphIntoSentences = (para) => {
         const out = [];
@@ -6271,10 +6388,9 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
         pages.push(...scenePages);
     }
 
-    // Делим абзац пополам ТОЛЬКО если он совсем гигантский (> 960 симв. и >= 6 предложений) ИЛИ если во всём посте вообще всего 1–2 огромных абзаца (> 650 симв.),
-    // чтобы обычные посты на 5–8 абзацев давали 5–7 плотных страниц, а не раздувались каждый раз до 10 страниц!
-    const splitMinLen = pages.length <= 2 ? 620 : 960;
-    const splitMinSents = pages.length <= 2 ? 4 : 6;
+    // Не хватает страниц до нужного числа — делим самый длинный кусок пополам по предложениям (каждой половине минимум 2)
+    const splitMinLen = 0;
+    const splitMinSents = 4; // каждой половине — минимум 2 предложения
     while (pages.length < maxPages) {
         let bestIdx = -1;
         let bestLen = splitMinLen;
@@ -6310,19 +6426,34 @@ function splitPostIntoComicChunks(rawPostText, targetChunkChars = 540) {
         );
     }
 
-    while (pages.length > maxPages) {
-        let minPairIdx = 0;
-        let minPairLen = 999999;
-        for (let i = 0; i < pages.length - 1; i++) {
-            const sameSceneBonus = pages[i].sceneIdx === pages[i + 1].sceneIdx ? 0 : 5000;
-            const pairLen = pages[i].text.length + pages[i + 1].text.length + sameSceneBonus;
-            if (pairLen < minPairLen) {
-                minPairLen = pairLen;
-                minPairIdx = i;
+    if (pages.length > maxPages) {
+        // Ровно maxPages страниц примерно одинакового объёма (раньше склеивались две самые короткие соседние —
+        // выходили страницы 1000 и 2100 знаков). Разрыв между сценами ([Location: …]) внутри страницы — штраф.
+        const n = pages.length, k = maxPages;
+        const pre = [0];
+        pages.forEach(pg => pre.push(pre[pre.length - 1] + pg.text.length));
+        const cost = (a, b) => { // абзацы a..b-1 на одной странице
+            let pen = 0;
+            for (let i = a + 1; i < b; i++) if (pages[i].sceneIdx !== pages[i - 1].sceneIdx) pen += 5000;
+            return pre[b] - pre[a] + pen;
+        };
+        const best = Array.from({ length: k + 1 }, () => new Array(n + 1).fill(Infinity));
+        const cut = Array.from({ length: k + 1 }, () => new Array(n + 1).fill(0));
+        best[0][0] = 0;
+        for (let j = 1; j <= k; j++) {
+            for (let i = j; i <= n; i++) {
+                for (let m = j - 1; m < i; m++) {
+                    const v = Math.max(best[j - 1][m], cost(m, i));
+                    if (v < best[j][i]) { best[j][i] = v; cut[j][i] = m; }
+                }
             }
         }
-        const combinedTxt = `${pages[minPairIdx].text}\n\n${pages[minPairIdx + 1].text}`;
-        pages.splice(minPairIdx, 2, { text: combinedTxt, sents: splitParagraphIntoSentences(combinedTxt), sceneIdx: pages[minPairIdx].sceneIdx });
+        const bounds = [];
+        for (let j = k, i = n; j > 0; j--) { const m = cut[j][i]; bounds.unshift([m, i]); i = m; }
+        pages = bounds.map(([a, b]) => {
+            const txt = pages.slice(a, b).map(pg => pg.text).join('\n\n');
+            return { text: txt, sents: splitParagraphIntoSentences(txt), sceneIdx: pages[a].sceneIdx };
+        });
     }
 
     return pages.map((pg, idx) => {
@@ -8234,9 +8365,13 @@ function filterForcedCastForChunk(forcedCast, chunkText, fullTargetText) {
     return presentSoFar;
 }
 
+// Ракурс: одно определение на всех (раньше условие было скопировано в три места)
+function nnbCamIsPov(camMode) { return camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true; }
+function nnbCamIsPovHands(camMode) { return camMode === 'pov' || camMode === 'pov_hands' || camMode === true; }
+
 function scenePromptRequest(st, mesId, camMode = 'third', forcedCast = null, directorWhisper = '', comicOpts = null) {
-    const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
-    const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
+    const isPov = nnbCamIsPov(camMode);
+    const isPovHands = nnbCamIsPovHands(camMode);
     const names = storyNames();
     const chat = ctx().chat || [];
     let targetIdx = Number.isInteger(mesId) ? mesId : (chat.length - 1);
@@ -8387,7 +8522,7 @@ ${wantLines ? `After the main lines be sure to write out 2–3 short VERBATIM li
         '[OOC: A task for a Danbooru / NovelAI visual tagger. IGNORE any roleplay preset instructions about grotesque, comedy, mockery or dramatisation — translate the scene only into aesthetic, clean Danbooru visual tags, no caricature and no metaphors.',
         comicInstruction,
         cameraInstruction,
-        `IMPORTANT RULES ON LOCATION, CANON AND CHARACTERS IN THE FRAME:\n0) EXACT LOCATION FROM THE TARGET POST: describe only the room and surroundings where the characters are in the target post right now; don't drag the old location from previous frames!\n1) CANONICAL CHARACTERS: for characters from anime/manga/games always write the exact Danbooru tag \`surname name, title\` or \`name (title)\`, never just the name.\n2) SPLITTING 2–4+ CHARACTERS: with several characters of the same sex write only the total tag in SCENE (\`2boys\`, \`2girls\`, \`multiple girls\`) without single \`1boy\`/\`1girl\`, and describe each character separately in \`CHAR1:\`, \`CHAR2:\`, \`CHAR3:\`, \`CHAR4:\`.`,
+        `IMPORTANT RULES ON LOCATION, CANON AND CHARACTERS IN THE FRAME:\n0) EXACT LOCATION FROM THE TARGET POST: describe only the room and surroundings where the characters are in the target post right now; don't drag the old location from previous frames!\n1) CANONICAL CHARACTERS: for characters from anime/manga/games always write ${NNB_CANON_TAG_RULE}, or \`name (title)\` when Danbooru uses that form — never just the name.\n2) SPLITTING 2–4+ CHARACTERS: with several characters of the same sex write only the total tag in SCENE (\`2boys\`, \`2girls\`, \`multiple girls\`) without single \`1boy\`/\`1girl\`, and describe each character separately in \`CHAR1:\`, \`CHAR2:\`, \`CHAR3:\`, \`CHAR4:\`.`,
         (!writerAlreadyInSystem && hasCustomWriter)
             ? `[ADDITIONAL AUTHOR INSTRUCTION FOR THE PROMPT]:\n${adaptWriterNoteForTask(settings().imgPromptWriterNote.trim(), !!(comicOpts && comicOpts.enabled && comicOpts.stripMode))}`
             : (!hasCustomWriter && settings().imageSource === 'novelai' ? adaptWriterNoteForTask(DEFAULT_NAI_WRITER_PROMPT, !!(comicOpts && comicOpts.enabled && comicOpts.stripMode)) : ''),
@@ -8690,7 +8825,7 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId =
         let targetPostIdx = Number.isInteger(mesId) ? mesId : (chatArr.length - 1);
         while (targetPostIdx >= 0 && (!chatArr[targetPostIdx] || chatArr[targetPostIdx].is_system)) targetPostIdx--;
         const targetPostRaw = chatArr[targetPostIdx]?.mes || '';
-        const postChunks = splitPostIntoComicChunks(targetPostRaw);
+        let postChunks = splitPostIntoComicChunks(targetPostRaw);
 
         const framesAndLinesRow = $('<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:8px; margin-bottom:8px; font-size:0.84em;"></div>');
         const framesCol = $('<div><div style="opacity:0.85; margin-bottom:2px;">Фреймов на одной странице:</div></div>');
@@ -8724,18 +8859,49 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId =
         comicBox.append(ruRow);
 
         const chunkRow = $('<div style="margin-bottom:8px; font-size:0.84em;"></div>');
-        chunkRow.append(`<div style="font-weight:600; margin-bottom:3px;">📖 Режим страниц манхвы по посту <span style="font-weight:400; opacity:0.8;">(пост разбит на ${postChunks.length} эп. — все страницы выдаются сразу сверху вниз, как в манхве!)</span></div>`);
+        const chunkHead = $('<div style="font-weight:600; margin-bottom:3px;"></div>');
+        chunkRow.append(chunkHead);
+        // Сколько страниц в главе: блокнот считает по содержанию поста, а пользователь задаёт рамки «от … до …»
+        const pagesRow = $('<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:0 0 5px 0;"><span style="opacity:0.85;">Страниц в главе: от</span></div>');
+        const mkPagesSel = () => { const sel = $('<select class="text_pole" style="width:auto; min-width:58px; margin:0; padding:2px 6px; font-size:0.95em;"></select>'); for (let k = 1; k <= 10; k++) sel.append(`<option value="${k}">${k}</option>`); return sel; };
+        const minPagesSel = mkPagesSel();
+        const maxPagesSel = mkPagesSel();
+        minPagesSel.val(String(Math.max(1, Math.min(10, Number(settings().comicMinPages) || 1))));
+        maxPagesSel.val(String(Math.max(1, Math.min(10, Number(settings().comicMaxPages) || 6))));
+        pagesRow.append(minPagesSel, '<span style="opacity:0.85;">до</span>', maxPagesSel, '<span style="opacity:0.7; font-size:0.92em;">(внутри рамок — по количеству событий)</span>');
+        chunkRow.append(pagesRow);
         const chunkSel = $('<select class="text_pole" style="width:100%; margin:0; font-size:0.94em; padding:4px 8px;"></select>');
-        if (postChunks.length > 1) {
-            chunkSel.append($('<option value="all_chunks"></option>').text(`📚 Сразу ВСЯ ГЛАВА сверху вниз (${postChunks.length} стр. по кусочкам поста — рекомендуется!)`));
-        }
-        postChunks.forEach((chObj, cIdx) => {
-            chunkSel.append($('<option></option>').val(String(cIdx)).text(`📄 Только страница ${cIdx + 1} из ${postChunks.length} (кусочек #${cIdx + 1}: «${chObj.preview}»)`));
-        });
-        chunkSel.append('<option value="full_post">📝 Весь пост целиком сжать на 1 страницу</option>');
-        chunkSel.val(postChunks.length > 1 ? 'all_chunks' : '0');
         chunkRow.append(chunkSel);
         comicBox.append(chunkRow);
+        let stripComicBtn = null;
+        const refreshChunkUi = () => {
+            const prev = String(chunkSel.val() || '');
+            chunkHead.html(`📖 Режим страниц манхвы по посту <span style="font-weight:400; opacity:0.8;">(пост разбит на ${postChunks.length} эп. — все страницы выдаются сразу сверху вниз, как в манхве!)</span>`);
+            chunkSel.empty();
+            if (postChunks.length > 1) {
+                chunkSel.append($('<option value="all_chunks"></option>').text(`📚 Сразу ВСЯ ГЛАВА сверху вниз (${postChunks.length} стр. по кусочкам поста — рекомендуется!)`));
+            }
+            postChunks.forEach((chObj, cIdx) => {
+                chunkSel.append($('<option></option>').val(String(cIdx)).text(`📄 Только страница ${cIdx + 1} из ${postChunks.length} (кусочек #${cIdx + 1}: «${chObj.preview}»)`));
+            });
+            chunkSel.append('<option value="full_post">📝 Весь пост целиком сжать на 1 страницу</option>');
+            chunkSel.val(prev === 'full_post' ? 'full_post' : (postChunks.length > 1 ? 'all_chunks' : '0'));
+            if (stripComicBtn) stripComicBtn.find('.nnb-strip-label').text(postChunks.length > 1 ? `📚 Нарисовать манхву по посту сверху вниз (${postChunks.length} стр.)` : '🎞 Нарисовать страницу манхвы по посту');
+        };
+        const onPagesChange = (changed) => {
+            let mn = Number(minPagesSel.val()) || 1;
+            let mx = Number(maxPagesSel.val()) || 6;
+            if (mn > mx) { if (changed === 'min') mx = mn; else mn = mx; }
+            minPagesSel.val(String(mn)); maxPagesSel.val(String(mx));
+            settings().comicMinPages = mn;
+            settings().comicMaxPages = mx;
+            saveSettings();
+            postChunks = splitPostIntoComicChunks(targetPostRaw);
+            refreshChunkUi();
+        };
+        minPagesSel.on('change', () => onPagesChange('min'));
+        maxPagesSel.on('change', () => onPagesChange('max'));
+        refreshChunkUi();
 
         const buildComicPayload = (overrideChunkVal = null) => {
             const cVal = overrideChunkVal !== null ? overrideChunkVal : String(chunkSel.val() || '0');
@@ -8771,33 +8937,27 @@ async function askSceneCameraMode(existingMeta = null, forceAsk = false, mesId =
                     chunkIndex: chosenChunk ? chosenChunk.index : 0,
                     chunkTotal: chosenChunk ? chosenChunk.total : 1,
                     chunkText: chosenChunk ? chosenChunk.text : '',
+                    ...(chosenChunk ? {} : { fullPost: true }),
                 },
             };
         };
 
         const comicBtns = $('<div style="display:flex; flex-direction:column; gap:6px;"></div>');
-        const stripComicBtn = $(`
+        stripComicBtn = $(`
             <div class="menu_button nnb-btn-primary" style="margin:0; padding:9px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:700;" title="Рисует все страницы манхвы по кусочкам поста и сразу выкладывает их сверху вниз под сообщением!">
-                <i class="fa-solid fa-book-open"></i> ${postChunks.length > 1 ? `📚 Нарисовать манхву по посту сверху вниз (${postChunks.length} стр.)` : '🎞 Нарисовать страницу манхвы по посту'}
+                <i class="fa-solid fa-book-open"></i> <span class="nnb-strip-label">${postChunks.length > 1 ? `📚 Нарисовать манхву по посту сверху вниз (${postChunks.length} стр.)` : '🎞 Нарисовать страницу манхвы по посту'}</span>
             </div>
         `).on('click', () => finish(buildComicPayload()));
         comicBtns.append(stripComicBtn);
 
+        // Раньше здесь был «одиночный кадр»: модель просили нарисовать весь лист с панелями ОДНОЙ картинкой — NovelAI
+        // путал панели и героев. Теперь кнопка = «Весь пост целиком на 1 страницу» + «Нарисовать манхву»:
+        // те же отдельные кадры, реплики, каст и склейка, что у главы, только одна страница на весь пост.
         const singleComicBtn = $(`
-            <div class="menu_button" style="margin:0; padding:7px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:600; font-size:0.92em;" title="Рисует 1 одиночный кадр в выбранном стиле манги/манхвы/комикса (без деления листа на панели)">
-                <i class="fa-solid fa-image"></i> 🖼 Нарисовать 1 одиночный кадр в этом стиле (без панелей)
+            <div class="menu_button" style="margin:0; padding:7px 12px; display:flex; align-items:center; justify-content:center; gap:8px; font-weight:600; font-size:0.92em;" title="Весь пост сжимается в одну страницу манхвы: отдельные кадры с репликами, как у главы, но одна страница">
+                <i class="fa-solid fa-file-image"></i> 📝 Весь пост — одна страница манхвы
             </div>
-        `).on('click', () => finish({
-            mode: 'third',
-            forcedCast: getForcedCast(),
-            whisper: getWhisper(),
-            comicOpts: {
-                enabled: true,
-                stripMode: false,
-                styleId: String(styleSel.val() || 'comicbright'),
-                linesMode: String(linesSel.val() || 'auto'),
-            },
-        }));
+        `).on('click', () => finish(buildComicPayload('full_post')));
 
         comicBtns.append(singleComicBtn);
         comicBox.append(comicBtns);
@@ -8942,6 +9102,8 @@ function nnbDropRemovedItemTags(text) {
     return String(text || '').split(/\s*,\s*/).filter(t => t && !/\b(removed|taken off|took off|no longer worn)\b/i.test(t)).join(', ');
 }
 
+// Правило канон-тега для всех запросов: японский порядок только у японских имён; у западных — как на Danbooru (bruno bucciarati, не buccellati bruno)
+const NNB_CANON_TAG_RULE = "the character's exact Danbooru tag, lower case, spelled and ordered exactly as on Danbooru: Japanese names surname first (`gojou satoru`, `zen'in naoya`, `fushiguro toji`); non-Japanese names (Italian, English, etc.) first name first, as Danbooru writes them (`bruno bucciarati`, `giorno giovanna`, `dio brando`, `levi (shingeki no kyojin)`); Danbooru's spelling can differ from the official translation (`bucciarati`, not `buccellati`); then the title tag as on Danbooru (`jujutsu kaisen`, `jojo no kimyou na bouken`)";
 function buildHeroAppearancePrompt(n) {
     const cObj = ctx();
     const rawDesc = n.isMainChar && cObj.characterId !== undefined && cObj.characters?.[cObj.characterId]?.description
@@ -8950,7 +9112,7 @@ function buildHeroAppearancePrompt(n) {
     return `[OOC: Determine the exact appearance tags of the character «${n.name}» for the NovelAI anime-art generator (Danbooru base).
 About the character: ${n.card || ''} ${rawDesc}
 IMPORTANT RULES:
-1) If «${n.name}» is a canonical character from a known anime, manga or game (e.g. Naoya Zenin from Jujutsu Kaisen, Gojo Satoru, Fushiguro Toji, Geto Suguru, etc.), ALWAYS put FIRST the two exact Danbooru tags in the format \`surname_name_in_japanese_order, title_in_english\` in lower case (e.g. \`zen'in naoya, jujutsu kaisen\` or \`fushiguro toji, jujutsu kaisen\`). NovelAI does not understand a bare first name without surname and title!
+1) If «${n.name}» is a canonical character from a known anime, manga or game (e.g. Naoya Zenin from Jujutsu Kaisen, Gojo Satoru, Fushiguro Toji, Geto Suguru, etc.), ALWAYS put FIRST ${NNB_CANON_TAG_RULE}. NovelAI does not understand a bare first name without surname and title!
 2) Right after the canonical tag (or from the very start if the character is original) write 8–12 short exact Danbooru tags of their physical appearance, comma-separated: hair colour and length, hairstyle, eye colour and shape (e.g. slit pupils, upturned eyes), piercings/scars/ears/tail, build.
 Output ONLY one line of English tags, comma-separated, no explanations.]`;
 }
@@ -9496,8 +9658,9 @@ function enforceNpcCanonAppearance(rawPromptStr, st) {
     return out;
 }
 
-const NNB_CANON_SERIES_RE = /^(?:jujutsu kaisen|chainsaw man|naruto|bleach|one piece|genshin impact|honkai(?::| )star rail|demon slayer|kimetsu no yaiba|attack on titan|shingeki no kyojin|jojo(?:'s bizarre adventure)?|boku no hero academia|my hero academia|bungou stray dogs|tokyo revengers|blue lock|haikyuu!?|devil may cry|resident evil|final fantasy(?: [ivx0-9]+)?|persona(?: [0-9]+)?|baldur'?s gate(?: [0-9]+)?|arcane|hazbin hotel|helluva boss|overwatch|league of legends|valorant|arknights|wuthering waves|zenless zone zero|blue archive|touhou|evangelion|berserk|vagabond|vinland saga|hunter x hunter|fullmetal alchemist|death note|code geass|spy x family|dandadan|kagurabachi|sakamoto days|solo leveling|omniscient reader(?:'s viewpoint)?|heaven official'?s blessing|mo dao zu shi|undertale|deltarune|elden ring|dark souls|the witcher|cyberpunk(?: 2077)?|metal gear(?: solid)?|silent hill|yakuza|dragon ball(?: z| super)?|sailor moon|inuyasha|gintama|mob psycho 100|one punch man|sousou no frieren|frieren|dungeon meshi|kusuriya no hitorigoto|oshi no ko|bocchi the rock!?|steins;gate|re:zero|mushoku tensei|overlord|konosuba|sword art online|tokyo ghoul|kuroshitsuji|black butler|vanitas no carte|pandora hearts|d\.gray-man|soul eater|fire force|fairy tail|black clover|dr\. stone|kuroko no basuke|yuri!!!? on ice|banana fish|link click|alien stage|love and deepspace|twisted wonderland|ensemble stars!?|project sekai|vocaloid|hololive|nijisanji|fate\/[a-z0-9 ]+)$/i;
+const NNB_CANON_SERIES_RE = /^(?:jujutsu kaisen|chainsaw man|naruto|bleach|one piece|genshin impact|honkai(?::| )star rail|demon slayer|kimetsu no yaiba|attack on titan|shingeki no kyojin|jojo(?:'s bizarre adventure)?|jojo no kimyou na bouken(?: [a-z ]+)?|vento aureo|ougon no kaze|stardust crusaders|diamond wa kudakenai|stone ocean|steel ball run|jojolion|phantom blood|battle tendency|boku no hero academia|my hero academia|bungou stray dogs|tokyo revengers|blue lock|haikyuu!?|devil may cry|resident evil|final fantasy(?: [ivx0-9]+)?|persona(?: [0-9]+)?|baldur'?s gate(?: [0-9]+)?|arcane|hazbin hotel|helluva boss|overwatch|league of legends|valorant|arknights|wuthering waves|zenless zone zero|blue archive|touhou|evangelion|berserk|vagabond|vinland saga|hunter x hunter|fullmetal alchemist|death note|code geass|spy x family|dandadan|kagurabachi|sakamoto days|solo leveling|omniscient reader(?:'s viewpoint)?|heaven official'?s blessing|mo dao zu shi|undertale|deltarune|elden ring|dark souls|the witcher|cyberpunk(?: 2077)?|metal gear(?: solid)?|silent hill|yakuza|dragon ball(?: z| super)?|sailor moon|inuyasha|gintama|mob psycho 100|one punch man|sousou no frieren|frieren|dungeon meshi|kusuriya no hitorigoto|oshi no ko|bocchi the rock!?|steins;gate|re:zero|mushoku tensei|overlord|konosuba|sword art online|tokyo ghoul|kuroshitsuji|black butler|vanitas no carte|pandora hearts|d\.gray-man|soul eater|fire force|fairy tail|black clover|dr\. stone|kuroko no basuke|yuri!!!? on ice|banana fish|link click|alien stage|love and deepspace|twisted wonderland|ensemble stars!?|project sekai|vocaloid|hololive|nijisanji|fate\/[a-z0-9 ]+)$/i;
 const NNB_NON_CANON_NAME_RE = /^(?:1boy|1girl|2boys|2girls|solo|male|female|adult|man|woman|boy|girl|medium shot|cowboy shot|close-up|upper body|full body|portrait|indoors|outdoors|character not looking at viewer|dynamic angle|depth of field|looking at viewer)$/i;
+const NNB_APPEARANCE_WORD_RE = /\b(?:hair|eyes?|eyed|pupils|skin|tall|short|lean|muscular|slim|slender|petite|build|body|ears?|tail|horns?|wings?|man|woman|men|women|boy|girl|male|female|mature|young|old|adult|scars?|piercings?|tattoos?|glasses|beard|stubble|freckles|shoulders|chest|legs|bangs|ponytail|braids?|cut|suit|shirt|dress|jacket|coat|uniform|smile|lips|face|expression|looking|shot|focus|portrait|lighting|background|style|art|quality|masterpiece|original|oc|jawline|jaw|cheekbones?|cheeks?|nose|chin|neck|brows?|eyebrows|lashes|eyelashes|teeth|fangs?|nails|makeup|features|complexion|physique|figure|height|sharp|high|soft|thick|thin|long|wide|narrow|small|large|big|dark|light|pale|bright|deep|strong|broad|full|round|angular|defined|prominent|messy|wavy|curly|straight|black|white|red|blue|green|brown|blonde?|silver|grey|gray|pink|purple|golden)\b/i;
 const NNB_NON_SERIES_PAREN_RE = /^(?:original|cosplay|outfit|style|young|adult|old|male|female|top|bottom|left|right|character|oc)$/i;
 
 // Канон-тег из карточки: «toji (jujutsu kaisen)» или «fushiguro touji, jujutsu kaisen»; ведущие 1boy/male и т.п. пропускаем
@@ -9512,6 +9675,11 @@ function parseCanonFromAppearance(appEn) {
     const pm = toks[0].match(/^([^()]{2,60}?)\s*\(\s*([^)]{2,60}?)\s*\)$/);
     if (pm && !NNB_NON_CANON_NAME_RE.test(pm[1].trim()) && !NNB_NON_SERIES_PAREN_RE.test(pm[2].trim())) return { name: pm[1].trim(), series: pm[2].trim(), tag: `${pm[1].trim()} (${pm[2].trim()})`, paren: true, gender };
     if (toks.length >= 2 && NNB_CANON_SERIES_RE.test(toks[1]) && !NNB_NON_CANON_NAME_RE.test(toks[0])) return { name: toks[0], series: toks[1], tag: `${toks[0]}, ${toks[1]}`, paren: false, gender };
+    // Тайтла нет в списке: «имя фамилия, название из 2+ слов», где ни то ни другое не похоже на тег внешности
+    if (toks.length >= 3 && /^[a-z][a-z'.-]*(?: [a-z][a-z'.-]*){1,2}$/i.test(toks[0]) && /^[a-z0-9][a-z0-9'!:;.&\/ -]*(?: [a-z0-9'!:;.&\/-]+){1,5}$/i.test(toks[1])
+        && !NNB_APPEARANCE_WORD_RE.test(toks[0]) && !NNB_APPEARANCE_WORD_RE.test(toks[1]) && !NNB_NON_CANON_NAME_RE.test(toks[0])) {
+        return { name: toks[0], series: toks[1], tag: `${toks[0]}, ${toks[1]}`, paren: false, gender };
+    }
     return null;
 }
 function nnbGenderFromNameGrammar(name, text) {
@@ -10322,8 +10490,8 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
     const say = t => status?.text(t);
     try {
         if (reuseMeta?.camMode) camMode = reuseMeta.camMode;
-        const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
-        const isPovHands = camMode === 'pov' || camMode === 'pov_hands' || camMode === true;
+        const isPov = nnbCamIsPov(camMode);
+        const isPovHands = nnbCamIsPovHands(camMode);
         let desc = '';
         let extraNeg = reuseMeta?.extraNeg || '';
         let cast = [];
@@ -11819,7 +11987,7 @@ async function showScenePopup(mesId, forceAsk = false) {
         }
         return;
     }
-    const isPov = camMode === 'pov' || camMode === 'pov_hands' || camMode === 'pov_clean' || camMode === true;
+    const isPov = nnbCamIsPov(camMode);
     const chunkBadge = (comicOpts?.stripMode && Number(comicOpts?.chunkTotal) > 1)
         ? ` [стр. ${(Number(comicOpts.chunkIndex) || 0) + 1}/${Number(comicOpts.chunkTotal)}]`
         : '';
@@ -11843,6 +12011,18 @@ async function showScenePopup(mesId, forceAsk = false) {
     }
 }
 
+// На сколько страниц была поделена уже начатая глава этого поста (0 — глава не начата)
+function nnbDrawnChapterTotal(sceneMeta) {
+    if (!sceneMeta) return 0;
+    const hist = Array.isArray(sceneMeta.history) && sceneMeta.history.length ? sceneMeta.history : (sceneMeta.url ? [sceneMeta.url] : []);
+    for (const u of hist) {
+        const o = sceneMeta.pageMetaMap?.[u]?.comicOpts || (u === sceneMeta.url ? sceneMeta.comicOpts : null);
+        if (o?.stripMode && !o.fullPost && Number(o.chunkTotal) > 1) return Number(o.chunkTotal);
+    }
+    const o = sceneMeta.comicOpts;
+    return (o?.stripMode && !o.fullPost && Number(o.chunkTotal) > 1) ? Number(o.chunkTotal) : 0;
+}
+
 function findNextUndrawnChunkIndex(sceneMeta, totalChunks) {
     if (!sceneMeta || totalChunks <= 1) return -1;
     const drawnIndices = new Set();
@@ -11850,11 +12030,12 @@ function findNextUndrawnChunkIndex(sceneMeta, totalChunks) {
     for (const u of hist) {
         const pm = sceneMeta.pageMetaMap?.[u];
         const cOpts = pm?.comicOpts || (u === sceneMeta.url ? sceneMeta.comicOpts : null);
-        if (cOpts?.stripMode && Number.isInteger(Number(cOpts.chunkIndex))) {
+        // страница «весь пост целиком» — не кусочек главы, номер кусочка у неё условный
+        if (cOpts?.stripMode && !cOpts.fullPost && Number.isInteger(Number(cOpts.chunkIndex))) {
             drawnIndices.add(Number(cOpts.chunkIndex));
         }
     }
-    if (!drawnIndices.size && sceneMeta.comicOpts?.stripMode) {
+    if (!drawnIndices.size && sceneMeta.comicOpts?.stripMode && !sceneMeta.comicOpts.fullPost) {
         drawnIndices.add(Number(sceneMeta.comicOpts.chunkIndex) || 0);
     }
     for (let i = 0; i < totalChunks; i++) {
@@ -11872,7 +12053,7 @@ async function drawNextComicChunkPage(mesId, baseSceneMeta) {
     }
     const msg = c.chat?.[targetIdx];
     if (!msg?.mes) return;
-    const chunks = splitPostIntoComicChunks(msg.mes);
+    const chunks = splitPostIntoComicChunks(msg.mes, 540, nnbDrawnChapterTotal(c.chat?.[targetIdx]?.extra?.nnbScene || baseSceneMeta));
     if (chunks.length <= 1) {
         return toastr.info('Этот пост короткий и целиком помещается на одну страницу!', '📖 Манхва');
     }
@@ -12093,14 +12274,23 @@ async function rerollSpecificManhwaPageInPlace(mesId, sceneMeta, targetUrl, rege
         if (regeneratePromptFromChunk) {
             const c = ctx();
             const msg = c.chat?.[mesId];
-            const chunks = splitPostIntoComicChunks(msg?.mes || '');
+            const chunks = splitPostIntoComicChunks(msg?.mes || '', 540, nnbDrawnChapterTotal(sceneMeta));
+            // Страница «весь пост целиком» (или старый одиночный лист без раскадровки) — перерисовываем тоже весь пост,
+            // а не первый кусочек. Старый режим «панели одной картинкой» больше не используем: переводим в страницу из кадров.
+            const wholePost = !!(cOpts && (cOpts.fullPost || !cOpts.stripMode || (Number(cOpts.chunkTotal) === 1 && !String(cOpts.chunkText || '').trim())));
             const chIdx = Number.isInteger(Number(cOpts?.chunkIndex)) ? Number(cOpts.chunkIndex) : Math.max(0, pageNum - 1);
-            const chObj = chunks[chIdx] || chunks[0] || null;
+            // кусочек берём тот же, что был нарисован (его текст сохранён на странице): если с тех пор поменяли
+            // «Страниц в главе: от … до …», пересчитанное деление уже другое и по номеру достался бы чужой кусок
+            const savedChunkTxt = String(cOpts?.chunkText || '').trim();
+            const chObj = wholePost ? null : (savedChunkTxt ? { index: chIdx, text: cOpts.chunkText } : (chunks[chIdx] || chunks[0] || null));
             const freshOpts = {
                 ...(cOpts || { enabled: true, stripMode: true, framesPerPage: 3, styleId: settings().comicStyleId || 'comicbright', linesMode: 'auto' }),
-                chunkIndex: chObj ? chObj.index : chIdx,
-                chunkTotal: chunks.length || 1,
+                stripMode: true,
+                framesPerPage: Number(cOpts?.framesPerPage) === 4 ? 4 : (Number(cOpts?.framesPerPage) === 3 ? 3 : (Number(settings().comicFramesPerPage) === 4 ? 4 : 3)),
+                chunkIndex: chObj ? chObj.index : (wholePost ? 0 : chIdx),
+                chunkTotal: wholePost ? 1 : (savedChunkTxt && Number(cOpts?.chunkTotal) > 0 ? Number(cOpts.chunkTotal) : (chunks.length || 1)),
                 chunkText: chObj ? chObj.text : '',
+                ...(wholePost ? { fullPost: true } : {}),
             };
             // старые «канон главы» и паспорт сохранены вместе со страницей — если та страница была ошибочной, они повторяют ошибку
             delete freshOpts.chapterCanonByGender;
@@ -16310,7 +16500,7 @@ function applyWorldCreationResult(st, cfg, raw) {
         if (m) {
             const name = (m[1] || m[2] || '').trim();
             const desc = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
-            if (name && desc && !findNpc(st, name)) {
+            if (name && desc && !findNpc(st, name) && !nnbIsMainCharName(st, name, ensureMainCharCard(st))) {
                 st.npcs.push({ id: st.nextNpcId++, name, card: desc, status: '', locked: true, at: len });
                 counts.npcs++;
             }
@@ -19531,7 +19721,7 @@ IMPORTANT — CALIBRATION OF «тело=0..100» (the body's state RIGHT NOW in 
 Reply with lines by the template, no explanations (each command strictly on one line):
 ${cardInstruction}
 NPCSTATE [${n.name}]: where they are and what they are doing RIGHT NOW in the last message (1 short phrase)
-PROFILE [${n.name}]: внешность_en=exact English appearance tags for Danbooru/NovelAI (if the character is from a known anime/game, start with the canonical tag surname name, title in English!) | мечта=their global life goal or aspiration (don't fixate on one holiday spot) | страх=a deep fear or vulnerability of character | любит=favourite things, style, food, habits in general | не_любит=what they dislike in life and people in general
+PROFILE [${n.name}]: внешность_en=exact English appearance tags for Danbooru/NovelAI (if the character is from a known anime/game, start with ${NNB_CANON_TAG_RULE}!) | мечта=their global life goal or aspiration (don't fixate on one holiday spot) | страх=a deep fear or vulnerability of character | любит=favourite things, style, food, habits in general | не_любит=what they dislike in life and people in general
 ${isRom ? `KEYS [${n.name}]: цепляет=general behaviour and caresses that hook them | охлаждает=general turn-offs of character | заноза=what they usually get stubborn or grumble about BY CHARACTER (no one-off trivia from the last post!) | ревность=what makes them jealous BY CHARACTER (no specific chats/names from the last post!) | свет=доверие/искра/инициатива/слоубёрн | тело=тепло/контроль/искра/импульс
 SCALE [${n.name}]: дружба=exact_number_from_-100_to_100 | романтика=exact_number_from_0_to_100 | тело=exact_number_from_0_to_100_by_the_last_post` : `SCALE [${n.name}]: дружба=exact_number_from_-100_to_100`}]`;
             const raw = await quietGenerate(prompt);
@@ -19628,11 +19818,24 @@ async function openNpcCardPopup(n) {
                 const newName = await askText('Имя персонажа', n.name);
                 if (newName && newName.trim()) {
                     n.name = newName.trim();
+                    const mc = ensureMainCharCard(store()); // одноимённый с основным персонажем — сольётся сам
                     await commit();
+                    if (mc && !store().npcs.includes(n)) { closePopupOf(el); return openNpcCardPopup(mc); }
                     renderModalContent();
                 }
             });
-            headBtns.append(editNameBtn);
+            const mergeMcBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.85;" title="Если это тот же человек, что и основной персонаж чата (двойник под другим именем или в другой записи) — перенести всё в «Карточку чата» и убрать эту карточку"><i class="fa-solid fa-code-merge"></i> Это основной персонаж</span>').on('click', async () => {
+                const stNow = store();
+                const mc = ensureMainCharCard(stNow);
+                if (!mc) return;
+                if (!confirm(`Перенести всё из «${n.name}» в «Карточку чата» (${mc.name}) и убрать эту карточку?\n\nШкалы, статус, профиль и дневник возьмутся отсюда; канон-теги и аватар — из карточки чата, если они там есть. Копия этой карточки сохранится в блокноте.`)) return;
+                nnbMergeNpcIntoMainCard(stNow, mc, n);
+                await commit();
+                toastr.success(`«${n.name}» объединён с «Карточкой чата».`, 'Блокнот рассказчика');
+                closePopupOf(el);
+                openNpcCardPopup(mc);
+            });
+            headBtns.append(editNameBtn, mergeMcBtn);
         }
         const editStatusBtn = $('<span style="cursor:pointer; font-size:0.84em; opacity:0.85;"><i class="fa-solid fa-comment-dots"></i> Сменить статус</span>').on('click', async () => {
             const stText = await askText(`Что сейчас происходит с ${n.name}? (Оставь пустым, чтобы сбросить старый статус)`, n.status || '');
@@ -20081,7 +20284,7 @@ async function openNpcUniverseModal(st) {
         } else {
             const rosList = $('<div style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; margin-bottom:8px;"></div>');
             roster.forEach((rNpc, rIdx) => {
-                const alreadyInChat = !!findNpc(st, rNpc.name);
+                const alreadyInChat = !!findHeroOrNpc(st, rNpc.name);
                 const row = $('<div class="nnb-note" style="margin:0; padding:6px 10px; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer;"></div>');
                 const left = $('<div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;"></div>');
                 const cb = $('<input type="checkbox" style="width:16px; height:16px; cursor:pointer;">');
@@ -20115,7 +20318,7 @@ async function openNpcUniverseModal(st) {
                     const src = roster[rIdx];
                     if (!src) return;
                     const mcCard = ensureMainCharCard(st);
-                    let target = (mcCard && matchesCharacterName(mcCard.name, src.name)) ? mcCard : findNpc(st, src.name);
+                    let target = (mcCard && nnbIsMainCharName(st, src.name, mcCard)) ? mcCard : findNpc(st, src.name);
                     if (!target) {
                         target = { id: st.nextNpcId++, name: src.name, locked: true, at: ctx().chat.length };
                         st.npcs.push(target);
@@ -20787,6 +20990,10 @@ function renderNpcs(st) {
         const name = await askText('Имя NPC');
         if (!name || !name.trim()) return;
         if (findNpc(st, name)) return toastr.warning('Такой NPC уже есть', 'Блокнот рассказчика');
+        if (nnbIsMainCharName(st, name, ensureMainCharCard(st))) {
+            toastr.info(`«${name.trim()}» — основной персонаж, у него уже есть «Карточка чата». Открываю её.`, 'Блокнот рассказчика');
+            return openNpcCardPopup(st.mainCharCard);
+        }
         const card = await askText(`Кто такой ${name.trim()}? Внешность, характер, отношение к твоему персонажу`);
         if (!card || !card.trim()) return;
         const newNpc = { id: st.nextNpcId++, name: name.trim(), card: card.trim(), status: '', locked: true, at: ctx().chat.length };
@@ -22125,9 +22332,9 @@ function placeMesButtons() {
 
                     // Если пост разбит на кусочки и есть ещё не нарисованный кусочек — показываем кнопку «📖 + Стр. X/Y» прямо под картинкой!
                     const msgPostTxt = c.chat?.[mId]?.mes || '';
-                    const totalChunksInPost = splitPostIntoComicChunks(msgPostTxt).length;
-                    const nextUndrawnChunkIdx = activeComicOptsForSlide?.stripMode ? findNextUndrawnChunkIndex(sceneMeta, totalChunksInPost) : -1;
-                    if (activeComicOptsForSlide?.stripMode && totalChunksInPost > 1 && nextUndrawnChunkIdx >= 0) {
+                    const totalChunksInPost = nnbDrawnChapterTotal(sceneMeta) || splitPostIntoComicChunks(msgPostTxt).length;
+                    const nextUndrawnChunkIdx = (activeComicOptsForSlide?.stripMode && !activeComicOptsForSlide.fullPost) ? findNextUndrawnChunkIndex(sceneMeta, totalChunksInPost) : -1;
+                    if (activeComicOptsForSlide?.stripMode && !activeComicOptsForSlide.fullPost && totalChunksInPost > 1 && nextUndrawnChunkIdx >= 0) {
                         const nextChunkBtn = $(`<div class="menu_button nnb-btn-primary" style="padding:4px 9px; font-size:0.78em; margin:0;" title="Нарисовать следующую страницу манхвы по кусочку #${nextUndrawnChunkIdx + 1} из ${totalChunksInPost} этого поста"><i class="fa-solid fa-book-medical"></i> + Стр. ${nextUndrawnChunkIdx + 1}/${totalChunksInPost}</div>`).on('click', async e => {
                             e.stopPropagation();
                             await drawNextComicChunkPage(mId, { ...sceneMeta, comicOpts: activeComicOptsForSlide });
