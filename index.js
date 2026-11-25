@@ -19962,6 +19962,10 @@ async function openDirectorPopup() {
                 catch (e) { if (!nnbIsStopError(e)) status.text(`Не получилось: ${String(e?.message || e)}`); }
                 finally { busy = false; }
             }));
+            row.append($('<span class="menu_button" style="margin:0; width:auto; padding:2px 7px;" title="Нарядить участников на это событие">👔</span>').on('click', () => {
+                const ev = (st.notes || []).find(n => n.planId === p.id && n.planRole === 'event');
+                openNpcMassOutfitPopup({ occasion: p.text, names: ev?.chars?.length ? ev.chars : null });
+            }));
             row.append($('<span class="menu_button" style="margin:0; width:auto; padding:2px 7px;" title="Убрать из календаря (и его сцены)">🗑</span>').on('click', async () => {
                 p.status = 'cancelled';
                 st.notes = (st.notes || []).filter(n => !(n.planId === p.id && n.planRole));
@@ -20814,7 +20818,7 @@ function nnbNpcActiveLook(n) {
 }
 function nnbNpcAddLook(n, look, wear = false) {
     const w = nnbNpcWardrobe(n);
-    const l = { id: w.nextId++, title: String(look.title || 'Наряд').trim().slice(0, 80), desc: String(look.desc || '').trim(), en: String(look.en || '').trim(), occasion: String(look.occasion || '').trim(), src: look.src || 'text' };
+    const l = { id: w.nextId++, title: String(look.title || 'Наряд').trim().slice(0, 80), desc: String(look.desc || '').trim(), en: String(look.en || '').trim(), occasion: String(look.occasion || '').trim(), src: look.src || 'text', ...(look.image ? { image: look.image } : {}) };
     w.looks.push(l);
     if (wear) nnbNpcWear(n, l.id);
     return l;
@@ -20868,40 +20872,186 @@ Reply with the 5 LOOK lines only.]`;
     return looks.slice(0, 5);
 }
 
+// Картинка наряда героя: один герой в полный рост на простом фоне (как у героини, но с полом и внешностью NPC)
+function nnbNpcOutfitImagePrompt(n, look) {
+    let canon = null;
+    try { canon = parseCanonFromAppearance(n.appearanceEn); } catch (e) { canon = null; }
+    let g = '';
+    try { g = guessCardGender(n, canon); } catch (e) { g = ''; }
+    if (!g) { // пол не понятен ни из внешности, ни из карточки — по имени: «-а/-я» обычно женское (кроме Ильи, Никиты, Саши…)
+        const first = String(n.name || '').trim().split(/\s+/)[0].toLowerCase();
+        const maleA = /^(?:илья|никита|саша|миша|паша|женя|ваня|дима|вова|лёша|леша|коля|петя|костя|гоша|кузьма|фома|лука|данила|савва|joshua|luca|nikita|sasha|misha)$/;
+        g = /[аяa]$/.test(first) && !maleA.test(first) ? 'girl' : /[a-zа-яё]$/i.test(first) ? 'boy' : '';
+    }
+    const tag = g === 'boy' ? '1boy' : '1girl';
+    const who = String(n.appearanceEn || '').replace(/\b(?:1girl|1boy|solo)\b\s*,?\s*/gi, '').replace(/\b(?:blush|blushing|embarrassed|shy)\b\s*,?\s*/gi, '').trim() || (g === 'boy' ? 'adult man' : 'adult woman');
+    const outfit = String(look.en || look.desc || look.title || 'casual outfit').trim();
+    return cleanForCommand(`${tag}, solo, full body, standing, simple background, 1.3::${who}::, 1.2::wearing ${outfit}::, calm confident expression, relaxed neutral face, single character, fashion reference sheet`);
+}
+async function nnbNpcDrawLook(n, look) {
+    if (!look.en && look.desc) { try { look.en = await nnbNpcLookToEn(n, look.desc); } catch (e) { if (nnbIsStopError(e)) throw e; } }
+    const prompt = nnbNpcOutfitImagePrompt(n, look);
+    const url = settings().imageSource === 'novelai'
+        ? await drawViaNovelAi(prompt, 'portrait', { extraNeg: 'blush, blushing, nose blush, embarrassed, shy, flustered, multiple views, 2girls, 2boys' })
+        : await drawPicture(prompt, null, 'portrait');
+    if (url) look.image = url;
+    return url;
+}
+function nnbNpcCanDrawLooks() {
+    try { return !!canDrawScene(); } catch (e) { return false; }
+}
+
 // Окно выбора из вариантов (сгенерированных)
-async function nnbNpcPickLookPopup(n, looks) {
-    const st = store();
-    const el = $('<div class="nnb-pop"></div>');
-    el.append($('<h3></h3>').text(`👔 Что наденет ${n.name}?`));
-    el.append('<div class="nnb-pop-sub">«Надеть» — наряд станет текущим (и сохранится в гардероб героя). Галочка — просто сохранить вариант на потом.</div>');
+// Варианты нарядов героя в контейнер: «Надеть» / «сохранить в гардероб»; картинки рисуются в фоне (очередь общая)
+function nnbNpcRenderLookOptions(host, n, looks, opts = {}) {
     const saveSet = new Set();
+    const imgs = [];
+    const state = { worn: false };
     looks.forEach((lk, i) => {
-        const card = $('<div class="nnb-note" style="padding:8px 10px; margin:6px 0;"></div>');
-        card.append($('<div style="font-weight:700;"></div>').text(lk.title));
-        card.append($('<div style="font-size:0.9em; margin:2px 0 4px 0;"></div>').text(lk.desc));
-        if (lk.en) card.append($('<div class="nnb-pop-sub" style="margin:0 0 4px 0; font-size:0.8em;"></div>').text(lk.en));
+        const card = $('<div class="nnb-note" style="padding:8px 10px; margin:6px 0; display:flex; gap:10px; align-items:flex-start;"></div>');
+        const imgBox = $('<div style="flex:0 0 96px; width:96px; height:144px; border-radius:8px; overflow:hidden; background:color-mix(in srgb, var(--SmartThemeBorderColor) 25%, transparent); display:flex; align-items:center; justify-content:center; font-size:0.75em; opacity:0.85; cursor:zoom-in;"></div>');
+        if (lk.image) imgBox.append($('<img style="width:100%; height:100%; object-fit:cover;">').attr('src', lk.image));
+        imgBox.on('click', () => { if (lk.image) window.open(lk.image, '_blank'); });
+        imgs[i] = imgBox;
+        const body = $('<div style="flex:1; min-width:0;"></div>');
+        body.append($('<div style="font-weight:700;"></div>').text(lk.title));
+        body.append($('<div style="font-size:0.9em; margin:2px 0 4px 0;"></div>').text(lk.desc));
+        if (lk.en) body.append($('<div class="nnb-pop-sub" style="margin:0 0 4px 0; font-size:0.8em;"></div>').text(lk.en));
         const row = $('<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;"></div>');
         const wearBtn = $('<span class="menu_button nnb-btn-primary" style="margin:0; width:auto;">Надеть</span>');
         const chk = $('<label style="font-size:0.88em; display:flex; gap:5px; align-items:center;"><input type="checkbox"> сохранить в гардероб</label>');
         chk.find('input').on('change', function () { if (this.checked) saveSet.add(i); else saveSet.delete(i); });
         wearBtn.on('click', async () => {
-            looks.forEach((x, k) => { if (k !== i && saveSet.has(k)) nnbNpcAddLook(n, x, false); });
-            const l = nnbNpcAddLook(n, lk, true);
+            if (state.worn) return;
+            state.worn = true;
+            looks.forEach((x, k) => { if (k !== i && saveSet.has(k)) x._saved = nnbNpcAddLook(n, x, false); });
+            looks[i]._saved = nnbNpcAddLook(n, lk, true);
             await commit(); updateInjection();
-            toastr.success(`${n.name}: «${l.title}»`, '👔 Гардероб');
-            closePopupOf(el);
+            toastr.success(`${n.name}: «${lk.title}»`, '👔 Гардероб');
+            host.find('.menu_button, input').css('pointer-events', 'none').css('opacity', 0.5);
+            host.prepend($('<div class="nnb-pop-sub" style="font-weight:700;"></div>').text(`✅ Надето: «${lk.title}»`));
+            opts.onWorn?.();
         });
         row.append(wearBtn, chk);
-        card.append(row);
-        el.append(card);
+        body.append(row);
+        card.append(imgBox, body);
+        host.append(card);
     });
-    const saveOnly = $('<span class="menu_button" style="margin:6px 0 0 0; width:auto;">Только сохранить отмеченные</span>').on('click', async () => {
-        looks.forEach((x, k) => { if (saveSet.has(k)) nnbNpcAddLook(n, x, false); });
-        await commit();
-        closePopupOf(el);
+    return {
+        saveChecked: () => looks.forEach((x, k) => { if (saveSet.has(k) && !x._saved) x._saved = nnbNpcAddLook(n, x, false); }),
+        jobs: looks.map((lk, i) => ({ n, lk, box: imgs[i] })),
+        markNoImages: () => imgs.forEach(b => b.text('без картинки')),
+    };
+}
+// Очередь картинок вариантов: по одной, обновляя окна; уже сохранённые наряды тоже получают картинку
+async function nnbNpcDrawLookJobs(jobs) {
+    if (!nnbNpcCanDrawLooks()) { jobs.forEach(j => j.box.text('без картинки')); return; }
+    for (const j of jobs) {
+        if (j.lk.image) continue;
+        j.box.text('🎨 рисую…');
+        try {
+            const url = await nnbNpcDrawLook(j.n, j.lk);
+            if (url) {
+                j.box.empty().append($('<img style="width:100%; height:100%; object-fit:cover;">').attr('src', url));
+                if (j.lk._saved && !j.lk._saved.image) { j.lk._saved.image = url; try { await commit(); } catch (e) { /* ignore */ } }
+            } else j.box.text('нет картинки');
+        } catch (e) {
+            j.box.text('не вышло');
+            if (nnbIsStopError(e)) break;
+        }
+    }
+}
+
+// Окно выбора из вариантов для одного героя
+async function nnbNpcPickLookPopup(n, looks, opts = { images: true }) {
+    const el = $('<div class="nnb-pop"></div>');
+    el.append($('<h3></h3>').text(`👔 Что наденет ${n.name}?`));
+    el.append('<div class="nnb-pop-sub">«Надеть» — наряд станет текущим (и сохранится в гардероб героя). Галочка — сохранить вариант на потом.</div>');
+    const host = $('<div></div>');
+    el.append(host);
+    const r = nnbNpcRenderLookOptions(host, n, looks);
+    el.append($('<span class="menu_button" style="margin:6px 0 0 0; width:auto;">Сохранить отмеченные</span>').on('click', async () => { r.saveChecked(); await commit(); closePopupOf(el); }));
+    if (opts.images) nnbNpcDrawLookJobs(r.jobs); else r.markNoImages();
+    await openPopup(el, true);
+}
+
+// 👥 Нарядить нескольких героев на одно событие: выбираешь, кто идёт, — подбор 5 вариантов каждому
+async function openNpcMassOutfitPopup(preset = {}) {
+    const st = store();
+    if (!st) return;
+    const heroes = [ensureMainCharCard(st), ...(st.npcs || [])].filter(Boolean);
+    if (!heroes.length) return toastr.info('Героев пока нет', '👔 Гардероб');
+    const el = $('<div class="nnb-pop"><h3>👥 Нарядить на событие</h3></div>');
+    const plans = nnbPlans(st).filter(p => p.status === 'planned');
+    const occ = $('<input class="text_pole" style="width:100%; margin:4px 0;" placeholder="Куда идут? (пусто — модель решит по сцене)">').val(preset.occasion || '');
+    const findWho = (plan) => {
+        const ev = (st.notes || []).find(n => n.planId === plan.id && n.planRole === 'event');
+        return (ev?.chars || []).map(x => String(x).toLowerCase());
+    };
+    if (plans.length) {
+        const ps = $('<select class="text_pole" style="width:100%; margin:4px 0;"><option value="">📅 Событие из календаря…</option></select>');
+        plans.forEach(p => ps.append($('<option></option>').val(String(p.id)).text(`${nnbPlanWhen(st, p)} — ${p.text}`)));
+        ps.on('change', function () {
+            const p = plans.find(x => String(x.id) === String($(this).val()));
+            if (!p) return;
+            occ.val(p.text);
+            const who = findWho(p);
+            if (who.length) list.find('input[type=checkbox]').each(function () { const h = heroes[Number($(this).data('i'))]; this.checked = who.some(w => nnbNameStrictSame(w, h.name) || matchesCharacterName(h.name, w)); });
+        });
+        el.append(ps);
+    }
+    el.append(occ);
+    el.append('<div class="nnb-pop-sub" style="margin-top:6px;">Кто идёт? Отметь героев — каждому подберётся 5 вариантов.</div>');
+    const list = $('<div style="display:flex; flex-direction:column; gap:3px; max-height:260px; overflow:auto; margin:4px 0;"></div>');
+    let activeSet = null;
+    try { activeSet = getActiveSceneHeroSet(st); } catch (e) { activeSet = null; }
+    heroes.forEach((h, i) => {
+        let pre = false;
+        try { pre = preset.names ? preset.names.some(x => nnbNameStrictSame(x, h.name)) : !!(activeSet && isHeroActiveInCurrentScene(h.name, activeSet, st)); } catch (e) { pre = false; }
+        const act = nnbNpcActiveLook(h);
+        const row = $('<label style="display:flex; gap:6px; align-items:center; font-size:0.92em;"><input type="checkbox"><span></span></label>');
+        row.find('input').attr('data-i', i).prop('checked', pre);
+        row.find('span').text(`${h.name}${h.isMainChar ? ' (карточка чата)' : ''}${act ? ` — сейчас «${act.title}»` : ''}`);
+        list.append(row);
     });
-    el.append(saveOnly);
-    void st;
+    el.append(list);
+    const imgChk = $('<label style="display:flex; gap:6px; align-items:center; font-size:0.9em;"><input type="checkbox"> 🖼 Рисовать картинки вариантов</label>');
+    imgChk.find('input').prop('checked', wantImages() || false).prop('disabled', !nnbNpcCanDrawLooks());
+    el.append(imgChk);
+    const status = $('<div class="nnb-pop-sub" style="min-height:1.2em;"></div>');
+    const go = $('<span class="menu_button nnb-btn-primary" style="margin:8px 0 0 0; width:auto;">👔 Подобрать наряды</span>');
+    const results = $('<div></div>');
+    el.append(go, status, results);
+    go.on('click', async () => {
+        const chosen = list.find('input[type=checkbox]:checked').map(function () { return heroes[Number($(this).data('i'))]; }).get();
+        if (!chosen.length) return status.text('Отметь хотя бы одного героя.');
+        if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '👔 Гардероб');
+        go.css('pointer-events', 'none').css('opacity', 0.6);
+        busy = true;
+        const jobs = [];
+        try {
+            for (let k = 0; k < chosen.length; k++) {
+                const h = chosen[k];
+                status.text(`👔 Подбираю наряды: ${h.name} (${k + 1} из ${chosen.length})…`);
+                let looks = [];
+                try { looks = await nnbNpcGenerateLooks(st, h, String(occ.val() || '').trim()); } catch (e) { if (nnbIsStopError(e)) throw e; looks = []; }
+                const sec = $('<details class="nnb-note" style="margin:8px 0; padding:6px 10px;" open><summary style="font-weight:700; cursor:pointer;"></summary><div></div></details>');
+                sec.find('summary').text(`👤 ${h.name}`);
+                results.append(sec);
+                if (looks.length < 2) { sec.find('div').first().text('Модель не предложила наряды по формату — открой карточку героя и нажми «✨ 5 вариантов».'); continue; }
+                const r = nnbNpcRenderLookOptions(sec.find('div').first(), h, looks, { onWorn: () => sec.prop('open', false) });
+                jobs.push(...r.jobs);
+                if (!imgChk.find('input').prop('checked')) r.markNoImages();
+            }
+            status.text(`Готово: ${chosen.length} — выбирай каждому «Надеть».`);
+        } catch (e) {
+            if (!nnbIsStopError(e)) status.text(`Не получилось: ${String(e?.message || e)}`);
+        } finally {
+            busy = false;
+            go.css('pointer-events', '').css('opacity', '');
+        }
+        if (imgChk.find('input').prop('checked') && jobs.length) nnbNpcDrawLookJobs(jobs);
+    });
     await openPopup(el, true);
 }
 
@@ -20918,6 +21068,7 @@ function nnbNpcWardrobeBox(n, rerender) {
         const radio = $('<input type="radio" style="margin-top:4px;">').prop('checked', w.activeId === l.id);
         radio.attr('name', `nnb_npcw_${String(n.id ?? 'mc')}`);
         radio.on('change', async () => { nnbNpcWear(n, l.id); await commit(); updateInjection(); rerender(); });
+        if (l.image) row.append($('<img style="width:44px; height:66px; object-fit:cover; border-radius:6px; cursor:zoom-in; flex:0 0 auto;">').attr('src', l.image).on('click', () => window.open(l.image, '_blank')));
         const txt = $('<div style="flex:1; font-size:0.9em;"></div>');
         txt.append($('<b></b>').text(l.title), $('<span></span>').text(l.desc ? ` — ${l.desc}` : ''));
         if (!l.en) txt.append('<div class="nnb-pop-sub" style="margin:0; font-size:0.8em;">⏳ теги для картинок допишутся при первом рисовании</div>');
@@ -20932,7 +21083,14 @@ function nnbNpcWardrobeBox(n, rerender) {
             if (w.activeId === l.id) w.activeId = null;
             await commit(); updateInjection(); rerender();
         });
-        row.append(radio, txt, edit, del);
+        const pic = $('<i class="fa-solid fa-image" style="cursor:pointer; opacity:.6; margin-top:3px;" title="Нарисовать / перерисовать картинку наряда"></i>').on('click', async () => {
+            if (!nnbNpcCanDrawLooks()) return toastr.warning('Не выбрано, чем рисовать — настрой «Чем рисовать» в настройках', '👔 Гардероб');
+            pic.removeClass('fa-image').addClass('fa-spinner fa-spin');
+            try { await nnbNpcDrawLook(n, l); await commit(); }
+            catch (e) { if (!nnbIsStopError(e)) toastr.error(String(e?.message || e), '👔 Гардероб'); }
+            rerender();
+        });
+        row.append(radio, txt, pic, edit, del);
         box.append(row);
     });
     const btns = $('<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;"></div>');
@@ -20946,7 +21104,8 @@ function nnbNpcWardrobeBox(n, rerender) {
         // теги для картинок — в фоне, лёгким запросом блокнота
         try {
             if (!busy) { l.en = await nnbNpcLookToEn(n, l.desc); await commit(); rerender(); }
-        } catch (e) { console.warn('[npc_notebook] look → en failed', e); }
+            if (wantImages() && nnbNpcCanDrawLooks()) { await nnbNpcDrawLook(n, l); await commit(); rerender(); }
+        } catch (e) { console.warn('[npc_notebook] look → en / image failed', e); }
     }));
     btns.append($('<span class="menu_button" style="margin:0; width:auto;">✨ 5 вариантов</span>').on('click', async () => {
         const occ = await askText(`Под какой повод одеть ${n.name}? (пусто — модель решит по сцене)`, '');
@@ -20954,7 +21113,7 @@ function nnbNpcWardrobeBox(n, rerender) {
         if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '👔 Гардероб');
         const looks = await withBusy(`👔 Подбираю наряды для ${n.name}…`, () => nnbNpcGenerateLooks(st, n, occ.trim()));
         if (!looks || looks.length < 2) return toastr.warning('Модель не предложила наряды по формату — попробуй ещё раз', '👔 Гардероб');
-        await nnbNpcPickLookPopup(n, looks);
+        await nnbNpcPickLookPopup(n, looks, { images: wantImages() });
         rerender();
     }));
     if (act) btns.append($('<span class="menu_button" style="margin:0; width:auto;">Снять (одежда — по тексту)</span>').on('click', async () => { w.activeId = null; await commit(); updateInjection(); rerender(); }));
@@ -22235,6 +22394,7 @@ function renderNpcs(st) {
         await commit();
         openNpcCardPopup(newNpc);
     });
+    const massOutfit = $('<div class="menu_button"><i class="fa-solid fa-shirt"></i> 👥 Нарядить на событие</div>').on('click', () => openNpcMassOutfitPopup());
     const addRel = $('<div class="menu_button"><i class="fa-solid fa-heart-circle-plus"></i> Добавить связь между героями</div>');
     addRel.on('click', async () => {
         const who = await askText('Персонажи (например «Лилия ↔ Кайлар» или «Марк → София»)');
@@ -22252,7 +22412,7 @@ function renderNpcs(st) {
         await commit();
     });
     const uniBtn = $('<div class="menu_button"><i class="fa-solid fa-earth-americas"></i> 🌌 Импорт / экспорт НПС между ролевыми</div>').on('click', () => openNpcUniverseModal(st));
-    btnsRow.append(add, addRel, uniBtn);
+    btnsRow.append(add, massOutfit, addRel, uniBtn);
     det.append(btnsRow);
 
     // 🏘 Соседские истории (автономная жизнь NPC за кадром)
