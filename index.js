@@ -711,6 +711,11 @@ const GENRE_HINTS = {
               lines.push('Upcoming dates:');
               up.slice(0, 2).forEach(h => lines.push(holidayLine(h, t.date)));
           }
+          const planned = nnbPlansForPrompt(st, 14).map(x => x.replace(/^#P\d+\s*/, ''));
+          if (planned.length) {
+              lines.push('Planned in the story (characters know and remember these):');
+              planned.slice(0, 4).forEach(x => lines.push(`— ${x}`));
+          }
           const chronUse = mode === 'dynamic' ? chronAll.slice(-4) : chronAll;
           if (chronUse.length) {
               lines.push('Chronicle of recent events (keep to these timeframes):');
@@ -744,6 +749,7 @@ const GENRE_HINTS = {
           lines.push('The date and time are set by the post headers ([Date: …]) — do NOT write TIME or DATE commands.');
           lines.push('EVENT: a short chronicle of the key scenes since the last check (1–2 sentences on one line, in Russian). If an event happened on another day — EVENT DD.MM: text.');
           lines.push('PLACE Country: City — only if the characters really moved to another city.');
+          if (st.direction?.notes !== 'director') lines.push(nnbPlanCmdText(st));
           const recentH = chronicleLines(st, 6);
           if (recentH.length) { lines.push('Latest in the chronicle:'); recentH.forEach(l => lines.push(l)); }
           return lines.join('\n');
@@ -753,6 +759,7 @@ const GENRE_HINTS = {
       lines.push(`TIME +N дней / недель / месяцев — how much story time passed ONLY in the last ${Math.max(1, (ctx().chat?.length ?? 0) - Number(st.lastThinkAt || 0))} messages (earlier nights and time skips are already counted in the date — don't count them again). Judge by events: nights, "the next day", time skips. If less than a day passed — write nothing.`);
       lines.push('DATE DD.MM.YYYY — if the chat names the date directly or it has to be set for the first time.');
       lines.push('PLACE Country: City — if the place is set for the first time or the characters moved.');
+      if (st.direction?.notes !== 'director') lines.push(nnbPlanCmdText(st));
       const recent = chronicleLines(st, 6);
       if (recent.length) { lines.push('Latest in the chronicle:'); recent.forEach(l => lines.push(l)); }
       return lines.join('\n');
@@ -2473,13 +2480,14 @@ function nnbDripState(st) {
     return st.notesDrip;
 }
 function nnbDripPickNote(st, exceptId = null) {
-    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3 && nnbDirectorAfterMet(st, n));
+    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3 && nnbDirectorAfterMet(st, n) && nnbDirectorDateOk(st, n));
     if (!pool.length) return null;
     // реже всего подсказанная, при равенстве — самая старая
     return pool.slice().sort((a, b) => (Number(a.dripCount) || 0) - (Number(b.dripCount) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))[0];
 }
 function nnbDripInjection(st) {
     const mode = st?.direction?.notes;
+    if (mode === 'director') { try { nnbPlansTick(st); } catch (e) { /* ignore */ } }
     if (mode === 'director' && !(st.notes || []).length) return nnbDirectorContinuityLine(st);
     if ((mode !== 'drip' && mode !== 'director') || !(st.notes || []).length) return '';
     const d = nnbDripState(st);
@@ -2549,11 +2557,12 @@ function nnbDirectorLineOf(st, tag) {
     return d.lines.find(l => l.id.toLowerCase() === t || l.name.toLowerCase() === t || l.name.toLowerCase().includes(t) || t.includes(l.id.toLowerCase())) || null;
 }
 // Выбор следующей задумки: линия с наибольшим отставанием от цели; внутри — темп (после тяжёлой сцены — полегче) и реже подсказанные
-function nnbDirectorPick(st, exceptId = null) {
+function nnbDirectorPick(st, exceptId = null, excludeIds = null) {
     const allNotes = st.notes || [];
-    const pool = allNotes.filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3
+    const pool = allNotes.filter(n => !n.ff && n.id !== exceptId && !(excludeIds && excludeIds.has(n.id)) && (Number(n.dripCount) || 0) < 3
         && !allNotes.some(b => b.bridgeFor === n.id && !b.ff) // у задумки есть мостик — сначала он
-        && nnbDirectorAfterMet(st, n)); // подводки и предыдущие сцены цепочки ещё не сыграны
+        && nnbDirectorAfterMet(st, n) // подводки и предыдущие сцены цепочки ещё не сыграны
+        && nnbDirectorDateOk(st, n)); // событие из календаря — только в свой день; подготовка — только до него
     if (!pool.length) return null;
     const bal = nnbDirectorBalance(st);
     const deficitOf = id => (bal.find(b => b.id === id)?.deficit ?? -999);
@@ -2577,6 +2586,9 @@ function nnbDirectorPick(st, exceptId = null) {
         if (lastInt && lastInt <= 2 && it >= 3) sc += 5; // после лёгкого можно поднять накал
         sc -= (Number(n.dripCount) || 0) * 10;
         if (n.bridgeFor != null) sc += 4;
+        // календарь: в день события — оно; чем ближе дата, тем раньше подготовка к нему
+        if (n.planRole === 'event' && n.onDate && today && n.onDate <= today) sc += 500;
+        if (n.planRole === 'prep' && n.deadline && today) sc += Math.max(0, 60 - 8 * daysBetween(today, n.deadline));
         // пожелания игрока: выбранная линия и жанр идут первыми (пусто — режиссёр решает сам по балансу)
         const pr = st.director?.prefs;
         if (pr?.line && n.line === pr.line) sc += 100;
@@ -2601,6 +2613,7 @@ function nnbSceneFieldsFrom(it) {
     if (Array.isArray(it?.beats) && it.beats.length) o.beats = it.beats.map(String).filter(Boolean);
     if (Number(it?.dynamics) > 0) o.dynamics = Math.min(5, Number(it.dynamics));
     if (['main', 'bridge', 'after'].includes(it?.kind)) o.kind = it.kind;
+    for (const k of ['onDate', 'deadline']) if (/^\d{4}-\d{2}-\d{2}$/.test(String(it?.[k] || ''))) o[k] = it[k];
     return o;
 }
 function nnbDirectorImport(st, json) {
@@ -2662,7 +2675,12 @@ const NNB_DIR_TECH_BY_GENRE = {
 
 function nnbDirectorContinuityLine(st) {
     const c = (st?.director?.continuity || []).filter(Boolean);
-    return c.length ? `[Continuity — the next replies must not contradict: ${c.join('; ')}]` : '';
+    const out = c.length ? [`[Continuity — the next replies must not contradict: ${c.join('; ')}]`] : [];
+    if (!st?.direction?.time) { // при модуле времени календарь уже идёт в блоке времени
+        const planned = nnbPlansForPrompt(st, 14).map(x => x.replace(/^#P\d+\s*/, ''));
+        if (planned.length) out.push(`[Planned in the story (characters know and remember these): ${planned.slice(0, 4).join('; ')}]`);
+    }
+    return out.join('\n');
 }
 function nnbDirectorExtra(st) {
     const d = nnbDirector(st);
@@ -2940,6 +2958,32 @@ function nnbDirectorAddScenes(st, scenes, extra = {}) {
 }
 
 // Сцена разблокирована, если всё из after уже сыграно (или удалено)
+// Рекомендации «что дальше»: сначала сцены, привязанные к календарю (событие сегодня, подготовка к ближайшему), потом лучшие из очереди
+function nnbDirectorRecommendations(st, limit = 6) {
+    const out = [];
+    const used = new Set();
+    for (let i = 0; i < limit * 2 && out.length < limit; i++) {
+        const n = nnbDirectorPickExcluding(st, used);
+        if (!n) break;
+        used.add(n.id);
+        // подводка → показываем ту сцену, к которой она ведёт (выбор игрока — сама сцена)
+        const target = n.bridgeFor != null ? (st.notes.find(x => x.id === n.bridgeFor) || n) : n;
+        if (out.some(r => r.note.id === target.id)) continue;
+        const plan = target.planId ? nnbPlans(st).find(p => p.id === target.planId) : null;
+        out.push({ note: target, label: plan ? `📅 ${target.planRole === 'event' ? 'событие' : 'до'} ${nnbPlanWhen(st, plan).replace(/,.*?\(/, ' (')}` : '' });
+    }
+    return out;
+}
+function nnbDirectorPickExcluding(st, excludeIds) {
+    return nnbDirectorPick(st, null, excludeIds);
+}
+function nnbDirectorDateOk(st, n) {
+    const today = st.time?.date;
+    if (!today || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return true;
+    if (n.onDate && today < n.onDate) return false;
+    if (n.deadline && today > n.deadline) return false;
+    return true;
+}
 function nnbDirectorAfterMet(st, n) {
     if (!Array.isArray(n?.after) || !n.after.length) return true;
     return n.after.every(id => !(st.notes || []).some(x => x.id === id && !x.ff));
@@ -3045,6 +3089,119 @@ function nnbDirectorImportAny(st, txt) {
     // не JSON: одна строка/абзац — одна задумка
     const items = s.split(/\n\s*\n|\n(?=\s*(?:\d+[.)]|[-•*])\s)/).map(x => x.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim()).filter(Boolean);
     return nnbDirectorImport(st, { ideas: items.map(t => { const title = t.split(/[.!?\n]/)[0].slice(0, 80); return { title, text: t.slice(title.length).replace(/^[.!?\s]+/, '') }; }) });
+}
+
+// ===== 📅 Календарь событий сюжета: «в пятницу у Яна и Этель помолвка» → режиссёр знает, что должно успеть случиться =====
+function nnbPlanCmdText(st) {
+    const cur = nnbPlansForPrompt(st, 60);
+    return `PLAN DD.MM: an event the characters scheduled or announced for a specific day (an engagement on Friday, an exam on the 12th, a trip next week) — the date counted from the current story date, the content in Russian; only new ones. PLAN_MOVE #P1 DD.MM — if it was moved; PLAN_CANCEL #P1 — if it was called off.${cur.length ? `\nAlready in the calendar:\n${cur.join('\n')}` : ''}`;
+}
+function nnbPlans(st) {
+    if (!Array.isArray(st.plans)) st.plans = [];
+    if (!Number.isFinite(st.nextPlanId)) st.nextPlanId = 1;
+    return st.plans;
+}
+function nnbPlanDaysLeft(st, plan) {
+    const today = st.time?.date;
+    if (!plan?.date || !today || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return null;
+    return daysBetween(today, plan.date);
+}
+function nnbPlanWhen(st, plan) {
+    if (!plan.date) return plan.when || 'скоро';
+    const left = nnbPlanDaysLeft(st, plan);
+    const base = `${weekday(plan.date)}, ${formatDate(plan.date, false)}`;
+    if (left == null) return base;
+    return `${base} (${left === 0 ? 'сегодня' : left === 1 ? 'завтра' : left > 0 ? `через ${left} дн.` : `${-left} дн. назад`})`;
+}
+function nnbPlanWhenEn(st, plan) {
+    if (!plan.date) return plan.when || 'soon';
+    const left = nnbPlanDaysLeft(st, plan);
+    return `${plan.date}${left == null ? '' : left === 0 ? ' (today)' : left === 1 ? ' (tomorrow)' : left > 0 ? ` (in ${left} days)` : ` (${-left} days ago)`}`;
+}
+function nnbAddPlan(st, whenText, text) {
+    const plans = nnbPlans(st);
+    const t = String(text || '').trim();
+    if (!t) return null;
+    const w = String(whenText || '').trim();
+    const today = st.time?.date || '';
+    let date = '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(w)) date = w;
+    else if (w) { try { date = parseDateText(w, today) || ''; } catch (e) { date = ''; } }
+    const words = x => new Set(String(x).toLowerCase().match(/[а-яёa-z]{4,}/g) || []);
+    const A = words(t);
+    const dup = plans.find(p => p.status === 'planned' && (!date || !p.date || p.date === date) && (() => { const B = words(p.text); let k = 0; A.forEach(x => { if (B.has(x)) k++; }); return A.size && B.size && k / Math.min(A.size, B.size) >= 0.5; })());
+    if (dup) { if (date && !dup.date) dup.date = date; return dup; }
+    const plan = { id: st.nextPlanId++, date, when: date ? '' : w, text: t, status: 'planned', at: ctx().chat?.length ?? 0, prepDone: false };
+    plans.push(plan);
+    return plan;
+}
+// Прошедшие события: подготовка к ним больше не нужна; само событие, не сыгранное за 2 дня, — пропущено
+function nnbPlansTick(st) {
+    const today = st.time?.date;
+    if (!today || !/^\d{4}-\d{2}-\d{2}$/.test(today)) return;
+    for (const p of nnbPlans(st)) {
+        if (p.status !== 'planned' || !p.date) continue;
+        const left = daysBetween(today, p.date);
+        if (left < 0) {
+            for (const n of [...(st.notes || [])]) {
+                if (n.planId !== p.id) continue;
+                const eventMissed = left < -2 && !(st.archive || []).some(a => a.planId === p.id && a.planRole === 'event' && a.status === 'done');
+                const stale = (n.planRole === 'prep' && left < 0) || (n.planRole === 'event' && left < -2) || (n.planRole === 'after' && eventMissed);
+                if (stale) { st.notes = st.notes.filter(x => x !== n); n.status = 'missed'; n.closedAt = ctx().chat?.length ?? 0; (st.archive || (st.archive = [])).push(n); }
+            }
+            if (left < -2) p.status = 'past';
+        }
+    }
+}
+function nnbPlansForPrompt(st, days = 45) {
+    return nnbPlans(st).filter(p => p.status === 'planned' && (nnbPlanDaysLeft(st, p) == null || (nnbPlanDaysLeft(st, p) >= -1 && nnbPlanDaysLeft(st, p) <= days)))
+        .map(p => `#P${p.id} ${nnbPlanWhenEn(st, p)}: ${p.text}`);
+}
+
+// Режиссёр расписывает событие из календаря: сама сцена события (в её день) + что логично успеть отыграть до неё
+async function nnbDirectorPlanPrep(st, plan) {
+    const d = nnbDirectorExtra(st);
+    const names = storyNames();
+    const cut = (t, n) => String(t || '').trim().slice(0, n);
+    const left = nnbPlanDaysLeft(st, plan);
+    const heroes = [st.mainCharCard, ...(st.npcs || [])].filter(Boolean).slice(0, 16)
+        .map(n => `• ${n.name}: ${cut(n.card, 160).replace(/\s+/g, ' ')} | дружба ${Number(n.friendship) || 0}${Number(n.romance) ? `, романтика ${Number(n.romance)}` : ''}`).join('\n');
+    const queued = (st.notes || []).filter(n => !n.ff).slice(0, 15).map(n => `• ${cut(n.title || n.text, 90)}`).join('\n');
+    const lines = d.lines.map(l => `${l.id} «${l.name}»`).join(', ');
+    const prompt = `${SELF_CONTAINED_PROMPT_MARKER}[OOC: You are the director of an ongoing roleplay between ${names.user} (the player) and ${names.char}. A dated event is coming up in the story:
+EVENT: ${plan.text}
+WHEN: ${nnbPlanWhenEn(st, plan)}${st.time?.date ? `; today in the story: ${st.time.date}` : ''}
+
+Plan what should be played around it:
+SCENE 1 is the event itself (main), set on its day (WHEN must name that day).
+Then 3–5 scenes that logically should happen BEFORE it (preparations, errands, choices, reactions, small conflicts or tender moments it causes — e.g. choosing a gift, picking an outfit, a talk about it). They must fit into the time left${left != null ? ` (${left} days)` : ''}; mark each «bridge for 1». Make them specific to these characters, not generic.
+Optionally one consequence scene after the event («after for 1»).
+${nnbDirectorPrefsText(st) ? `${nnbDirectorPrefsText(st)}\n` : ''}Story lines: ${lines}.
+Characters now:
+${heroes || '(none)'}
+${queued ? `Already queued (do not duplicate):\n${queued}\n` : ''}
+FORMAT — field names in English, all content in Russian:
+${NNB_SCENE_FORMAT}
+Reply only with SCENE blocks.]`;
+    const raw = String(await nnbDirectorGenerate(prompt, 8192) || '');
+    const scenes = nnbDirectorParseScenes(raw);
+    if (!scenes.length) return [];
+    // главная сцена события (SCENE 1 или первая main) не должна ждать все подготовки — подготовки лишь «до даты»
+    const eventN = (scenes.find(sc => sc.n === 1 && sc.kind === 'main') || scenes.find(sc => sc.kind === 'main'))?.n;
+    const seen = new Set();
+    const mapped = scenes.filter(sc => !seen.has(sc.n) && seen.add(sc.n))
+        .map(sc => sc.kind === 'bridge' && sc.forN === eventN ? { ...sc, kind: 'main', forN: null, _prep: true } : sc);
+    const added = nnbDirectorAddScenes(st, mapped);
+    mapped.forEach((sc, i) => {
+        const n = added[i];
+        if (!n) return;
+        n.planId = plan.id;
+        if (sc.n === eventN) { n.planRole = 'event'; n.onDate = plan.date || ''; n.ready = true; }
+        else if (sc._prep || (sc.kind === 'main' && sc.n !== eventN)) { n.planRole = 'prep'; n.deadline = plan.date || ''; n.ready = true; }
+        else if (sc.kind === 'after') n.planRole = 'after';
+    });
+    plan.prepDone = true;
+    return added;
 }
 
 // пришёл ответ рассказчика: задумка была показана ещё раз; после NNB_DRIP_SPAN ответов — следующая
@@ -3731,7 +3888,7 @@ function parseAndApply(raw) {
 
     if (!text || /^NONE[.!]?$/i.test(text)) return res;
 
-    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|BDAY|TASK(?:_?DONE)?|RESULT|MEDAL|TRACE|STORY|SECRET|DIARY|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|HOME_?ROOM|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|CONTINUITY|SETUP|READY|BRIDGE|NONE)(?:\b|[\s\[:：—–-])/i;
+    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|BDAY|TASK(?:_?DONE)?|RESULT|MEDAL|TRACE|STORY|SECRET|DIARY|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|HOME_?ROOM|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|CONTINUITY|SETUP|READY|BRIDGE|PLAN(?:_?CANCEL|_?MOVE)?|NONE)(?:\b|[\s\[:：—–-])/i;
     const mergedLines = [];
     for (const rawLine of text.split(/\r?\n/)) {
         const cleaned = bracketTag(rawLine.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, '')).trim();
@@ -3851,6 +4008,34 @@ function parseAndApply(raw) {
             continue;
         }
 
+        {
+            const mpc = line.match(/^PLAN_?CANCEL\s*#?\s*P?(\d+)/i);
+            if (mpc) {
+                const p = nnbPlans(st).find(x => x.id === Number(mpc[1]));
+                if (p) {
+                    p.status = 'cancelled';
+                    st.notes = (st.notes || []).filter(n => !(n.planId === p.id && n.planRole));
+                }
+                continue;
+            }
+            const mpm = line.match(/^PLAN_?MOVE\s*#?\s*P?(\d+)\s*[:：—–-]?\s*(.+)$/i);
+            if (mpm) {
+                const p = nnbPlans(st).find(x => x.id === Number(mpm[1]));
+                let nd = '';
+                try { nd = parseDateText(mpm[2], st.time?.date || '') || ''; } catch (e) { nd = ''; }
+                if (p && nd) {
+                    p.date = nd;
+                    (st.notes || []).forEach(n => { if (n.planId === p.id) { if (n.planRole === 'event') n.onDate = nd; if (n.planRole === 'prep') n.deadline = nd; } });
+                }
+                continue;
+            }
+            const mp = line.match(/^PLAN\s*\[?([^:：\]]{0,40}?)\]?\s*[:：—–]\s*(.+)$/i);
+            if (mp) {
+                const p = nnbAddPlan(st, mp[1], mp[2]);
+                if (p) (res.plans || (res.plans = [])).push(p);
+                continue;
+            }
+        }
         if (st.direction?.notes === 'director') {
             const dx = nnbDirectorExtra(st);
             const mc = line.match(/^CONTINUITY\s*[:：—–-]\s*(.+)$/i);
@@ -4277,6 +4462,7 @@ function parseAndApply(raw) {
                 if (n.status === 'done') nnbDirectorRecord(st, n);
                 if (st.director) {
                     if (n.bridgeFor != null) { const orig = st.notes.find(x => x.id === n.bridgeFor); if (orig) orig.ready = false; }
+                    if (n.planRole === 'event' && n.status === 'done') { const pl = (st.plans || []).find(x => x.id === n.planId); if (pl) pl.status = 'done'; }
                     const dd = st.notesDrip;
                     if (n.status === 'done' && dd?.tech?.noteId === n.id && dd.tech.setupText) {
                         const su = (st.director.setups || []).find(x => x.text === dd.tech.setupText);
@@ -4481,7 +4667,8 @@ async function think(manual = false) {
             const chk = dripD?.needCheck != null ? (st.notes || []).find(n => n.id === dripD.needCheck) : null;
             const dirWatch = `Director's continuity watch (always):
 CONTINUITY: one fact the next replies must not contradict — an injury, who is where, what someone holds, who knows or does NOT yet know a secret, a promise or threat still pending. Up to 3 such lines, only real and current ones, in Russian; skip if there are none.
-SETUP: a concrete detail planted in the latest messages that could pay off later (an object, a habit, a remark), in Russian — only if there is one.${chk ? `
+SETUP: a concrete detail planted in the latest messages that could pay off later (an object, a habit, a remark), in Russian — only if there is one.
+${nnbPlanCmdText(st)}${chk ? `
 Next planned scene #${chk.id}: «${chk.text}»${chk.needs ? ` (needs: ${chk.needs})` : ''}. Would it feel earned right now, given how close the characters are and what they know? If yes — READY #${chk.id}. If not — BRIDGE #${chk.id}: a smaller event (1–2 sentences, in Russian) that naturally builds toward it first.` : ''}`;
             const replyRe = /(?=(?:Ответь ТОЛЬКО командами|Reply ONLY with commands))/;
             tpl = replyRe.test(tpl) ? tpl.replace(replyRe, `${dirWatch}\n\n`) : `${tpl}\n\n${dirWatch}`;
@@ -4490,6 +4677,17 @@ Next planned scene #${chk.id}: «${chk.text}»${chk.needs ? ` (needs: ${chk.need
         if (ctx().chatId !== chatIdAtStart) return; // чат сменили, пока модель думала
         st.lastRaw = String(raw ?? '');
         const res = parseAndApply(raw);
+        try { nnbPlansTick(st); } catch (e) { /* ignore */ }
+        if (res.plans?.length && settings().showToasts !== false) toastr.info(res.plans.map(p => `${nnbPlanWhen(st, p)} — ${p.text}`).join('<br>'), '📅 В календарь событий', { escapeHtml: false });
+        if (st.direction?.notes === 'director') {
+            // новое событие в календаре — режиссёр сразу расписывает его и подготовку к нему (по одному за раз)
+            const needPrep = nnbPlans(st).find(p => p.status === 'planned' && !p.prepDone && (nnbPlanDaysLeft(st, p) == null || (nnbPlanDaysLeft(st, p) >= 0 && nnbPlanDaysLeft(st, p) <= 21)));
+            if (needPrep) {
+                setStatus(`📅 Режиссёр планирует: ${needPrep.text.slice(0, 40)}…`);
+                try { await nnbDirectorPlanPrep(st, needPrep); } catch (e) { if (nnbIsStopError(e)) throw e; console.warn('[npc_notebook] plan prep failed', e); }
+                if (ctx().chatId !== chatIdAtStart) return;
+            }
+        }
         if (st.time?.date && Array.isArray(st.scenes)) {
             st.scenes.forEach(sc => { if (!sc.date) sc.date = st.time.date; });
         }
@@ -19693,6 +19891,81 @@ async function openDirectorPopup() {
             curBox.append(r);
         } else curBox.append('<div class="nnb-pop-sub">Активной сцены нет — режиссёр выберет её к следующему ответу.</div>');
         body.append(curBox);
+        // Что дальше: рекомендации режиссёра (календарь — первым), случайное, другое
+        const recBox = $('<div class="nnb-note" style="margin-top:10px; padding:8px 10px;"><div style="font-weight:700; margin-bottom:4px;">🎯 Что хочешь увидеть следующим?</div></div>');
+        const recs = nnbDirectorRecommendations(st, 6);
+        const setNext = async (n) => {
+            const d2 = nnbDripState(st);
+            const lead = st.notes.find(x => x.bridgeFor === n.id && !x.ff) || n;
+            n.ready = true;
+            d2.activeId = lead.id; d2.shown = 0; d2.tech = null; d2.needCheck = null; d2.waitReplies = 0;
+            await commit(); updateInjection();
+            toastr.success(`Следующей пойдёт «${lead.title || String(lead.text).slice(0, 60)}»`, '🎬 Режиссёр');
+            render();
+        };
+        if (!recs.length) recBox.append('<div class="nnb-pop-sub">Пока рекомендовать нечего — нажми «✨ Придумать сцену сейчас» или «✏️ Другое».</div>');
+        recs.forEach(r => {
+            const b = $('<div class="menu_button" style="margin:3px 0; width:100%; text-align:left; white-space:normal; padding:5px 9px;"></div>');
+            b.text(`${r.label ? `${r.label} · ` : ''}${r.note.title || String(r.note.text).slice(0, 80)}`);
+            b.on('click', () => setNext(r.note));
+            recBox.append(b);
+        });
+        const recRow = $('<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;"></div>');
+        if (recs.length) recRow.append($('<span class="menu_button" style="margin:0; width:auto;">🎲 Случайное</span>').on('click', () => setNext(recs[Math.floor(Math.random() * recs.length)].note)));
+        const otherBtn = $('<span class="menu_button" style="margin:0; width:auto;">✏️ Другое</span>');
+        otherBtn.on('click', async () => {
+            const t = await askText('Что хочешь увидеть следующим? Опиши как угодно — режиссёр распишет сцену (и подводку, если она нужна)', '');
+            if (!t || !t.trim()) return;
+            if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '🎬 Режиссёр');
+            busy = true;
+            status.text(`🎬 Режиссёр расписывает сцену (${nnbDirectorSourceLabel()})…`);
+            try {
+                const notes = await nnbDirectorIntake(st, t.trim());
+                const main = notes.find(n => n.kind === 'main') || notes[0];
+                if (main) await setNext(main); else status.text('Модель не вернула сцену — попробуй ещё раз.');
+            } catch (e) { if (!nnbIsStopError(e)) status.text(`Не получилось: ${String(e?.message || e)}`); }
+            finally { busy = false; }
+        });
+        recRow.append(otherBtn);
+        recBox.append(recRow);
+        body.append(recBox);
+        // Календарь событий
+        const plans = nnbPlans(st).filter(p => p.status === 'planned');
+        const calBox = $('<details class="nnb-note" style="margin-top:10px; padding:8px 10px;" open><summary style="font-weight:700; cursor:pointer;">📅 Календарь событий</summary></details>');
+        if (!plans.length) calBox.append('<div class="nnb-pop-sub">Пусто. Когда в чате договорятся о чём-то на конкретный день («в пятницу помолвка»), размышление само внесёт это сюда.</div>');
+        plans.sort((a, b) => String(a.date || '9').localeCompare(String(b.date || '9'))).forEach(p => {
+            const prepN = (st.notes || []).filter(n => n.planId === p.id && n.planRole === 'prep').length;
+            const row = $('<div style="display:flex; gap:6px; align-items:flex-start; margin:4px 0;"><div style="flex:1;"></div></div>');
+            row.find('div').first().append($('<div></div>').text(`${nnbPlanWhen(st, p)} — ${p.text}`), $('<div class="nnb-pop-sub" style="margin:0;"></div>').text(p.prepDone ? `подготовка к нему: ${prepN} сц.` : 'режиссёр ещё не расписал подготовку'));
+            row.append($('<span class="menu_button" style="margin:0; width:auto; padding:2px 7px;" title="Расписать событие и что успеть до него">🔄</span>').on('click', async () => {
+                if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '🎬 Режиссёр');
+                busy = true; status.text(`📅 Режиссёр расписывает «${p.text.slice(0, 40)}» (${nnbDirectorSourceLabel()})…`);
+                try { const a = await nnbDirectorPlanPrep(st, p); await commit(); updateInjection(); toastr.success(`Сцен: ${a.length}`, '📅 Календарь'); render(); }
+                catch (e) { if (!nnbIsStopError(e)) status.text(`Не получилось: ${String(e?.message || e)}`); }
+                finally { busy = false; }
+            }));
+            row.append($('<span class="menu_button" style="margin:0; width:auto; padding:2px 7px;" title="Убрать из календаря (и его сцены)">🗑</span>').on('click', async () => {
+                p.status = 'cancelled';
+                st.notes = (st.notes || []).filter(n => !(n.planId === p.id && n.planRole));
+                await commit(); updateInjection(); render();
+            }));
+            calBox.append(row);
+        });
+        calBox.append($('<span class="menu_button" style="margin:4px 0 0 0; width:auto;">+ Событие</span>').on('click', async () => {
+            const w = await askText('Когда? (например: 04.04, в пятницу, через неделю)', '');
+            if (!w || !w.trim()) return;
+            const t = await askText('Что за событие?', '');
+            if (!t || !t.trim()) return;
+            let iso = '';
+            const today = st.time?.date || '';
+            const wd = ['воскресенье', 'понедельник', 'вторник', 'среду', 'четверг', 'пятницу', 'субботу'].findIndex(x => w.toLowerCase().includes(x.slice(0, 4)));
+            const rel = w.match(/через\s+(\d+)?\s*(дн|день|дня|недел)/i);
+            if (today && wd >= 0) { const cur = toDate(today).getUTCDay(); iso = addDays(today, ((wd - cur + 7) % 7) || 7); }
+            else if (today && rel) iso = addDays(today, (Number(rel[1]) || 1) * (/недел/i.test(rel[2]) ? 7 : 1));
+            const p = nnbAddPlan(st, iso || w, t);
+            if (p) { await commit(); updateInjection(); render(); }
+        }));
+        body.append(calBox);
         // действия
         const acts = $('<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;"></div>');
         const genBtn = $('<span class="menu_button nnb-btn-primary" style="margin:0; width:auto;">✨ Придумать сцену сейчас</span>');
@@ -20007,7 +20280,7 @@ function renderPanel(forceFull = false) {
         }));
         btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📥 Добавить задумки</div>').on('click', () => openDirectorIntakePopup(st)));
         btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📤 Экспорт JSON</div>').on('click', async () => {
-            const data = { lines: dir.lines, contextSummary: dir.summary || '', history: dir.history, ideas: st.notes.map(n => ({ id: 'i' + n.id, title: n.title || String(n.text).slice(0, 80), text: n.text, line: n.line || '', genre: n.genre || '', intensity: Number(n.intensity) || 3, characters: n.chars || [], needs: n.needs || '', anchor: n.anchor || '', bridge: n.bridge || '', place: n.place || '', mood: n.mood || '', dynamics: n.dynamics || 0, pace: n.pace || '', link: n.link || '', beats: n.beats || [], avoid: n.avoid || '', kind: n.kind || '' })) };
+            const data = { lines: dir.lines, contextSummary: dir.summary || '', history: dir.history, ideas: st.notes.map(n => ({ id: 'i' + n.id, title: n.title || String(n.text).slice(0, 80), text: n.text, line: n.line || '', genre: n.genre || '', intensity: Number(n.intensity) || 3, characters: n.chars || [], needs: n.needs || '', anchor: n.anchor || '', bridge: n.bridge || '', place: n.place || '', mood: n.mood || '', dynamics: n.dynamics || 0, pace: n.pace || '', link: n.link || '', beats: n.beats || [], avoid: n.avoid || '', kind: n.kind || '', onDate: n.onDate || '', deadline: n.deadline || '' })) };
             try { await navigator.clipboard.writeText(JSON.stringify(data, null, 2)); toastr.success('JSON скопирован', '🎬 Режиссёр'); } catch (e) { await askText('Скопируй JSON', JSON.stringify(data, null, 2)); }
         }));
         btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;" title="Режиссёр придумает 3 свежие сцены для самой отстающей линии (опора на материал истории, без клише). Сам он делает это при размышлении, когда идеи под отстающую линию кончаются.">✨ Придумать сцены</div>').on('click', async () => {
