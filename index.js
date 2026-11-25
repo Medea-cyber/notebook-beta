@@ -603,7 +603,7 @@ const GENRE_HINTS = {
       if (!y) {
           // год не указан — берём год, при котором дата БЛИЖЕ ВСЕГО к текущей дате истории
           // (раньше бралась «не раньше текущей»: DATE 30.03 при истории 31.03.2025 улетала на 30.03.2026 — время скакало на год)
-          const ref = refIso || toIso(new Date());
+          const ref = (/^\d{4}-\d{2}-\d{2}$/.test(String(refIso || '')) ? refIso : '') || toIso(new Date());
           const y0 = toDate(ref).getUTCFullYear();
           const cands = [y0 - 1, y0, y0 + 1].filter(yy => toDate(ymd(yy, m, d)).getUTCMonth() + 1 === m);
           y = cands.sort((a, b) => Math.abs(daysBetween(ref, ymd(a, m, d))) - Math.abs(daysBetween(ref, ymd(b, m, d))))[0] || y0;
@@ -1392,6 +1392,7 @@ const defaults = {
     albumOnlyChosen: true,
     naiNegative: 'nsfw, lowres, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, too many watermarks, negative space, blank page, bad anatomy, bad hands, text, watermark, signature',
     textSource: '',
+    directorSource: 'main', // подключение режиссёра: 'main' — основное подключение чата, 'notebook' — как у блокнота, id профиля, 'custom-api'
     textApiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
     textApiKey: '',
     textApiModel: 'gemini-2.5-flash',
@@ -2064,6 +2065,44 @@ function nnbSameHeroName(a, b) {
     const cnt = x => stripParenRole(x).split(/[\s-]+/).filter(t => t.length >= 2).length;
     return cnt(a) > 0 && cnt(a) === cnt(b) && nnbLatinTokensMatch(a, b);
 }
+// Строгое «это тот же человек» для заведения карточек: слова совпадают целиком, допускается только падежное окончание
+// («Кайлара» = «Кайлар»), по-латински тоже («Бруно» = «Bruno»). «Кайла» ≠ «Кайлар», «Мира» ≠ «Мирон».
+const NNB_RU_CASE_END = /^(?:а|я|у|ю|е|и|ы|ой|ей|ом|ем|ам|ям|ами|ями|ах|ях|ого|его|ому|ему)$/;
+function nnbNameStrictSame(a, b) {
+    if (!a || !b) return false;
+    if (normName(a) === normName(b) || stripParenRole(a) === stripParenRole(b)) return true;
+    const toks = x => stripParenRole(x).split(/[\s-]+/).filter(t => t.length >= 2);
+    const tokEq = (x, y) => {
+        if (x === y) return true;
+        const lx = nnbLatinName(x), ly = nnbLatinName(y);
+        if (lx && lx === ly) return true;
+        if (/[a-z]/.test(x) !== /[a-z]/.test(y) && nnbLatinTokensMatch(x, y)) return true;
+        const [sh, lg] = x.length <= y.length ? [x, y] : [y, x];
+        // Кайлар → Кайлару/Кайларом. Но «+а/я» к согласной — это женское имя («Ян»/«Яна», «Александр»/«Александра»), не падеж
+        if (lg.startsWith(sh) && NNB_RU_CASE_END.test(lg.slice(sh.length)) && !(/^[ая]$/.test(lg.slice(sh.length)) && /[^аяоеыиуюйь]$/.test(sh))) return true;
+        // Аня → Ани, Мира → Миру, Этель → Этели/Этелью: общая основа + окончания
+        const stemOf = w => w.replace(/(?:ью|ью|ь|[аяоеыиуюй]|ой|ей|ом|ем|ам|ям|ами|ями|ах|ях)$/, '');
+        const sx = stemOf(x), sy = stemOf(y);
+        const restOk = (w, st0) => { const r = w.slice(st0.length); return !r || r === 'ь' || r === 'ью' || NNB_RU_CASE_END.test(r); };
+        const femVsMasc = (w1, w2) => /^[ая]$/.test(w1.slice(sx.length)) && w2 === sx && /[^аяоеыиуюйь]$/.test(w2);
+        if (femVsMasc(x, y) || femVsMasc(y, x)) return false;
+        return sx.length >= 2 && sx === sy && restOk(x, sx) && restOk(y, sy);
+    };
+    const A = toks(a), B = toks(b);
+    if (!A.length || !B.length) return false;
+    const [sh, lg] = A.length <= B.length ? [A, B] : [B, A];
+    return sh.every(t => lg.some(u => tokEq(t, u)));
+}
+// Единая проверка «такой герой уже есть» для ВСЕХ мест, где заводится карточка (размышление, старт мира, ручное добавление):
+// похожий кандидат ищется обычным поиском, но признаётся тем же только при строгом совпадении имени
+function nnbFindSameHero(st, name) {
+    if (!st || !name) return null;
+    const mc = ensureMainCharCard(st);
+    const cand = findHeroOrNpc(st, name) || (nnbIsMainCharName(st, name, mc) ? mc : null);
+    if (cand && nnbNameStrictSame(cand.name, name)) return cand;
+    // поиск мог вернуть «не того» похожего — проверим всех строго
+    return [mc, ...(st.npcs || [])].find(h => h && nnbNameStrictSame(h.name, name)) || null;
+}
 function nnbIsMainCharName(st, name, mc = st?.mainCharCard) {
     if (!mc || !name) return false;
     if (nnbSameHeroName(mc.name, name)) return true;
@@ -2247,7 +2286,7 @@ Ties and relationships between characters:
 ${formatRelationships(st, true)}
 ` : ''}
 Commands for them (one per line, together with the rest):
-NPC [Name]: a full, detailed description for NEW characters not yet in the list above (put ALL important details of looks, biography, personality, profession and facts the player gave into one line, no limit on sentences).
+NPC [Name]: a full, detailed description for NEW characters not yet in the list above — including ones only mentioned so far (a relative, an ex, a colleague) as soon as the messages give their name or details (put ALL important details of looks, biography, personality, profession and facts the player gave into one line, no limit on sentences).
 NPCFACT [Name]: a new important fact for an EXISTING character (1–4 sentences on one line). Use it ONLY when the latest messages revealed a significant detail of biography, looks, past, personality or an important turn in relationships that is not in the card yet. This also covers what came out about them personally: what really hooks them or, on the contrary, cools them and pushes them away, what they fear, dream of, love and can't stand (write it as a living fact about the character, not as a list). The old description is NOT erased — the new fact is appended to its end (don't record petty everyday trivia from a single scene!).
 NPCSTATE [Name]: what the character is doing RIGHT NOW in the last 1–2 chat messages (always update it for ${charName} and the NPCs present in the scene! If the previous scene — intimacy, an argument, a trip — ended several posts ago, replace the old status with what the character is doing now).
 SCALE [Name]: дружба=number_or_shift | романтика=number_or_shift — update the scales if the relationship noticeably changed (for ordinary NPCs — only «дружба=...»).${relsOn ? `
@@ -2434,26 +2473,49 @@ function nnbDripState(st) {
     return st.notesDrip;
 }
 function nnbDripPickNote(st, exceptId = null) {
-    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3);
+    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3 && nnbDirectorAfterMet(st, n));
     if (!pool.length) return null;
     // реже всего подсказанная, при равенстве — самая старая
     return pool.slice().sort((a, b) => (Number(a.dripCount) || 0) - (Number(b.dripCount) || 0) || (Number(a.at) || 0) - (Number(b.at) || 0))[0];
 }
 function nnbDripInjection(st) {
     const mode = st?.direction?.notes;
+    if (mode === 'director' && !(st.notes || []).length) return nnbDirectorContinuityLine(st);
     if ((mode !== 'drip' && mode !== 'director') || !(st.notes || []).length) return '';
     const d = nnbDripState(st);
     let note = d.activeId != null ? st.notes.find(n => n.id === d.activeId && !n.ff) : null;
     if (!note) {
         note = mode === 'director' ? nnbDirectorPick(st) : nnbDripPickNote(st);
-        if (!note) return '';
+        if (!note) return mode === 'director' ? nnbDirectorContinuityLine(st) : '';
         d.activeId = note.id;
         d.shown = 0;
+        d.tech = null; d.needCheck = null; d.waitReplies = 0;
     }
     if (mode === 'director') {
+        const cont = nnbDirectorContinuityLine(st);
+        // предпосылки: странно начинать «подружка невесты», когда едва знакомы — сначала мостик
+        let ready = nnbDirectorReadiness(st, note);
+        if (ready === 'bridge') {
+            const br = note.bridge ? nnbDirectorMakeBridge(st, note, note.bridge) : null;
+            if (br) { d.activeId = br.id; d.shown = 0; d.tech = null; d.needCheck = null; d.waitReplies = 0; note = br; ready = 'ready'; }
+            else ready = 'check';
+        }
+        if (ready === 'check') {
+            if (d.needCheck !== note.id) { d.needCheck = note.id; d.waitReplies = 0; }
+            d.sinceThink = true;
+            if ((Number(d.waitReplies) || 0) < 6) return cont; // ждём, пока размышление решит: READY или BRIDGE
+        }
+        if (!d.tech || d.tech.noteId !== note.id) {
+            const t = nnbDirectorPickTechnique(st, note);
+            d.tech = { ...t, noteId: note.id };
+            const dx = nnbDirectorExtra(st);
+            dx.techHistory.push(t.id);
+            if (dx.techHistory.length > 20) dx.techHistory.splice(0, dx.techHistory.length - 20);
+        }
         const line = nnbDirectorLineOf(st, note.line);
         const meta = [line ? `line «${line.name}»` : '', note.genre ? `genre ${note.genre}` : '', note.intensity ? `intensity ${note.intensity}/5` : '', (note.chars || []).length ? `characters: ${note.chars.join(', ')}` : ''].filter(Boolean).join('; ');
-        return `[Director — next scene: ${note.text}${meta ? ` (${meta})` : ''}. Lead up to it in this or the next few replies: give it a natural trigger, match tone and pace to the genre and intensity; don't cut the current episode off abruptly and never mention the director.]`;
+        void meta;
+        return `${nnbDirectorSceneBrief(st, note, d.tech)}${cont ? `\n${cont}` : ''}`;
     }
     return `[Author's idea for the next few replies: ${note.text}. Lead up to it in this or the following replies when it fits naturally, without cutting the current episode off; never mention the notebook.]`;
 }
@@ -2488,7 +2550,10 @@ function nnbDirectorLineOf(st, tag) {
 }
 // Выбор следующей задумки: линия с наибольшим отставанием от цели; внутри — темп (после тяжёлой сцены — полегче) и реже подсказанные
 function nnbDirectorPick(st, exceptId = null) {
-    const pool = (st.notes || []).filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3);
+    const allNotes = st.notes || [];
+    const pool = allNotes.filter(n => !n.ff && n.id !== exceptId && (Number(n.dripCount) || 0) < 3
+        && !allNotes.some(b => b.bridgeFor === n.id && !b.ff) // у задумки есть мостик — сначала он
+        && nnbDirectorAfterMet(st, n)); // подводки и предыдущие сцены цепочки ещё не сыграны
     if (!pool.length) return null;
     const bal = nnbDirectorBalance(st);
     const deficitOf = id => (bal.find(b => b.id === id)?.deficit ?? -999);
@@ -2511,6 +2576,11 @@ function nnbDirectorPick(st, exceptId = null) {
         if (lastInt >= 4 && it >= 4) sc -= 15; // два тяжёлых эпизода подряд — нет
         if (lastInt && lastInt <= 2 && it >= 3) sc += 5; // после лёгкого можно поднять накал
         sc -= (Number(n.dripCount) || 0) * 10;
+        if (n.bridgeFor != null) sc += 4;
+        // пожелания игрока: выбранная линия и жанр идут первыми (пусто — режиссёр решает сам по балансу)
+        const pr = st.director?.prefs;
+        if (pr?.line && n.line === pr.line) sc += 100;
+        if (pr?.genre && n.genre === pr.genre) sc += 30;
         return sc;
     };
     const best = pool.slice().sort((a, b) => score(b) - score(a) || (Number(a.at) || 0) - (Number(b.at) || 0))[0];
@@ -2524,6 +2594,15 @@ function nnbDirectorRecord(st, n) {
     if (d.history.length > 200) d.history.splice(0, d.history.length - 200);
 }
 // Импорт из «ИИ-Режиссёр v4» (JSON: lines / ideas / history / contextSummary)
+// Поля расписанной сцены из импортируемого объекта (если они там есть)
+function nnbSceneFieldsFrom(it) {
+    const o = {};
+    for (const k of ['place', 'mood', 'pace', 'link', 'avoid']) if (it?.[k] && String(it[k]).trim()) o[k] = String(it[k]).trim();
+    if (Array.isArray(it?.beats) && it.beats.length) o.beats = it.beats.map(String).filter(Boolean);
+    if (Number(it?.dynamics) > 0) o.dynamics = Math.min(5, Number(it.dynamics));
+    if (['main', 'bridge', 'after'].includes(it?.kind)) o.kind = it.kind;
+    return o;
+}
 function nnbDirectorImport(st, json) {
     const data = typeof json === 'string' ? JSON.parse(json) : json;
     if (!data || !Array.isArray(data.ideas)) throw new Error('В JSON нет списка ideas');
@@ -2535,10 +2614,437 @@ function nnbDirectorImport(st, json) {
     for (const it of data.ideas) {
         const title = String(it.title || '').trim();
         if (!title || st.notes.some(n => (n.title || '') === title)) continue;
-        st.notes.push({ id: st.nextId++, tag: 'режиссёр', title, text: it.text ? `${title}. ${String(it.text).trim()}` : title, line: it.line || '', genre: it.genre || '', intensity: Number(it.intensity) || 3, chars: Array.isArray(it.characters) ? it.characters : [], manual: true, at: ctx().chat?.length ?? 0 });
+        st.notes.push({ id: st.nextId++, tag: 'режиссёр', title, text: it.text ? `${title}. ${String(it.text).trim()}` : title, line: it.line || '', genre: it.genre || '', intensity: Number(it.intensity) || 3, chars: Array.isArray(it.characters) ? it.characters : [], needs: String(it.needs || ''), anchor: String(it.anchor || ''), bridge: String(it.bridge || ''), ...nnbSceneFieldsFrom(it), manual: true, at: ctx().chat?.length ?? 0 });
         added++;
     }
     return added;
+}
+
+// ===== 🎬 Режиссёр 2: генерация идей без клише, предпосылки и «мостики», приёмы сценаристов, слежка за логикой =====
+// Клише, которые модели выдают первыми. Используются и в запросе (запрет), и при отборе (фильтр).
+const NNB_DIR_CLICHES = [
+    ['a sudden attack, ambush or robbery by strangers', /нападени|засад|ограблен|напали/i],
+    ['a mysterious stranger appears with a warning or a secret', /загадочн\S* (?:незнаком|странник|гость)|таинственн\S* незнаком/i],
+    ['amnesia or lost memory', /амнези|потер\S* памят/i],
+    ['someone accidentally overhears a conversation and misunderstands', /подслуш|случайно услыш/i],
+    ['a jealous ex suddenly shows up', /бывш\S* (?:появля|возвраща|объявля)|ревнив\S* бывш/i],
+    ['a storm, blackout or broken car traps them together', /гроз[аеуы]|шторм|отключ\S* (?:свет|электрич)|застрял\S* вместе|сломал\S* машин/i],
+    ['only one bed / forced to share a room', /одн[аой] кроват|делить (?:комнат|номер|постел)/i],
+    ['a convenient injury or illness so one nurses the other', /ухаживает за (?:ним|ней|больн)|заболел\S* и|травм\S* и (?:он|она) ухаж/i],
+    ['a kidnapping', /похищ|похитил/i],
+    ['a letter, diary or photo found by chance reveals a secret', /(?:находит|нашл\S*|наход\S*) (?:старое |чужое |тайное )?(?:письм|дневник|фотограф)/i],
+    ['a party where someone gets drunk and confesses', /напива\S* и признаёт|пьян\S* признан/i],
+    ['fake dating / pretending to be a couple', /притвор\S* пар|фиктивн\S* (?:отнош|свидан|брак)/i],
+];
+// Приёмы сценаристов и писателей: режиссёр подбирает один под момент и подсказывает рассказчику одной строкой
+const NNB_DIR_TECHNIQUES = {
+    goal: { name: 'Цель и препятствие', hint: 'Give a character in the scene a concrete want right now and put a specific obstacle in the way; the scene turns on whether they get it.' },
+    yesbut: { name: '«Да, но…» / «нет, и ещё…»', hint: "No clean wins: an attempt succeeds at a cost ('yes, but') or fails and makes things worse ('no, and')." },
+    setup: { name: 'Ружьё Чехова — подвесить', hint: 'Casually plant one concrete detail (an object, a habit, a remark) that can matter later; do not draw attention to it.' },
+    payoff: { name: 'Ружьё Чехова — выстрелить', hint: 'Pay off a detail planted earlier, so it suddenly matters: {x}.' },
+    callback: { name: 'Отзыв', hint: 'Echo an earlier moment of the story in a new light (a phrase, an object, a place): {x}.' },
+    irony: { name: 'Драматическая ирония', hint: 'Let the reader notice something a character does not know (through a detail or another character), and let the character walk right past it.' },
+    clock: { name: 'Тикающие часы', hint: 'Add a time limit or a deadline that raises the stakes of what the characters want now.' },
+    subtext: { name: 'Подтекст', hint: 'Feelings come through actions, objects and what is left unsaid, not stated outright.' },
+    offscreen: { name: 'Мир живёт сам', hint: 'Show the result of something a side character did off-screen in pursuit of their own goal.' },
+    reversal: { name: 'Перелом', hint: 'Turn the scene: a new fact or choice flips its direction (hope to worry or the reverse), plausibly following from what is already established.' },
+    breather: { name: 'Передышка', hint: 'After the tension, give a quiet, warm or funny beat; let the characters breathe and react to what happened.' },
+};
+const NNB_DIR_TECH_BY_GENRE = {
+    comedy: ['yesbut', 'subtext', 'setup', 'callback', 'offscreen', 'irony'],
+    fluff: ['subtext', 'callback', 'setup', 'yesbut', 'offscreen'],
+    slice: ['subtext', 'offscreen', 'setup', 'callback', 'yesbut', 'goal'],
+    drama: ['goal', 'subtext', 'irony', 'reversal', 'yesbut', 'callback'],
+    angst: ['subtext', 'irony', 'reversal', 'goal', 'callback'],
+    plot: ['goal', 'clock', 'reversal', 'irony', 'yesbut', 'offscreen'],
+    chaos: ['yesbut', 'clock', 'reversal', 'offscreen', 'goal'],
+};
+
+function nnbDirectorContinuityLine(st) {
+    const c = (st?.director?.continuity || []).filter(Boolean);
+    return c.length ? `[Continuity — the next replies must not contradict: ${c.join('; ')}]` : '';
+}
+function nnbDirectorExtra(st) {
+    const d = nnbDirector(st);
+    if (!Array.isArray(d.setups)) d.setups = [];
+    if (!Array.isArray(d.continuity)) d.continuity = [];
+    if (!Array.isArray(d.techHistory)) d.techHistory = [];
+    return d;
+}
+
+// Линия, которой нужны новые идеи: самая отстающая, и в запасе под неё ничего нет
+function nnbDirectorNeedIdeas(st) {
+    const pool = (st.notes || []).filter(n => !n.ff && (Number(n.dripCount) || 0) < 3 && !n.bridgeFor);
+    const bal = nnbDirectorBalance(st).sort((a, b) => b.deficit - a.deficit);
+    if (!bal.length) return null;
+    const prefLine = st.director?.prefs?.line && bal.find(b => b.id === st.director.prefs.line);
+    const top = prefLine || bal[0];
+    if (!pool.length) return top.id;
+    const prefGenre = st.director?.prefs?.genre;
+    if (prefGenre && !pool.some(n => n.line === top.id && n.genre === prefGenre)) return top.id; // под выбранный жанр запаса нет
+    return pool.some(n => n.line === top.id) ? null : top.id;
+}
+
+// Условия задумки «Name: дружба ≥ N» / «романтика ≥ N» — проверяем сами по шкалам блокнота, без модели.
+// Возвращает: 'ready' | 'bridge' (условия не выполнены) | 'check' (условия словами — пусть оценит размышление)
+function nnbDirectorReadiness(st, note) {
+    if (!note) return 'ready';
+    if (note.bridgeFor != null || note.kind === 'after') return 'ready';
+    if ((Number(note.bridges) || 0) >= 3) return 'ready'; // три мостика уже было — хватит подводить
+    const needs = String(note.needs || '').trim();
+    if (!needs || /^[—–-]$/.test(needs)) return note.ready === true || (Number(note.intensity) || 3) <= 2 ? 'ready' : 'check';
+    const re = /([^:;,()\n]{2,40}?)\s*[:—–-]\s*(дружба|романтика|friendship|romance)\s*(?:≥|>=|>|=>)\s*(-?\d{1,3})/gi;
+    let m, parsed = 0, unmet = 0;
+    while ((m = re.exec(needs))) {
+        const hero = findHeroOrNpc(st, m[1].trim());
+        if (!hero) continue;
+        parsed++;
+        const key = /^(?:романтика|romance)$/i.test(m[2]) ? 'romance' : 'friendship';
+        if ((Number(hero[key]) || 0) < Number(m[3])) unmet++;
+    }
+    if (unmet) return 'bridge'; // шкалы проверяем всегда — даже после сыгранных подводок
+    const rest = needs.replace(re, '').replace(/[;,.\s—–-]+/g, '');
+    return (parsed && !rest) || note.ready === true ? 'ready' : 'check';
+}
+
+// Мостик: небольшое событие, которое подводит к задумке (сблизит, познакомит, даст узнать нужное)
+function nnbDirectorMakeBridge(st, note, text) {
+    const t = String(text || '').trim();
+    if (!note || !t) return null;
+    const existing = (st.notes || []).find(n => n.bridgeFor === note.id);
+    if (existing) return existing;
+    note.bridges = (Number(note.bridges) || 0) + 1;
+    const len = ctx().chat?.length ?? 0;
+    const br = {
+        id: st.nextId++, tag: 'режиссёр', title: `Подводка к «${String(note.title || note.text || '').slice(0, 50)}»`, text: t,
+        line: note.line || '', genre: ['angst', 'drama'].includes(note.genre) ? 'slice' : (note.genre || 'slice'),
+        intensity: Math.max(1, Math.min(3, (Number(note.intensity) || 3) - 1)), chars: note.chars || [],
+        bridgeFor: note.id, ready: true, manual: true, at: len,
+    };
+    st.notes.push(br);
+    return br;
+}
+
+function nnbDirectorPickTechnique(st, note) {
+    const d = nnbDirectorExtra(st);
+    const recent = d.techHistory.slice(-3);
+    const len = ctx().chat?.length ?? 0;
+    const lastInt = Number(st.notesDrip?.lastShown?.intensity) || 0;
+    const it = Number(note?.intensity) || 3;
+    const order = [];
+    if (lastInt >= 4 && it <= 2) order.push('breather');
+    const ripe = d.setups.filter(x => !x.used && len - (Number(x.at) || 0) >= 6);
+    if (ripe.length) order.push('payoff');
+    order.push(...(NNB_DIR_TECH_BY_GENRE[note?.genre] || ['goal', 'yesbut', 'subtext', 'reversal', 'setup', 'offscreen']));
+    if (it >= 3 && !order.includes('clock')) order.push('clock');
+    if (d.history.length >= 4 && !order.includes('callback')) order.push('callback');
+    const cbScene = d.history[Math.floor(d.history.length / 2)];
+    const fill = { payoff: ripe[0]?.text || '', callback: cbScene ? `«${cbScene.title}»` : '' };
+    const usable = order.filter(x => !(x in fill) || fill[x]);
+    const id = usable.find(x => !recent.includes(x)) || usable[0] || 'goal';
+    const x = fill[id] || '';
+    return { id, setupText: id === 'payoff' ? x : '', hint: NNB_DIR_TECHNIQUES[id].hint.replace('{x}', x) };
+}
+
+// Отдельный запрос «придумай идеи» — только когда под отстающую линию в запасе пусто.
+// Приёмы против шаблонности: опора на материал истории, «первое очевидное — в корзину», «неожиданно, но неизбежно», чёрный список, отбор лучших.
+async function nnbDirectorGenerateIdeas(st, lineId) {
+    const d = nnbDirectorExtra(st);
+    const line = d.lines.find(l => l.id === lineId) || d.lines[0];
+    if (!line) return 0;
+    const names = storyNames();
+    const cut = (t, n) => String(t || '').trim().slice(0, n);
+    const npcBrief = [st.mainCharCard, ...(st.npcs || [])].filter(Boolean).slice(0, 14)
+        .map(n => `• ${n.name}: ${cut(n.card, 260).replace(/\s+/g, ' ')}${n.status ? ` | now: ${cut(n.status, 120)}` : ''} | дружба ${Number(n.friendship) || 0}${Number(n.romance) ? `, романтика ${Number(n.romance)}` : ''}${n.fear ? ` | fear: ${cut(n.fear, 80)}` : ''}${n.dream ? ` | dream: ${cut(n.dream, 80)}` : ''}`).join('\n');
+    const secrets = (st.intrigues || []).slice(0, 6).map(it => `• ${cut(it.text, 160)}`).join('\n');
+    const arcs = (st.arcs || []).slice(0, 6).map(a => `• ${a.who}: ${cut(a.text, 140)}`).join('\n');
+    const chron = (st.time?.timeline || []).slice(-8).map(e => `• ${cut(e.text, 200)}`).join('\n');
+    const played = d.history.slice(-15).map(h => `• ${h.title}${h.genre ? ` (${h.genre})` : ''}`).join('\n');
+    const queued = (st.notes || []).filter(n => !n.ff).slice(0, 12).map(n => `• ${cut(n.title || n.text, 100)}`).join('\n');
+    const setups = d.setups.filter(x => !x.used).map(x => `• ${x.text}`).join('\n');
+    const recent = (ctx().chat || []).filter(m => !m.is_system).slice(-3).map(m => `${m.name}: ${cut(stripRoleplayHeaderBracketsAndWeirdSpaces(m.mes), 1200)}`).join('\n\n');
+    const otherLines = d.lines.map(l => `${l.id} «${l.name}»`).join(', ');
+    const prompt = `${SELF_CONTAINED_PROMPT_MARKER}[OOC: You are the director of an ongoing roleplay story between ${names.user} (the player) and ${names.char}. Invent the next scene ideas for the story line «${line.name}» (id ${line.id}; all lines: ${otherLines}).
+
+${nnbDirectorPrefsText(st) ? `${nnbDirectorPrefsText(st)}\n\n` : ''}STORY MATERIAL — every idea must grow out of something here:
+${cut(st.storySummary || d.summary, 1500) ? `Summary: ${cut(st.storySummary || d.summary, 1500)}\n` : ''}Characters:
+${npcBrief || '(none)'}
+${secrets ? `Unresolved secrets:\n${secrets}\n` : ''}${arcs ? `Character arcs:\n${arcs}\n` : ''}${setups ? `Details planted earlier, waiting to matter:\n${setups}\n` : ''}${chron ? `Recent chronicle:\n${chron}\n` : ''}${played ? `Scenes already played (do not repeat them):\n${played}\n` : ''}${queued ? `Ideas already queued (do not duplicate):\n${queued}\n` : ''}Latest messages:
+${recent || '(none)'}
+
+HOW TO WORK (screenwriters' rules):
+1. First write 4 lines «OBVIOUS: …» — the first, most predictable moves this genre suggests. They are now BANNED; do not use them or their variations.
+2. Also banned (overused clichés): ${NNB_DIR_CLICHES.map(c => c[0]).join('; ')}.
+3. Then write 6 main scene ideas. Each must be anchored in a concrete element of the material above (a secret, a fear or dream, a planted detail, a side character's own goal, a tension in a relationship, an unfinished promise) — name it in ANCHOR. Aim for «unexpected, yet inevitable»: surprising, but following from what is established. Give the scene a want and an obstacle; prefer small, specific, personal events over big external catastrophes. Side characters may act on their own goals.
+4. Respect where relationships stand now: if a scene needs closeness, trust or knowledge the characters don't have yet, add a small lead-up scene for it (bridge for m).
+5. Finally write «BEST: n, n, n» — the three strongest main scenes by: anchored, fresh, fits the current moment, gives the player something to do.
+
+FORMAT — field names in English, all content in Russian, one block per scene (LINE is always ${line.id}); add a line «ANCHOR: …» to every main scene:
+${NNB_SCENE_FORMAT}
+Reply only with the OBVIOUS lines, SCENE blocks and the BEST line.]`;
+    const raw = String(await nnbDirectorGenerate(prompt, 8192) || '');
+    const obvious = [...raw.matchAll(/^\s*OBVIOUS\s*[:：]\s*(.+)$/gim)].map(m => m[1].toLowerCase());
+    const scenes = nnbDirectorParseScenes(raw).map(sc => ({ ...sc, line: sc.line || line.id }));
+    const mains = scenes.filter(sc => sc.kind === 'main');
+    const bestNums = (raw.match(/^\s*BEST\s*[:：]\s*(.+)$/im)?.[1] || '').match(/\d+/g)?.map(Number) || [];
+    const words = t => new Set(String(t).toLowerCase().match(/[а-яёa-z]{5,}/g) || []);
+    const tooClose = (a, b) => { const A = words(a), B = words(b); if (!A.size || !B.size) return false; let k = 0; A.forEach(w => { if (B.has(w)) k++; }); return k / Math.min(A.size, B.size) >= 0.5; };
+    const existing = [...(st.notes || []), ...d.history].map(n => n.title || n.text || '');
+    const body = sc => `${sc.title || ''} ${(sc.beats || []).join(' ')} ${sc.text || ''}`;
+    const good = mains.filter(sc => body(sc).trim() && String(sc.anchor || '').replace(/[—–-]/g, '').trim()
+        && !NNB_DIR_CLICHES.some(c => c[1].test(body(sc)))
+        && !obvious.some(o => tooClose(o, body(sc)))
+        && !existing.some(e => tooClose(e, `${sc.title || ''} ${(sc.beats || [])[0] || ''}`)));
+    const ranked = good.sort((a, b) => (bestNums.includes(b.n) ? 1 : 0) - (bestNums.includes(a.n) ? 1 : 0));
+    const keepN = new Set(ranked.slice(0, 3).map(sc => sc.n));
+    const keep = scenes.filter(sc => keepN.has(sc.n) || (sc.kind !== 'main' && keepN.has(sc.forN)));
+    const added = nnbDirectorAddScenes(st, keep, { line: line.id, auto: true });
+    const ideas = mains;
+    const take = added.filter(n => n.kind === 'main');
+    d.lastGen = { at: Date.now(), line: line.id, got: ideas.length, kept: take.length, ids: added.map(n => n.id) };
+    console.log('[npc_notebook] director ideas:', ideas.length, 'generated,', take.length, 'kept');
+    return take.length;
+}
+
+// ===== 🎬 Подключение режиссёра: тяжёлая работа (придумать сцены, разложить задумки) идёт через своё подключение =====
+function nnbDirectorSourceLabel(src = settings().directorSource) {
+    if (!src || src === 'main') return 'основное подключение чата';
+    if (src === 'notebook') return 'как у блокнота';
+    if (src === 'custom-api') return 'свой API блокнота';
+    const p = connectionProfiles().find(x => x.id === src);
+    return p ? `профиль «${p.name}»` : 'профиль (удалён)';
+}
+async function nnbDirectorGenerate(prompt, maxTokens = 8192) {
+    const src = String(settings().directorSource || 'main');
+    if (src === 'notebook') return quietGenerate(prompt, maxTokens);
+    if (src === 'main') {
+        nnbForceMainChat = true;
+        try { return await quietGenerate(prompt, maxTokens); } finally { nnbForceMainChat = false; }
+    }
+    try {
+        const res = await generateViaStandaloneTextSource(prompt, maxTokens, src);
+        if (String(res || '').trim()) return res;
+    } catch (e) {
+        if (nnbIsStopError(e)) throw e;
+        console.warn('[npc_notebook] director source failed, falling back to the main chat:', e);
+        toastr.warning(`Подключение режиссёра не ответило (${escapeHtml(e?.message || e)}) — использую основное подключение чата`, '🎬 Режиссёр');
+    }
+    nnbForceMainChat = true;
+    try { return await quietGenerate(prompt, maxTokens); } finally { nnbForceMainChat = false; }
+}
+// Пожелания игрока режиссёру (на этот чат): шёпот, жанр, линия. Пусто — режиссёр решает сам.
+function nnbDirectorPrefs(st) {
+    const d = nnbDirector(st);
+    if (!d.prefs || typeof d.prefs !== 'object') d.prefs = { whisper: '', genre: '', line: '' };
+    return d.prefs;
+}
+// Для какой линии придумывать: выбранная игроком → где кончились идеи → самая отстающая (одно правило для всех кнопок)
+function nnbDirectorTargetLine(st) {
+    return nnbDirectorPrefs(st).line || nnbDirectorNeedIdeas(st) || nnbDirectorBalance(st).sort((a, b) => b.deficit - a.deficit)[0]?.id;
+}
+function nnbDirectorPrefsText(st) {
+    const p = nnbDirectorPrefs(st);
+    const ln = p.line ? nnbDirectorLineOf(st, p.line) : null;
+    const out = [];
+    if (String(p.whisper || '').trim()) out.push(`The player's wish (follow it): ${String(p.whisper).trim()}`);
+    if (p.genre) out.push(`Preferred genre now: ${p.genre}`);
+    if (ln) out.push(`Preferred story line now: ${ln.id} «${ln.name}»`);
+    return out.join('\n');
+}
+
+// ===== 🎬 Сцены режиссёра: единый формат для «разложить сырые задумки», генерации идей и подачи рассказчику =====
+// Формат ответа модели (один и тот же для разбора и генерации):
+// SCENE n: main | bridge for m | after for m      (+ необязательно «; after k, l» — что должно быть сыграно раньше)
+// TITLE / LINE / GENRE / MOOD / STAKES / DYNAMICS / WHEN / WHO / PACE / LINK / BEAT (несколько) / AVOID / NEEDS / ANCHOR
+const NNB_SCENE_FORMAT = `SCENE n: main | bridge for m | after for m   (bridge = a lead-up scene that must be played before main scene m; after = a consequence scene played after scene m; you may add «; after k» if this scene must follow scene k)
+TITLE: short title
+LINE: story line id
+GENRE: one of ${NNB_DIR_GENRES.join(', ')}
+MOOD: genre and atmosphere in one phrase
+STAKES: drama/stakes 1-5
+DYNAMICS: pace/sharpness 1-5
+WHEN: place and time
+WHO: participants, comma-separated
+PACE: how to pace it (e.g. don't close the scene in one post)
+LINK: how it connects to what happened before (the bridge into it)
+BEAT: one required beat or accent (3–5 BEAT lines, in order)
+AVOID: what to avoid
+NEEDS: «Name: дружба ≥ N» / «Name: романтика ≥ N», a short condition in words, or —
+END`;
+
+function nnbDirectorParseScenes(raw) {
+    const out = [];
+    let cur = null;
+    for (const lineRaw of String(raw || '').split(/\r?\n/)) {
+        const line = lineRaw.trim().replace(/^[-*•>\s]+/, '').replace(/\*\*/g, '');
+        if (!line) continue;
+        const h = line.match(/^SCENE\s*(\d+)\s*[:：.]?\s*(.*)$/i);
+        if (h) {
+            cur = { n: Number(h[1]), kind: 'main', forN: null, afterN: [], beats: [] };
+            const meta = h[2].toLowerCase();
+            const km = meta.match(/\b(bridge|after|consequence|main)\b(?:\s*for\s*#?(\d+))?/);
+            if (km) { cur.kind = km[1] === 'consequence' ? 'after' : km[1]; if (km[2]) cur.forN = Number(km[2]); }
+            const am = meta.match(/;\s*after\s*#?([\d,\s#]+)/);
+            if (am) cur.afterN = (am[1].match(/\d+/g) || []).map(Number);
+            out.push(cur);
+            continue;
+        }
+        if (!cur) continue;
+        if (/^END\b/i.test(line)) { cur = null; continue; }
+        const f = line.match(/^([A-Z]+)\s*[:：]\s*(.*)$/);
+        if (!f) { if (cur.beats.length) cur.beats[cur.beats.length - 1] += ` ${line}`; continue; }
+        const key = f[1].toUpperCase();
+        const val = f[2].trim();
+        const map = { TITLE: 'title', LINE: 'line', GENRE: 'genre', MOOD: 'mood', WHEN: 'place', WHO: 'who', PACE: 'pace', LINK: 'link', AVOID: 'avoid', NEEDS: 'needs', ANCHOR: 'anchor', TEXT: 'text', SCENE: 'text' };
+        if (key === 'BEAT') cur.beats.push(val);
+        else if (key === 'STAKES') cur.stakes = Number(val.match(/\d/)?.[0]) || 0;
+        else if (key === 'DYNAMICS') cur.dynamics = Number(val.match(/\d/)?.[0]) || 0;
+        else if (map[key]) cur[map[key]] = val;
+    }
+    return out.filter(sc => sc.title || sc.beats.length || sc.text);
+}
+
+// Сцены → задумки блокнота со связями: подводка до главной, последствие после
+function nnbDirectorAddScenes(st, scenes, extra = {}) {
+    const d = nnbDirectorExtra(st);
+    const len = ctx().chat?.length ?? 0;
+    const byN = new Map();
+    const dash = v => /^[—–-]?$/.test(String(v || '').trim()) ? '' : String(v).trim();
+    for (const sc of scenes) {
+        const ln = nnbDirectorLineOf(st, sc.line) || (extra.line ? d.lines.find(l => l.id === extra.line) : null);
+        const genre = String(sc.genre || '').toLowerCase().match(/[a-z]+/)?.[0] || '';
+        const note = {
+            id: st.nextId++, tag: 'режиссёр', title: sc.title || String(sc.beats[0] || sc.text || '').slice(0, 70),
+            text: sc.text || [sc.title, ...(sc.beats || [])].filter(Boolean).join('. ').slice(0, 600),
+            line: ln ? ln.id : '', genre: NNB_DIR_GENRES.includes(genre) ? genre : '', mood: dash(sc.mood),
+            intensity: Math.max(1, Math.min(5, Number(sc.stakes) || 3)), dynamics: Math.max(0, Math.min(5, Number(sc.dynamics) || 0)),
+            place: dash(sc.place), chars: dash(sc.who) ? sc.who.split(/[,;]/).map(x => x.trim()).filter(Boolean) : [],
+            pace: dash(sc.pace), link: dash(sc.link), beats: (sc.beats || []).map(b => b.trim()).filter(Boolean), avoid: dash(sc.avoid),
+            needs: dash(sc.needs), anchor: dash(sc.anchor), kind: sc.kind || 'main', manual: true, at: len, ...(extra.auto ? { auto: true } : {}),
+        };
+        if (note.kind !== 'main') note.ready = true;
+        st.notes.push(note);
+        byN.set(sc.n, { sc, note });
+    }
+    for (const { sc, note } of byN.values()) {
+        const after = new Set();
+        (sc.afterN || []).forEach(k => { const t = byN.get(k)?.note; if (t && t !== note) after.add(t.id); });
+        if (sc.kind === 'after' && sc.forN != null) { const t = byN.get(sc.forN)?.note; if (t) after.add(t.id); }
+        if (sc.kind === 'bridge' && sc.forN != null) {
+            const main = byN.get(sc.forN)?.note;
+            if (main) { note.bridgeFor = main.id; main.after = [...new Set([...(main.after || []), note.id])]; main.ready = true; main.bridges = (Number(main.bridges) || 0) + 1; }
+        }
+        if (after.size) note.after = [...new Set([...(note.after || []), ...after])];
+    }
+    return [...byN.values()].map(x => x.note);
+}
+
+// Сцена разблокирована, если всё из after уже сыграно (или удалено)
+function nnbDirectorAfterMet(st, n) {
+    if (!Array.isArray(n?.after) || !n.after.length) return true;
+    return n.after.every(id => !(st.notes || []).some(x => x.id === id && !x.ff));
+}
+
+// Подача сцены рассказчику — развёрнутая «режиссёрская сцена»
+function nnbDirectorSceneBrief(st, note, tech) {
+    const line = nnbDirectorLineOf(st, note.line);
+    const L = [];
+    L.push("[DIRECTOR'S SCENE — lead the story into it naturally over this and the next few replies; don't cut the current episode off abruptly; never mention the director]");
+    if (note.place) L.push(`Place and time: ${note.place}`);
+    if ((note.chars || []).length) L.push(`Participants: ${note.chars.join(', ')}`);
+    if (line) L.push(`Story line: ${line.name}`);
+    const mood = note.mood || note.genre;
+    if (mood) L.push(`Genre and mood: ${mood}`);
+    L.push(`Stakes/drama: ${Number(note.intensity) || 3}/5${note.dynamics ? ` | Dynamics/sharpness: ${note.dynamics}/5` : ''}`);
+    L.push(`Pace: ${note.pace || "don't close the scene in one post — let it unfold over several replies, leaving room for the player's reactions"}`);
+    if (note.link) L.push(`Bridge: ${note.link}`);
+    if ((note.beats || []).length) {
+        L.push('Scene beats and required accents:');
+        note.beats.forEach((b, i) => L.push(`${i + 1}. ${b}`));
+    } else L.push(`Scene: ${note.text}`);
+    if (note.avoid) L.push(`Avoid: ${note.avoid}`);
+    if (tech?.hint) L.push(`Technique: ${tech.hint}`);
+    return L.join('\n');
+}
+
+// Сырые задумки (полотно текста или JSON) → режиссёр раскладывает по линиям и достраивает подводки и последствия
+async function nnbDirectorIntake(st, rawText, onProgress = null) {
+    const d = nnbDirectorExtra(st);
+    const names = storyNames();
+    let text = String(rawText || '').trim();
+    if (!text) return [];
+    try { const j = JSON.parse(text); text = nnbDirectorJsonToText(j) || text; } catch (e) { /* не JSON — это сырой текст */ }
+    // большое полотно — частями по абзацам (~3500 знаков), чтобы ответ модели не обрезался
+    const parts = [];
+    let buf = '';
+    for (const para of text.split(/\n\s*\n|\n(?=\s*(?:\d+[.)]|[-•*])\s)/)) {
+        if (buf && (buf.length + para.length) > 3500) { parts.push(buf); buf = ''; }
+        buf += (buf ? '\n\n' : '') + para.trim();
+    }
+    if (buf) parts.push(buf);
+    const cut = (t, n) => String(t || '').trim().slice(0, n);
+    const heroes = [st.mainCharCard, ...(st.npcs || [])].filter(Boolean).slice(0, 16)
+        .map(n => `• ${n.name}: дружба ${Number(n.friendship) || 0}${Number(n.romance) ? `, романтика ${Number(n.romance)}` : ''}${n.status ? ` | now: ${cut(n.status, 100)}` : ''}`).join('\n');
+    const lines = d.lines.map(l => `${l.id} «${l.name}»`).join(', ');
+    const played = d.history.slice(-12).map(h => `• ${h.title}`).join('\n');
+    const queued = (st.notes || []).filter(n => !n.ff).slice(0, 15).map(n => `• ${cut(n.title || n.text, 90)}`).join('\n');
+    const all = [];
+    for (let i = 0; i < parts.length; i++) {
+        if (onProgress) onProgress(i + 1, parts.length);
+        const prompt = `${SELF_CONTAINED_PROMPT_MARKER}[OOC: You are the director of an ongoing roleplay between ${names.user} (the player) and ${names.char}. The player has dumped raw scene ideas below (possibly several in one text, messy, unordered). Lay them out carefully:
+1. Split them into separate scenes; keep everything the player wrote (names, details, jokes, «avoid» notes) — do not water it down.
+2. Give each scene a story line (${lines}), genre, stakes and dynamics, place/time, participants, pace, 3–5 concrete beats and what to avoid.
+3. Check where relationships stand now (below). If a scene needs closeness, trust, an acquaintance or knowledge the characters don't have yet, ADD lead-up scenes (bridge for m) that make it feel earned. If a scene clearly leaves consequences (a fallout, a reaction, a change in a relationship), ADD a consequence scene (after for m). Keep added scenes small and specific, anchored in the material; no stock twists (${NNB_DIR_CLICHES.slice(0, 6).map(c => c[0]).join('; ')}).
+4. If one idea must happen before another, mark it with «; after k».
+
+Current state:
+${heroes || '(no characters yet)'}
+${st.time?.date ? `Story date: ${st.time.date}\n` : ''}${played ? `Already played:\n${played}\n` : ''}${queued ? `Already queued:\n${queued}\n` : ''}
+${nnbDirectorPrefsText(st) ? `${nnbDirectorPrefsText(st)}\n` : ''}RAW IDEAS (part ${i + 1}/${parts.length}):
+${parts[i]}
+
+FORMAT — field names in English, all content in Russian, one block per scene:
+${NNB_SCENE_FORMAT}
+Reply only with SCENE blocks.]`;
+        const raw = String(await nnbDirectorGenerate(prompt, 8192) || '');
+        const scenes = nnbDirectorParseScenes(raw);
+        all.push(...nnbDirectorAddScenes(st, scenes));
+    }
+    return all;
+}
+
+// JSON задумок любого вида → текст для разбора (или null, если это не задумки)
+function nnbDirectorJsonToText(j) {
+    const arr = Array.isArray(j) ? j : (Array.isArray(j?.ideas) ? j.ideas : Array.isArray(j?.notes) ? j.notes : Array.isArray(j?.scenes) ? j.scenes : null);
+    if (!arr) return null;
+    return arr.map((it, i) => {
+        if (typeof it === 'string') return `${i + 1}. ${it}`;
+        const t = it.title || it.name || it.заголовок || '';
+        const body = it.text || it.description || it.desc || it.scene || it.summary || it.текст || '';
+        const extra = ['line', 'genre', 'intensity', 'characters', 'participants', 'needs', 'avoid', 'location', 'time']
+            .filter(k => it[k] != null && String(it[k]).trim()).map(k => `${k}: ${Array.isArray(it[k]) ? it[k].join(', ') : it[k]}`).join('; ');
+        return `${i + 1}. ${t}${t && body ? ' — ' : ''}${body}${extra ? ` (${extra})` : ''}`;
+    }).join('\n\n');
+}
+
+// Импорт «как есть» без модели: формат ИИ-Режиссёра v4, массив идей или просто строки
+function nnbDirectorImportAny(st, txt) {
+    const s = String(txt || '').trim();
+    let j = null;
+    try { j = JSON.parse(s); } catch (e) { j = null; }
+    if (j && !Array.isArray(j) && Array.isArray(j.ideas)) return nnbDirectorImport(st, j);
+    const arr = Array.isArray(j) ? j : (Array.isArray(j?.notes) ? j.notes : Array.isArray(j?.scenes) ? j.scenes : null);
+    if (arr) return nnbDirectorImport(st, { ideas: arr.map(it => typeof it === 'string' ? { title: it.slice(0, 80), text: it.length > 80 ? it : '' } : {
+        title: it.title || it.name || it.заголовок || String(it.text || it.description || '').slice(0, 80),
+        text: it.text || it.description || it.desc || it.scene || it.summary || it.текст || '',
+        line: it.line || '', genre: it.genre || '', intensity: it.intensity || it.stakes || 3,
+        characters: it.characters || it.participants || it.chars || [], needs: it.needs || '', anchor: it.anchor || '', bridge: it.bridge || '',
+        ...nnbSceneFieldsFrom(it),
+    }) });
+    if (j) throw new Error('В JSON не нашлось списка задумок (ideas / notes / scenes или массив)');
+    // не JSON: одна строка/абзац — одна задумка
+    const items = s.split(/\n\s*\n|\n(?=\s*(?:\d+[.)]|[-•*])\s)/).map(x => x.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim()).filter(Boolean);
+    return nnbDirectorImport(st, { ideas: items.map(t => { const title = t.split(/[.!?\n]/)[0].slice(0, 80); return { title, text: t.slice(title.length).replace(/^[.!?\s]+/, '') }; }) });
 }
 
 // пришёл ответ рассказчика: задумка была показана ещё раз; после NNB_DRIP_SPAN ответов — следующая
@@ -2546,6 +3052,7 @@ function nnbDripAfterReply(st) {
     if (st?.direction?.notes !== 'drip' && st?.direction?.notes !== 'director') return;
     const d = nnbDripState(st);
     if (d.activeId == null) return;
+    if (st.direction.notes === 'director' && d.needCheck === d.activeId && (Number(d.waitReplies) || 0) < 6) { d.waitReplies = (Number(d.waitReplies) || 0) + 1; return; } // задумка ещё не показана — ждёт проверки
     d.shown += 1;
     if (d.shown < NNB_DRIP_SPAN) return;
     const note = (st.notes || []).find(n => n.id === d.activeId);
@@ -2554,6 +3061,7 @@ function nnbDripAfterReply(st) {
     const next = st.direction.notes === 'director' ? nnbDirectorPick(st, d.activeId) : nnbDripPickNote(st, d.activeId);
     d.activeId = next ? next.id : null;
     d.shown = 0;
+    d.tech = null; d.needCheck = null; d.waitReplies = 0;
     d.sinceThink = true; // размышление проверит, сбылась ли задумка (DONE)
 }
 
@@ -2856,9 +3364,9 @@ function buildStandaloneContextPrompt(taskPrompt) {
     return parts.join('\n\n');
 }
 
-async function generateViaStandaloneTextSource(taskPrompt, maxTokens = 4096) {
+async function generateViaStandaloneTextSource(taskPrompt, maxTokens = 4096, srcOverride = null) {
     const s = settings();
-    const src = String(s.textSource || '').trim();
+    const src = String(srcOverride ?? s.textSource ?? '').trim();
     if (!src) return null;
 
     const isSelfContained = String(taskPrompt || '').includes(SELF_CONTAINED_PROMPT_MARKER);
@@ -2907,6 +3415,7 @@ async function generateViaStandaloneTextSource(taskPrompt, maxTokens = 4096) {
 }
 
 let ownPromptIsSelfContained = false;
+let nnbForceMainChat = false; // режиссёр на «основном подключении»: мимо отдельной быстрой модели блокнота
 async function quietGenerateOnce(prompt, maxTokens = 0) {
     const c = ctx();
     const s = settings();
@@ -2920,7 +3429,7 @@ async function quietGenerateOnce(prompt, maxTokens = 0) {
     c.setExtensionPrompt(ACTION_INJECT_KEY, '', POS_IN_CHAT, 0);
     if (ffPending) c.setExtensionPrompt(INJECT_FF_KEY, '', POS_IN_CHAT, 0);
     try {
-        if (s.textSource) {
+        if (s.textSource && !nnbForceMainChat) {
             try {
                 const standaloneRes = await generateViaStandaloneTextSource(prompt, maxTokens || 4096);
                 if (standaloneRes && String(standaloneRes).trim()) {
@@ -3222,7 +3731,7 @@ function parseAndApply(raw) {
 
     if (!text || /^NONE[.!]?$/i.test(text)) return res;
 
-    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|BDAY|TASK(?:_?DONE)?|RESULT|MEDAL|TRACE|STORY|SECRET|DIARY|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|HOME_?ROOM|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|NONE)(?:\b|[\s\[:：—–-])/i;
+    const CMD_START_RE = /^(?:TIME|DATE|PLACE|EVENT|LOCAL|HOLIDAY|BDAY|TASK(?:_?DONE)?|RESULT|MEDAL|TRACE|STORY|SECRET|DIARY|OUTCOME|DROP_?ITEM|ITEM|MAP|HERE|OUTFIT_?DONE|OUTFIT|ADD|ARC|STIMULUS|SHIFT|REGRESS|DROP|NPCFACT|NPCSTATE|NPC|KEYS|PROFILE|SCALE|RELSCALE|REL|DONE_?TOPIC|TOPIC|NEIGHBOR|DREAM|INTRIGUE|CLUE|SOLVED|DONE|SEASON|FLAVOR|CLOSET|PERF_?ITEM|ACC_?ITEM|TREND|COUNTER|FAMILY_?USER|FAMILY_?CHAR|SOCIAL_?CIRCLE|HOME_?ROOM|APPEARANCE|LOOK|EN|EFFECT|ACCENT|CAST|SCENE|CHAR\d+|CONTINUITY|SETUP|READY|BRIDGE|NONE)(?:\b|[\s\[:：—–-])/i;
     const mergedLines = [];
     for (const rawLine of text.split(/\r?\n/)) {
         const cleaned = bracketTag(rawLine.trim().replace(/^[-*•>\s]+/, '').replace(/^`+|`+$/g, '')).trim();
@@ -3342,6 +3851,38 @@ function parseAndApply(raw) {
             continue;
         }
 
+        if (st.direction?.notes === 'director') {
+            const dx = nnbDirectorExtra(st);
+            const mc = line.match(/^CONTINUITY\s*[:：—–-]\s*(.+)$/i);
+            if (mc) {
+                if (!res._contReset) { dx.continuity = []; res._contReset = true; }
+                if (dx.continuity.length < 3) dx.continuity.push(mc[1].trim().slice(0, 220));
+                continue;
+            }
+            const ms = line.match(/^SETUP\s*[:：—–-]\s*(.+)$/i);
+            if (ms) {
+                const t = ms[1].trim().slice(0, 200);
+                if (t && !dx.setups.some(x => x.text === t)) { dx.setups.push({ text: t, at: len, used: false }); if (dx.setups.length > 8) dx.setups.splice(0, dx.setups.length - 8); }
+                continue;
+            }
+            const mr = line.match(/^READY\s*#?\s*(\d+)/i);
+            if (mr) {
+                const n = (st.notes || []).find(x => x.id === Number(mr[1]));
+                if (n) n.ready = true;
+                const dd = nnbDripState(st);
+                if (dd.needCheck === Number(mr[1])) { dd.needCheck = null; dd.waitReplies = 0; }
+                continue;
+            }
+            const mb = line.match(/^BRIDGE\s*#?\s*(\d+)\s*[:：—–-]\s*(.+)$/i);
+            if (mb) {
+                const n = (st.notes || []).find(x => x.id === Number(mb[1]));
+                const br = n ? nnbDirectorMakeBridge(st, n, mb[2]) : null;
+                const dd = nnbDripState(st);
+                if (br && dd.activeId === n.id) { dd.activeId = br.id; dd.shown = 0; dd.tech = null; }
+                if (dd.needCheck === Number(mb[1])) { dd.needCheck = null; dd.waitReplies = 0; }
+                continue;
+            }
+        }
         let m = line.match(/^ADD\s*(?:\[([^\]]{1,40})\])?\s*[:：—–-]\s*(.+)$/i);
         if (m) {
             const note = { id: st.nextId++, tag: (m[1] || '').trim(), text: m[2].trim(), at: len };
@@ -3444,12 +3985,13 @@ function parseAndApply(raw) {
                 const name = (m[1] || m[2] || '').trim();
                 const incomingCard = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
                 if (!name || !incomingCard) continue;
-                const n = findHeroOrNpc(st, name) || (nnbIsMainCharName(st, name, ensureMainCharCard(st)) ? st.mainCharCard : null);
+                // Похожее, но другое имя («Кайла» ≠ «Кайлар», «Яна» ≠ «Ян»): это новый человек, а не тот же —
+                // раньше описание сестры дописывалось в чужую карточку, и своя не заводилась
+                const n = nnbFindSameHero(st, name);
                 if (!n) {
-                    if (st.npcs.length < (Number(s.maxNpcs) || 20)) {
-                        st.npcs.push({ id: st.nextNpcId++, name, card: incomingCard, status: '', locked: true, at: len });
-                        res.npcNew++;
-                    }
+                    // лимита больше нет: раньше после 20 NPC новые молча не создавались
+                    st.npcs.push({ id: st.nextNpcId++, name, card: incomingCard, status: '', locked: true, at: len });
+                    res.npcNew++;
                 } else if (n._replaceCardFull) {
                     if (incomingCard.length >= String(n.card || '').trim().length * 0.8 || String(n.card || '').trim().length < 50) {
                         n.card = incomingCard;
@@ -3733,6 +4275,14 @@ function parseAndApply(raw) {
                 n.status = m[1].toUpperCase() === 'DONE' ? 'done' : 'dropped';
                 n.closedAt = len;
                 if (n.status === 'done') nnbDirectorRecord(st, n);
+                if (st.director) {
+                    if (n.bridgeFor != null) { const orig = st.notes.find(x => x.id === n.bridgeFor); if (orig) orig.ready = false; }
+                    const dd = st.notesDrip;
+                    if (n.status === 'done' && dd?.tech?.noteId === n.id && dd.tech.setupText) {
+                        const su = (st.director.setups || []).find(x => x.text === dd.tech.setupText);
+                        if (su) su.used = true;
+                    }
+                }
                 st.archive.push(n);
                 (n.status === 'done' ? res.done : res.dropped).push(n);
             }
@@ -3911,10 +4461,30 @@ async function think(manual = false) {
         if (notesInThink && st.direction?.notes === 'director') {
             const bal = nnbDirectorBalance(st).map(b => `${b.id} «${b.name}»: played ${b.pct}%, target ${b.target}%`).join('; ');
             const dirSum = String(nnbDirector(st).summary || '').trim();
-            const dirCmd = `${dirSum ? `Director's note on where the story stands: ${dirSum.slice(0, 900)}\n` : ''}Director: story lines — ${bal}. Invent new ideas first of all for the lines that lag behind their target. Format: ADD [line id]: the gist of the scene (genre, intensity N/5); genres: ${NNB_DIR_GENRES.join('/')}. A played idea — DONE #number.`;
+            const dirCmd = `${dirSum ? `Director's note on where the story stands: ${dirSum.slice(0, 900)}\n` : ''}Director: story lines — ${bal}. New ideas are invented separately; here ADD only an idea that grew directly out of the latest messages (anchored in a concrete detail, secret or character goal — no stock twists like sudden attacks, mysterious strangers, overheard conversations, storms that trap them together). Format: ADD [line id]: the gist of the scene (genre, intensity N/5); genres: ${NNB_DIR_GENRES.join('/')}. A played idea — DONE #number.`;
             tpl = /(?:Команды|Commands): ADD \[план\|вопрос\|идея\]: (?:текст|text)[^\n]*/.test(tpl)
                 ? tpl.replace(/(?:Команды|Commands): ADD \[план\|вопрос\|идея\]: (?:текст|text)[^\n]*/, `${dirCmd}\nCommands: ADD [line id]: text | DONE #number | DROP #number`)
                 : tpl.replace('{{notes}}', `{{notes}}\n${dirCmd}`);
+        }
+        if (st.direction?.notes === 'director') {
+            const dx = nnbDirectorExtra(st);
+            // идей под отстающую линию нет — режиссёр придумывает отдельным запросом (не чаще раза в 6 сообщений)
+            const needLine = nnbDirectorNeedIdeas(st);
+            const chatLen = ctx().chat?.length ?? 0;
+            if (needLine && (!(Number(dx.lastGenLen) >= 0) || chatLen - Number(dx.lastGenLen) >= 6 || manual)) {
+                dx.lastGenLen = chatLen;
+                setStatus('🎬 Режиссёр придумывает сцены…');
+                try { await nnbDirectorGenerateIdeas(st, needLine); } catch (e) { if (nnbIsStopError(e)) throw e; console.warn('[npc_notebook] director ideas failed', e); }
+                if (ctx().chatId !== chatIdAtStart) return;
+                setStatus('Модель листает блокнот…');
+            }
+            const chk = dripD?.needCheck != null ? (st.notes || []).find(n => n.id === dripD.needCheck) : null;
+            const dirWatch = `Director's continuity watch (always):
+CONTINUITY: one fact the next replies must not contradict — an injury, who is where, what someone holds, who knows or does NOT yet know a secret, a promise or threat still pending. Up to 3 such lines, only real and current ones, in Russian; skip if there are none.
+SETUP: a concrete detail planted in the latest messages that could pay off later (an object, a habit, a remark), in Russian — only if there is one.${chk ? `
+Next planned scene #${chk.id}: «${chk.text}»${chk.needs ? ` (needs: ${chk.needs})` : ''}. Would it feel earned right now, given how close the characters are and what they know? If yes — READY #${chk.id}. If not — BRIDGE #${chk.id}: a smaller event (1–2 sentences, in Russian) that naturally builds toward it first.` : ''}`;
+            const replyRe = /(?=(?:Ответь ТОЛЬКО командами|Reply ONLY with commands))/;
+            tpl = replyRe.test(tpl) ? tpl.replace(replyRe, `${dirWatch}\n\n`) : `${tpl}\n\n${dirWatch}`;
         }
         const raw = await quietGenerate(fillTemplate(tpl, notesInThink ? st.notes : [], buildDirection(st), buildIntrigueSection(st), buildNpcSection(st), buildArcSection(st), buildTimeSectionFull(st), [buildWardrobeSection(st), buildMapSection(st)].filter(Boolean).join('\n')));
         if (ctx().chatId !== chatIdAtStart) return; // чат сменили, пока модель думала
@@ -4031,6 +4601,8 @@ async function rerollNote(id, kind = 'note') {
         st.rejected.push(note.text);
         if (st.rejected.length > 15) st.rejected.splice(0, st.rejected.length - 15);
         note.text = m[2].trim().replace(/\]$/, '');
+        // у сцены режиссёра были расписанные акценты, место, подводка — они от старого текста, убираем
+        for (const k of ['beats', 'place', 'mood', 'pace', 'link', 'avoid', 'anchor', 'title', 'dynamics']) delete note[k];
         if (m[1]) note.tag = m[1].trim();
         note.at = ctx().chat.length;
         if (isIntrigue) note.clues = [];
@@ -16500,7 +17072,7 @@ function applyWorldCreationResult(st, cfg, raw) {
         if (m) {
             const name = (m[1] || m[2] || '').trim();
             const desc = (m[3] || '').trim().replace(/\]$/, '').replace(/\s*\/\/\s*/g, '\n').trim();
-            if (name && desc && !findNpc(st, name) && !nnbIsMainCharName(st, name, ensureMainCharCard(st))) {
+            if (name && desc && !nnbFindSameHero(st, name)) {
                 st.npcs.push({ id: st.nextNpcId++, name, card: desc, status: '', locked: true, at: len });
                 counts.npcs++;
             }
@@ -19060,6 +19632,152 @@ function setStatus(text) {
     $('.nnb-status').text(s.enabled ? `До размышления: ${left} сообщ.` : 'Выключено');
 }
 
+const NNB_DIR_GENRE_RU = { plot: 'сюжет', drama: 'драма', comedy: 'комедия', fluff: 'уют и нежность', angst: 'ангст', chaos: 'хаос', slice: 'повседневность' };
+// Палочка → «🎬 Режиссёр»: подключение, шёпот, жанр и линия, текущая сцена, «придумать сейчас», «добавить задумки»
+async function openDirectorPopup() {
+    const st = store();
+    if (!st) return toastr.warning('Сначала открой чат', 'Блокнот рассказчика');
+    const d = nnbDirectorExtra(st);
+    const pr = nnbDirectorPrefs(st);
+    const el = $('<div class="nnb-pop"><h3>🎬 Режиссёр</h3></div>');
+    const body = $('<div></div>');
+    el.append(body);
+    const render = () => {
+        body.empty();
+        if (st.direction?.notes !== 'director') {
+            const on = $('<div class="nnb-note" style="padding:8px 10px;">Режиссёр сейчас выключен (задумки работают в другом режиме). <span class="menu_button" style="display:inline-block; margin:4px 0 0 0; width:auto;">🎬 Включить режиссёра</span></div>');
+            on.find('.menu_button').on('click', async () => { st.direction.notes = 'director'; const dd = nnbDripState(st); dd.activeId = null; dd.shown = 0; await commit(); updateInjection(); render(); });
+            body.append(on);
+        }
+        // подключение
+        const srcRow = $('<label style="display:block; margin:6px 0; font-size:0.9em;">🔌 Подключение для работы режиссёра (придумать сцены, разложить задумки):<select class="text_pole" style="width:100%; margin-top:3px;"></select></label>');
+        const sel = srcRow.find('select');
+        sel.append('<option value="main">Основное подключение чата (умнее, рекомендуется)</option>');
+        sel.append('<option value="notebook">Как у блокнота (быстрая модель)</option>');
+        for (const p of connectionProfiles()) sel.append($('<option></option>').val(p.id).text(`Профиль Таверны: ${p.name}`));
+        if (settings().textApiKey) sel.append('<option value="custom-api">Свой API блокнота (ключ из настроек)</option>');
+        const cur = settings().directorSource || 'main';
+        if (!sel.find('option').filter((i, o) => o.value === cur).length) sel.append($('<option></option>').val(cur).text('(профиль удалён)'));
+        sel.val(cur).on('change', function () { settings().directorSource = String($(this).val() || 'main'); saveSettings(); });
+        body.append(srcRow, '<div class="nnb-pop-sub" style="margin-top:-2px;">Лёгкие проверки (логика, готова ли сцена) идут в обычном размышлении блокнота.</div>');
+        // шёпот
+        const wRow = $('<label style="display:block; margin:8px 0 4px 0; font-size:0.9em;">🤫 Шёпот режиссёру — что хочешь увидеть (необязательно, без этого режиссёр решает сам):<textarea class="text_pole" rows="3" style="width:100%; margin-top:3px; font-size:0.92em;" placeholder="Например: хочу больше сцен с Ямико; пусть Кайлар наконец поревнует; поменьше драмы на этой неделе"></textarea></label>');
+        wRow.find('textarea').val(pr.whisper || '').on('change', async function () { pr.whisper = String($(this).val() || '').trim(); await commit(); });
+        body.append(wRow);
+        // жанр и линия
+        const gl = $('<div style="display:flex; gap:8px; flex-wrap:wrap; font-size:0.9em;"></div>');
+        const gSel = $('<select class="text_pole" style="width:auto; margin:0;"></select>').append('<option value="">🎭 Жанр: режиссёр решает сам</option>');
+        NNB_DIR_GENRES.forEach(g => gSel.append($('<option></option>').val(g).text(`🎭 ${NNB_DIR_GENRE_RU[g] || g}`)));
+        gSel.val(pr.genre || '').on('change', async function () { pr.genre = String($(this).val() || ''); await commit(); updateInjection(); });
+        const lSel = $('<select class="text_pole" style="width:auto; margin:0;"></select>').append('<option value="">🧵 Линия: по балансу (сам решает)</option>');
+        d.lines.forEach(l => lSel.append($('<option></option>').val(l.id).text(`🧵 ${l.name}`)));
+        lSel.val(pr.line || '').on('change', async function () { pr.line = String($(this).val() || ''); await commit(); updateInjection(); });
+        gl.append(gSel, lSel);
+        body.append(gl);
+        // текущая сцена
+        const dd = nnbDripState(st);
+        const act = dd.activeId != null ? (st.notes || []).find(n => n.id === dd.activeId) : null;
+        const curBox = $('<div class="nnb-note" style="margin-top:10px; padding:8px 10px;"></div>');
+        if (act) {
+            const waiting = dd.needCheck === act.id && (Number(dd.waitReplies) || 0) < 6;
+            curBox.append($('<div style="font-weight:700;"></div>').text(`🎬 Сейчас: ${act.title || String(act.text).slice(0, 80)}`));
+            curBox.append($('<div class="nnb-pop-sub"></div>').text(waiting ? 'Ждёт проверки размышлением: уместна ли уже (иначе будет подводка).' : `Рассказчик ведёт к ней (${Math.min(Number(dd.shown) || 0, NNB_DRIP_SPAN)}/${NNB_DRIP_SPAN} ответов).`));
+            const r = $('<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;"></div>');
+            r.append($('<span class="menu_button" style="margin:0; width:auto;">⏭ Другую сцену</span>').on('click', async () => {
+                act.dripCount = (Number(act.dripCount) || 0) + 1;
+                const next = nnbDirectorPick(st, act.id);
+                dd.activeId = next ? next.id : null; dd.shown = 0; dd.tech = null; dd.needCheck = null; dd.waitReplies = 0;
+                await commit(); updateInjection(); render();
+            }));
+            r.append($('<span class="menu_button" style="margin:0; width:auto;">✅ Сыграна</span>').on('click', async () => { await closeNote(act.id, 'done'); dd.activeId = null; updateInjection(); render(); }));
+            curBox.append(r);
+        } else curBox.append('<div class="nnb-pop-sub">Активной сцены нет — режиссёр выберет её к следующему ответу.</div>');
+        body.append(curBox);
+        // действия
+        const acts = $('<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;"></div>');
+        const genBtn = $('<span class="menu_button nnb-btn-primary" style="margin:0; width:auto;">✨ Придумать сцену сейчас</span>');
+        const status = $('<div class="nnb-pop-sub" style="min-height:1.2em;"></div>');
+        genBtn.on('click', async () => {
+            if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '🎬 Режиссёр');
+            busy = true;
+            status.text(`🎬 Режиссёр придумывает (${nnbDirectorSourceLabel()})…`);
+            genBtn.css('pointer-events', 'none').css('opacity', 0.6);
+            try {
+                const lineId = nnbDirectorTargetLine(st);
+                const k = await nnbDirectorGenerateIdeas(st, lineId);
+                if (k) {
+                    // сразу ставим лучшую новую сцену (или её подводку) следующей
+                    const ids = d.lastGen?.ids || [];
+                    const first = ids.map(id => st.notes.find(n => n.id === id)).find(n => n && n.kind === 'main');
+                    const lead = first ? (st.notes.find(n => n.bridgeFor === first.id && !n.ff) || first) : null;
+                    if (lead) { const d2 = nnbDripState(st); d2.activeId = lead.id; d2.shown = 0; d2.tech = null; d2.needCheck = null; d2.waitReplies = 0; }
+                    await commit(); updateInjection();
+                    toastr.success(`Новых сцен: ${k}${lead ? ` — следующей пойдёт «${lead.title}»` : ''}`, '🎬 Режиссёр');
+                    render();
+                } else status.text('Все варианты оказались шаблонными или повторами — нажми ещё раз.');
+            } catch (e) {
+                if (!nnbIsStopError(e)) status.text(`Не получилось: ${String(e?.message || e)}`);
+            } finally { busy = false; genBtn.css('pointer-events', '').css('opacity', ''); }
+        });
+        acts.append(genBtn);
+        acts.append($('<span class="menu_button" style="margin:0; width:auto;">📥 Добавить задумки</span>').on('click', () => openDirectorIntakePopup(st)));
+        acts.append($('<span class="menu_button" style="margin:0; width:auto;">📋 Все задумки и баланс</span>').on('click', () => { closePopupOf(el); openBook(); }));
+        body.append(acts, status);
+    };
+    render();
+    await openPopup(el, true);
+}
+
+// Окно «📥 Добавить задумки»: сырой текст (полотном) или JSON. Режиссёр раскладывает и достраивает подводки/последствия,
+// либо импорт как есть (формат ИИ-Режиссёра v4, массив идей, строки) — без запроса к модели.
+async function openDirectorIntakePopup(st) {
+    const el = $('<div class="nnb-pop"><h3>📥 Добавить задумки</h3></div>');
+    el.append('<div class="nnb-pop-sub">Вставь задумки как есть — можно полотном из нескольких, можно JSON (из «ИИ-Режиссёра» или любой список). Режиссёр разложит их по линиям, распишет сцены и достроит подводки и последствия.</div>');
+    const area = $('<textarea class="text_pole" rows="12" style="width:100%; font-size:0.88em; line-height:1.4;" placeholder="Например: Ямико от скуки скидывает в общий чат диаграмму, где разбирает пары коллектива с точки зрения психиатрии…"></textarea>');
+    el.append(area);
+    const status = $('<div class="nnb-pop-sub" style="min-height:1.2em;"></div>');
+    const row = $('<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"></div>');
+    const smartBtn = $('<div class="menu_button nnb-btn-primary" style="margin:0; width:auto;">🎬 Разложить и достроить сцены</div>');
+    const rawBtn = $('<div class="menu_button" style="margin:0; width:auto;">📥 Импортировать как есть</div>');
+    row.append(smartBtn, rawBtn);
+    el.append(row, status);
+    smartBtn.on('click', async () => {
+        const txt = String(area.val() || '').trim();
+        if (!txt) return;
+        if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '🎬 Режиссёр');
+        busy = true;
+        smartBtn.css('pointer-events', 'none').css('opacity', 0.6);
+        try {
+            const notes = await nnbDirectorIntake(st, txt, (k, n) => status.text(`🎬 Режиссёр раскладывает задумки… часть ${k} из ${n}`));
+            await commit();
+            updateInjection();
+            const mains = notes.filter(n => n.kind === 'main').length;
+            const br = notes.filter(n => n.kind === 'bridge').length;
+            const af = notes.filter(n => n.kind === 'after').length;
+            if (!notes.length) { status.text('Модель не вернула ни одной сцены — попробуй ещё раз или «Импортировать как есть».'); return; }
+            toastr.success(`Сцен: ${mains}; подводок: ${br}; последствий: ${af}`, '🎬 Режиссёр');
+            closePopupOf(el);
+        } catch (e) {
+            if (!nnbIsStopError(e)) status.text(`Не получилось: ${String(e?.message || e)}`);
+        } finally {
+            busy = false;
+            smartBtn.css('pointer-events', '').css('opacity', '');
+        }
+    });
+    rawBtn.on('click', async () => {
+        const txt = String(area.val() || '').trim();
+        if (!txt) return;
+        try {
+            const n = nnbDirectorImportAny(st, txt);
+            await commit();
+            updateInjection();
+            toastr.success(`Импортировано задумок: ${n}`, '🎬 Режиссёр');
+            closePopupOf(el);
+        } catch (e) { status.text(String(e?.message || e)); }
+    });
+    await openPopup(el, true);
+}
+
 async function askText(title, initial = '') {
     const c = ctx();
     if (typeof c.callGenericPopup === 'function' && c.POPUP_TYPE) {
@@ -19287,17 +20005,42 @@ function renderPanel(forceFull = false) {
             dir.lines.push({ id: 'line' + Date.now().toString(36), name: name.trim(), color: ['#22c55e', '#f59e0b', '#a855f7', '#14b8a6'][dir.lines.length % 4], target: 20 });
             await commit();
         }));
-        btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📥 Импорт JSON режиссёра</div>').on('click', async () => {
-            const txt = await askText('Вставь JSON из «ИИ-Режиссёр» (кнопка JSON → Копировать)', '');
-            if (!txt || !txt.trim()) return;
-            try { const n = nnbDirectorImport(st, txt); await commit(); toastr.success(`Импортировано идей: ${n}; линий: ${dir.lines.length}; сыгранных сцен: ${dir.history.length}`, '🎬 Режиссёр'); }
-            catch (e) { toastr.error(String(e?.message || e), 'Импорт не удался'); }
-        }));
+        btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📥 Добавить задумки</div>').on('click', () => openDirectorIntakePopup(st)));
         btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;">📤 Экспорт JSON</div>').on('click', async () => {
-            const data = { lines: dir.lines, contextSummary: dir.summary || '', history: dir.history, ideas: st.notes.map(n => ({ id: 'i' + n.id, title: n.title || String(n.text).slice(0, 80), text: n.text, line: n.line || '', genre: n.genre || '', intensity: Number(n.intensity) || 3, characters: n.chars || [] })) };
+            const data = { lines: dir.lines, contextSummary: dir.summary || '', history: dir.history, ideas: st.notes.map(n => ({ id: 'i' + n.id, title: n.title || String(n.text).slice(0, 80), text: n.text, line: n.line || '', genre: n.genre || '', intensity: Number(n.intensity) || 3, characters: n.chars || [], needs: n.needs || '', anchor: n.anchor || '', bridge: n.bridge || '', place: n.place || '', mood: n.mood || '', dynamics: n.dynamics || 0, pace: n.pace || '', link: n.link || '', beats: n.beats || [], avoid: n.avoid || '', kind: n.kind || '' })) };
             try { await navigator.clipboard.writeText(JSON.stringify(data, null, 2)); toastr.success('JSON скопирован', '🎬 Режиссёр'); } catch (e) { await askText('Скопируй JSON', JSON.stringify(data, null, 2)); }
         }));
+        btns.append($('<div class="menu_button" style="margin:0; padding:3px 9px; font-size:0.9em; width:auto;" title="Режиссёр придумает 3 свежие сцены для самой отстающей линии (опора на материал истории, без клише). Сам он делает это при размышлении, когда идеи под отстающую линию кончаются.">✨ Придумать сцены</div>').on('click', async () => {
+            if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '🎬 Режиссёр');
+            const lineId = nnbDirectorTargetLine(st);
+            busy = true;
+            setStatus('🎬 Режиссёр придумывает сцены…');
+            try {
+                const k = await nnbDirectorGenerateIdeas(st, lineId);
+                await commit();
+                k ? toastr.success(`Новых сцен: ${k}`, '🎬 Режиссёр') : toastr.warning('Все варианты модели оказались шаблонными или повторами — попробуй ещё раз', '🎬 Режиссёр');
+            } catch (e) { if (!nnbIsStopError(e)) toastr.error(String(e?.message || e), '🎬 Режиссёр'); }
+            finally { busy = false; setStatus(''); }
+        }));
         inner.append(btns);
+        const dxUi = nnbDirectorExtra(st);
+        if (dxUi.continuity.length || dxUi.setups.some(x => !x.used)) {
+            const wDet = $('<details style="margin-top:6px;"><summary>🧷 Логика и подвешенные детали</summary><div></div></details>');
+            const wIn = wDet.find('div').first();
+            dxUi.continuity.forEach((c, ci) => {
+                const r = $('<div class="nnb-note" style="display:flex; gap:6px;"><div class="nnb-text" style="flex:1;"></div><i class="fa-solid fa-trash" style="cursor:pointer; opacity:.6"></i></div>');
+                r.find('.nnb-text').text(`⚠️ Не противоречить: ${c}`);
+                r.find('.fa-trash').on('click', async () => { dxUi.continuity.splice(ci, 1); await commit(); updateInjection(); });
+                wIn.append(r);
+            });
+            dxUi.setups.filter(x => !x.used).forEach(x => {
+                const r = $('<div class="nnb-note" style="display:flex; gap:6px;"><div class="nnb-text" style="flex:1;"></div><i class="fa-solid fa-trash" style="cursor:pointer; opacity:.6"></i></div>');
+                r.find('.nnb-text').text(`🔫 Подвешено: ${x.text}`);
+                r.find('.fa-trash').on('click', async () => { x.used = true; await commit(); });
+                wIn.append(r);
+            });
+            inner.append(wDet);
+        }
         const sumBox = $('<details style="margin-top:6px;"><summary>📝 Сводка режиссёра (где сейчас история — учитывается при придумывании задумок)</summary><textarea class="text_pole" rows="4" style="width:100%; margin-top:4px; font-size:0.9em;"></textarea></details>');
         sumBox.find('textarea').val(dir.summary || '').on('change', async function () { dir.summary = String($(this).val() || ''); await commit(); });
         if (dir.summary) sumBox.attr('open', false);
@@ -19351,7 +20094,22 @@ function renderPanel(forceFull = false) {
             iSel.val(String(Number(n.intensity) || 3)).on('change', async function () { n.intensity = Number($(this).val()) || 3; await commit(); });
             const cIn = $('<input class="text_pole" placeholder="участники через запятую" style="width:100%; margin:3px 0 0 0; padding:1px 6px; font-size:0.85em;">');
             cIn.val((n.chars || []).join(', ')).on('change', async function () { n.chars = String($(this).val() || '').split(',').map(x => x.trim()).filter(Boolean); await commit(); });
-            row.find('.nnb-text').after($('<div></div>').append(sel, gSel, iSel, cIn));
+            const extra = $('<div></div>').append(sel, gSel, iSel, cIn);
+            const nIn = $('<input class="text_pole" placeholder="условия: «Имя: дружба ≥ 50» или словами (пусто — без условий)" style="width:100%; margin:3px 0 0 0; padding:1px 6px; font-size:0.85em;">');
+            nIn.val(n.needs || '').on('change', async function () { n.needs = String($(this).val() || '').trim(); n.ready = false; await commit(); updateInjection(); });
+            extra.append(nIn);
+            const info = [];
+            if (n.bridgeFor != null) info.push(`🌉 подводка к #${n.bridgeFor}`);
+            if (n.kind === 'after') info.push('↪ последствие');
+            if ((n.after || []).length) info.push(`⛓ после ${n.after.map(x => '#' + x).join(', ')}${nnbDirectorAfterMet(st, n) ? ' (сыграно)' : ''}`);
+            if (n.place) info.push(`📍 ${n.place}`);
+            if ((n.beats || []).length) info.push(`🎬 ${n.beats.length} акц.`);
+            if (n.anchor) info.push(`⚓ ${n.anchor}`);
+            const rd = nnbDirectorReadiness(st, n);
+            if (n.bridgeFor == null) info.push(rd === 'ready' ? '✅ условия выполнены' : rd === 'bridge' ? '🌉 сначала подводка' : '❔ проверит размышление');
+            if (dActive && st.notesDrip?.tech) info.push(`🎞 приём: ${NNB_DIR_TECHNIQUES[st.notesDrip.tech.id]?.name || st.notesDrip.tech.id}`);
+            extra.append($('<div style="font-size:0.8em; opacity:0.8; margin-top:2px;"></div>').text(info.join(' · ')));
+            row.find('.nnb-text').after(extra);
         }
         row.find('.nnb-text').text(n.text);
         row.find('.fa-dice').on('click', () => rerollNote(n.id));
@@ -19361,7 +20119,13 @@ function renderPanel(forceFull = false) {
             const t = await askText('Изменить запись', n.text);
             if (t && t.trim()) {
                 n.text = t.trim();
+                // у расписанной сцены рассказчику уходят акценты, а не текст — даём поправить и их
+                if ((n.beats || []).length) {
+                    const b = await askText('Акценты сцены — по одному на строку (пусто — убрать, тогда пойдёт текст выше)', n.beats.join('\n'));
+                    if (b !== null) n.beats = String(b).split(/\r?\n/).map(x => x.replace(/^\s*\d+[.)]\s*/, '').trim()).filter(Boolean);
+                }
                 await commit();
+                updateInjection();
             }
         });
         list.append(row);
@@ -20284,7 +21048,7 @@ async function openNpcUniverseModal(st) {
         } else {
             const rosList = $('<div style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; margin-bottom:8px;"></div>');
             roster.forEach((rNpc, rIdx) => {
-                const alreadyInChat = !!findHeroOrNpc(st, rNpc.name);
+                const alreadyInChat = !!nnbFindSameHero(st, rNpc.name);
                 const row = $('<div class="nnb-note" style="margin:0; padding:6px 10px; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer;"></div>');
                 const left = $('<div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;"></div>');
                 const cb = $('<input type="checkbox" style="width:16px; height:16px; cursor:pointer;">');
@@ -20318,7 +21082,7 @@ async function openNpcUniverseModal(st) {
                     const src = roster[rIdx];
                     if (!src) return;
                     const mcCard = ensureMainCharCard(st);
-                    let target = (mcCard && nnbIsMainCharName(st, src.name, mcCard)) ? mcCard : findNpc(st, src.name);
+                    let target = nnbFindSameHero(st, src.name);
                     if (!target) {
                         target = { id: st.nextNpcId++, name: src.name, locked: true, at: ctx().chat.length };
                         st.npcs.push(target);
@@ -20989,8 +21753,9 @@ function renderNpcs(st) {
     add.on('click', async () => {
         const name = await askText('Имя NPC');
         if (!name || !name.trim()) return;
-        if (findNpc(st, name)) return toastr.warning('Такой NPC уже есть', 'Блокнот рассказчика');
-        if (nnbIsMainCharName(st, name, ensureMainCharCard(st))) {
+        const sameHero = nnbFindSameHero(st, name);
+        if (sameHero && !sameHero.isMainChar) return toastr.warning('Такой NPC уже есть', 'Блокнот рассказчика');
+        if (sameHero && sameHero.isMainChar) {
             toastr.info(`«${name.trim()}» — основной персонаж, у него уже есть «Карточка чата». Открываю её.`, 'Блокнот рассказчика');
             return openNpcCardPopup(st.mainCharCard);
         }
@@ -23139,6 +23904,7 @@ function addMenuItems() {
             .find('span').text(text).end().on('click', fn);
         menu.append(item('nnb_menu_book', 'fa-book-open', 'Блокнот рассказчика', () => openBook()));
         menu.append(item('nnb_menu_stop', 'fa-stop', '⏹ Остановить все генерации блокнота', () => nnbStopAll()));
+        menu.append(item('nnb_menu_director', 'fa-clapperboard', '🎬 Режиссёр', () => openDirectorPopup()));
         menu.append(item('nnb_menu_stats', 'fa-chart-column', 'Статистика: боты, соо и токены', () => openUsageStatsModal()));
         menu.append(item('nnb_menu_turbo', 'fa-bolt', 'Ускорение Таверны (Турбо-режим чата)', () => openChatTurboSettingsPopup()));
         menu.append(item('nnb_menu_migrate', 'fa-suitcase-rolling', 'Переезд в новый чат (саммари + блокнот)', () => openChatMigrationModal()));
