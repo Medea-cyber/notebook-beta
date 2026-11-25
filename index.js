@@ -2146,6 +2146,13 @@ function nnbMergeNpcIntoMainCard(st, mc, dup) {
         if (['id', 'name', 'isMainChar', 'card', 'at'].includes(k) || k.startsWith('_')) continue;
         if (empty(v)) continue;
         if (k === 'favorite' || k === 'locked') { mc[k] = !!(mc[k] || v); continue; }
+        if (k === 'wardrobe' && v && typeof v === 'object') {
+            const mw = nnbNpcWardrobe(mc);
+            const idMap = new Map();
+            for (const l of (v.looks || [])) { const nl = nnbNpcAddLook(mc, l, false); idMap.set(l.id, nl.id); }
+            if (v.activeId != null && mw.activeId == null && idMap.has(v.activeId)) mw.activeId = idMap.get(v.activeId);
+            continue;
+        }
         if (NNB_MC_LIVE_KEYS.has(k)) {
             const mcHas = k === 'spark' ? Number(mc.spark) > 0 : k === 'dailyMood' ? (mc.dailyMood && mc.dailyMood !== 'off') : !empty(mc[k]);
             if (!mcHas) mc[k] = v;
@@ -2244,6 +2251,8 @@ function formatNpcs(list, forThink = false, st = store(), mode = 'all') {
             let line = `— ${n.name}${favTag}: ${formattedCard}`;
             if (forThink) line += ' (do NOT shorten or rewrite the existing description — if important new facts about this character came out in the chat, add them via NPCFACT)';
             if (n.status) line += `\n   ${forThink ? 'Сейчас' : 'Now'}: ${n.status}`;
+            const look = nnbNpcActiveLook(n);
+            if (look) line += `\n   ${forThink ? 'Одет(а)' : 'Wearing'}: ${look.desc || look.title}`;
             line += `\n   ${formatNpcScaleSummary(n, forThink)}`;
             fullLines.push(line);
         } else {
@@ -10172,6 +10181,13 @@ function nnbHeroOutfitMemory(st) {
         if (today && v.date && v.date !== today) continue; // новый день — одежда могла смениться
         out[v.name || k] = v.en;
     }
+    // наряд, выбранный в гардеробе героя, — если на сегодня текст постов одежду не задал
+    for (const n of [st.mainCharCard, ...(st.npcs || [])]) {
+        const l = n ? nnbNpcActiveLook(n) : null;
+        if (!l?.en) continue;
+        const has = Object.keys(out).some(k => String(k).toLowerCase().replace(/ё/g, 'е') === String(n.name).toLowerCase().replace(/ё/g, 'е'));
+        if (!has) out[n.name] = l.en;
+    }
     return out;
 }
 function nnbRememberHeroOutfit(st, name, en) {
@@ -11269,6 +11285,8 @@ async function drawScene(popupEl, mesId, camMode = 'third', reuseMeta = null, fo
         const panelPrompts = Array.isArray(reuseMeta?.panelPrompts) ? [...reuseMeta.panelPrompts] : [];
         const rawLlmQuotes = [];
         let lastPromptRaw = '';
+        // выбранные в гардеробе наряды героев без английских тегов — дописываем теги до запроса промпта
+        try { await nnbNpcEnsureLookEn(st); } catch (e) { if (nnbIsStopError(e)) throw e; }
 
         if (reuseMeta && hasValidSceneMeta(reuseMeta)) {
             const splitReuse = splitPositiveAndNegativePrompt(reuseMeta.desc || reuseMeta.prompt);
@@ -20782,6 +20800,177 @@ SCALE [${n.name}]: дружба=exact_number_from_-100_to_100 | романтик
     return ok;
 }
 
+// ===== 👔 Гардероб NPC: свои наряды текстом или выбор из 5 вариантов; активный наряд — рассказчику и в картинки =====
+function nnbNpcWardrobe(n) {
+    if (!n.wardrobe || typeof n.wardrobe !== 'object') n.wardrobe = { looks: [], activeId: null, nextId: 1 };
+    if (!Array.isArray(n.wardrobe.looks)) n.wardrobe.looks = [];
+    if (!Number.isFinite(n.wardrobe.nextId)) n.wardrobe.nextId = (n.wardrobe.looks.reduce((m, l) => Math.max(m, Number(l.id) || 0), 0) || 0) + 1;
+    return n.wardrobe;
+}
+function nnbNpcActiveLook(n) {
+    const w = n?.wardrobe;
+    if (!w || w.activeId == null) return null;
+    return (w.looks || []).find(l => l.id === w.activeId) || null;
+}
+function nnbNpcAddLook(n, look, wear = false) {
+    const w = nnbNpcWardrobe(n);
+    const l = { id: w.nextId++, title: String(look.title || 'Наряд').trim().slice(0, 80), desc: String(look.desc || '').trim(), en: String(look.en || '').trim(), occasion: String(look.occasion || '').trim(), src: look.src || 'text' };
+    w.looks.push(l);
+    if (wear) nnbNpcWear(n, l.id);
+    return l;
+}
+// Надеть: наряд становится одеждой героя для рассказчика и для картинок (сегодняшняя память одежды из текста сбрасывается)
+function nnbNpcWear(n, lookId) {
+    const w = nnbNpcWardrobe(n);
+    w.activeId = lookId;
+    const st = store();
+    if (st?.heroOutfits) {
+        const key = String(n.name || '').toLowerCase().replace(/ё/g, 'е');
+        delete st.heroOutfits[key];
+    }
+}
+// Описание наряда (по-русски) → английские теги одежды для картинок
+async function nnbNpcLookToEn(n, desc) {
+    const prompt = `${SELF_CONTAINED_PROMPT_MARKER}[OOC: Convert this outfit of ${n.name} into English comma-separated Danbooru-style clothing tags for an image generator: every garment with its colour (and material if notable), shoes, accessories worn. No body or hair tags, no explanations.
+Outfit: ${desc}
+Reply with the tags only.]`;
+    const raw = String(await quietGenerate(prompt, 600) || '');
+    return raw.split(/\r?\n/).map(x => x.trim().replace(/^(?:tags?|outfit)\s*[:：]\s*/i, '').replace(/^[-*•]\s*/, ''))
+        .filter(x => x && !/^(here|sure|okay)\b/i.test(x) && /[a-z]/i.test(x) && !/[а-яё]/i.test(x))
+        .join(', ').replace(/\s*,\s*/g, ', ').replace(/^[,\s]+|[,\s.]+$/g, '').slice(0, 500);
+}
+// 5 вариантов одежды для NPC — как у героини, но без последствий и акцентов
+async function nnbNpcGenerateLooks(st, n, occasion = '') {
+    const names = storyNames();
+    const t = st.time || {};
+    let when = '';
+    try { when = [t.date ? `${formatDate(t.date)}, ${season(t.date).name}` : '', placeLine(st)].filter(Boolean).join('; '); } catch (e) { when = ''; }
+    const w = nnbNpcWardrobe(n);
+    const avoid = w.looks.slice(-12).map(l => `«${l.title}»`);
+    const cut = (x, k) => String(x || '').trim().replace(/\s+/g, ' ').slice(0, k);
+    const prompt = `${SELF_CONTAINED_PROMPT_MARKER}[OOC: Roleplay paused. You are the author's assistant picking an outfit for a side character, like in a visual novel.
+Character: ${n.name}. ${cut(n.card, 900)}
+${n.appearanceEn ? `Looks (keep them; do not change hair, eyes, build): ${cut(n.appearanceEn, 300)}\n` : ''}${n.status ? `Right now: ${cut(n.status, 200)}\n` : ''}${when ? `When and where: ${when}\n` : ''}Occasion: ${occasion || 'the next scene where this character appears (work it out from the character and the moment)'}.
+${avoid.length ? `Don't repeat: ${avoid.join(', ')}.\n` : ''}Suggest 5 different outfits that fit THIS character's personality, job, money and style (from everyday to their boldest), the weather and the occasion. Not generic — something they would really own. ${names.user} is the player; this is not her outfit.
+FORMAT, exactly 5 lines:
+LOOK n: title in Russian | description in Russian, 1–2 sentences: every garment with colour, shoes, one accessory | EN: English comma-separated clothing tags with colours
+Reply with the 5 LOOK lines only.]`;
+    const raw = String(await quietGenerate(prompt, 2000) || '');
+    const looks = [];
+    for (const m of raw.matchAll(/^\s*\**\s*LOOK\s*\d+\s*\**\s*[:：.]\s*(.+)$/gim)) {
+        const parts = m[1].replace(/\*\*/g, '').split('|').map(x => x.trim());
+        if (parts.length < 2) continue;
+        const enPart = parts.find(p => /^EN\s*[:：]/i.test(p));
+        const en = enPart ? enPart.replace(/^EN\s*[:：]\s*/i, '') : '';
+        const rest = parts.filter(p => p !== enPart);
+        looks.push({ title: rest[0].replace(/^[«"]|[»"]$/g, ''), desc: rest.slice(1).join(' ').trim(), en, occasion, src: 'gen' });
+    }
+    return looks.slice(0, 5);
+}
+
+// Окно выбора из вариантов (сгенерированных)
+async function nnbNpcPickLookPopup(n, looks) {
+    const st = store();
+    const el = $('<div class="nnb-pop"></div>');
+    el.append($('<h3></h3>').text(`👔 Что наденет ${n.name}?`));
+    el.append('<div class="nnb-pop-sub">«Надеть» — наряд станет текущим (и сохранится в гардероб героя). Галочка — просто сохранить вариант на потом.</div>');
+    const saveSet = new Set();
+    looks.forEach((lk, i) => {
+        const card = $('<div class="nnb-note" style="padding:8px 10px; margin:6px 0;"></div>');
+        card.append($('<div style="font-weight:700;"></div>').text(lk.title));
+        card.append($('<div style="font-size:0.9em; margin:2px 0 4px 0;"></div>').text(lk.desc));
+        if (lk.en) card.append($('<div class="nnb-pop-sub" style="margin:0 0 4px 0; font-size:0.8em;"></div>').text(lk.en));
+        const row = $('<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;"></div>');
+        const wearBtn = $('<span class="menu_button nnb-btn-primary" style="margin:0; width:auto;">Надеть</span>');
+        const chk = $('<label style="font-size:0.88em; display:flex; gap:5px; align-items:center;"><input type="checkbox"> сохранить в гардероб</label>');
+        chk.find('input').on('change', function () { if (this.checked) saveSet.add(i); else saveSet.delete(i); });
+        wearBtn.on('click', async () => {
+            looks.forEach((x, k) => { if (k !== i && saveSet.has(k)) nnbNpcAddLook(n, x, false); });
+            const l = nnbNpcAddLook(n, lk, true);
+            await commit(); updateInjection();
+            toastr.success(`${n.name}: «${l.title}»`, '👔 Гардероб');
+            closePopupOf(el);
+        });
+        row.append(wearBtn, chk);
+        card.append(row);
+        el.append(card);
+    });
+    const saveOnly = $('<span class="menu_button" style="margin:6px 0 0 0; width:auto;">Только сохранить отмеченные</span>').on('click', async () => {
+        looks.forEach((x, k) => { if (saveSet.has(k)) nnbNpcAddLook(n, x, false); });
+        await commit();
+        closePopupOf(el);
+    });
+    el.append(saveOnly);
+    void st;
+    await openPopup(el, true);
+}
+
+// Блок «Гардероб» в карточке героя
+function nnbNpcWardrobeBox(n, rerender) {
+    const st = store();
+    const w = nnbNpcWardrobe(n);
+    const box = $('<div class="nnb-note" style="margin:6px 0; padding:10px 12px;"></div>');
+    box.append('<div style="font-weight:700; margin-bottom:4px;">👔 Гардероб</div>');
+    const act = nnbNpcActiveLook(n);
+    box.append($('<div class="nnb-pop-sub" style="margin:0 0 6px 0;"></div>').text(act ? `Сейчас: «${act.title}»` : 'Сейчас: без выбранного наряда (одежду берём из текста постов)'));
+    w.looks.forEach(l => {
+        const row = $('<div style="display:flex; gap:8px; align-items:flex-start; margin:4px 0;"></div>');
+        const radio = $('<input type="radio" style="margin-top:4px;">').prop('checked', w.activeId === l.id);
+        radio.attr('name', `nnb_npcw_${String(n.id ?? 'mc')}`);
+        radio.on('change', async () => { nnbNpcWear(n, l.id); await commit(); updateInjection(); rerender(); });
+        const txt = $('<div style="flex:1; font-size:0.9em;"></div>');
+        txt.append($('<b></b>').text(l.title), $('<span></span>').text(l.desc ? ` — ${l.desc}` : ''));
+        if (!l.en) txt.append('<div class="nnb-pop-sub" style="margin:0; font-size:0.8em;">⏳ теги для картинок допишутся при первом рисовании</div>');
+        const edit = $('<i class="fa-solid fa-pen" style="cursor:pointer; opacity:.6; margin-top:3px;" title="Изменить описание"></i>').on('click', async () => {
+            const t = await askText(`Наряд «${l.title}» — описание`, l.desc);
+            if (t == null || !t.trim()) return;
+            l.desc = t.trim(); l.en = '';
+            await commit(); rerender();
+        });
+        const del = $('<i class="fa-solid fa-trash" style="cursor:pointer; opacity:.6; margin-top:3px;" title="Удалить наряд"></i>').on('click', async () => {
+            w.looks = w.looks.filter(x => x !== l);
+            if (w.activeId === l.id) w.activeId = null;
+            await commit(); updateInjection(); rerender();
+        });
+        row.append(radio, txt, edit, del);
+        box.append(row);
+    });
+    const btns = $('<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;"></div>');
+    btns.append($('<span class="menu_button" style="margin:0; width:auto;">✍️ Свой наряд текстом</span>').on('click', async () => {
+        const desc = await askText(`Опиши наряд ${n.name} (можно по-русски, как угодно подробно)`, '');
+        if (!desc || !desc.trim()) return;
+        const title = await askText('Как назвать этот вариант? (например: «рабочий», «на свидание»)', desc.trim().split(/[.,;\n]/)[0].slice(0, 40));
+        if (title === null) return;
+        const l = nnbNpcAddLook(n, { title: title.trim() || 'Наряд', desc: desc.trim(), src: 'text' }, true);
+        await commit(); updateInjection(); rerender();
+        // теги для картинок — в фоне, лёгким запросом блокнота
+        try {
+            if (!busy) { l.en = await nnbNpcLookToEn(n, l.desc); await commit(); rerender(); }
+        } catch (e) { console.warn('[npc_notebook] look → en failed', e); }
+    }));
+    btns.append($('<span class="menu_button" style="margin:0; width:auto;">✨ 5 вариантов</span>').on('click', async () => {
+        const occ = await askText(`Под какой повод одеть ${n.name}? (пусто — модель решит по сцене)`, '');
+        if (occ === null) return;
+        if (busy) return toastr.info('Блокнот сейчас занят — попробуй через минуту', '👔 Гардероб');
+        const looks = await withBusy(`👔 Подбираю наряды для ${n.name}…`, () => nnbNpcGenerateLooks(st, n, occ.trim()));
+        if (!looks || looks.length < 2) return toastr.warning('Модель не предложила наряды по формату — попробуй ещё раз', '👔 Гардероб');
+        await nnbNpcPickLookPopup(n, looks);
+        rerender();
+    }));
+    if (act) btns.append($('<span class="menu_button" style="margin:0; width:auto;">Снять (одежда — по тексту)</span>').on('click', async () => { w.activeId = null; await commit(); updateInjection(); rerender(); }));
+    box.append(btns);
+    return box;
+}
+// Наряды без английских тегов — дописать перед рисованием (одним запросом на героя)
+async function nnbNpcEnsureLookEn(st) {
+    for (const n of [st.mainCharCard, ...(st.npcs || [])]) {
+        const l = n ? nnbNpcActiveLook(n) : null;
+        if (l && !l.en && l.desc) {
+            try { l.en = await nnbNpcLookToEn(n, l.desc); } catch (e) { if (nnbIsStopError(e)) throw e; }
+        }
+    }
+}
+
 async function openNpcCardPopup(n) {
     const st = store();
     if (!st || !n) return;
@@ -21048,6 +21237,7 @@ async function openNpcCardPopup(n) {
             scalesBox.append(spiceBox);
         }
         el.append(scalesBox);
+        el.append(nnbNpcWardrobeBox(n, renderModalContent));
 
         // 2b. Тонкая настройка близости — ТОЛЬКО для основного персонажа (char) или ❤️ фаворита!
         if (isRom) {
@@ -21225,6 +21415,7 @@ function serializeNpcForUniverse(n, st) {
         status: n.status || '',
         appearanceEn: n.appearanceEn || '',
         avatar: n.avatar || '',
+        wardrobeLooks: (n.wardrobe?.looks || []).map(l => ({ title: l.title, desc: l.desc, en: l.en, occasion: l.occasion || '' })),
         dream: n.dream || '',
         fear: n.fear || '',
         likes: n.likes || '',
@@ -21364,6 +21555,10 @@ async function openNpcUniverseModal(st) {
                     target.card = src.card || target.card || '';
                     target.appearanceEn = src.appearanceEn || target.appearanceEn || '';
                     target.avatar = src.avatar || target.avatar || '';
+                    if (Array.isArray(src.wardrobeLooks) && src.wardrobeLooks.length) {
+                        const tw = nnbNpcWardrobe(target);
+                        src.wardrobeLooks.forEach(l => { if (!tw.looks.some(x => x.title === l.title && x.desc === l.desc)) nnbNpcAddLook(target, l, false); });
+                    }
                     target.dream = src.dream || '';
                     target.fear = src.fear || '';
                     target.likes = src.likes || '';
